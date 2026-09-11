@@ -38,8 +38,13 @@
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/* Dark tokens, applied in both the places that can ask for them.
+   The viewer has three states, not two: an explicit light choice, an explicit
+   dark choice, and the common default where only the operating system says.
+   Tokens defined solely inside the media query would be ignored when someone
+   picks dark by hand, so the stamped selector repeats them. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #10140f;
     --surface: #191f19;
     --surface-2: #222a21;
@@ -57,6 +62,25 @@
     --info-bg: #16243a;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #10140f;
+  --surface: #191f19;
+  --surface-2: #222a21;
+  --ink: #f0f2ec;
+  --ink-2: #b6bfb4;
+  --line: #333d32;
+  --accent: #4caf6d;
+  --accent-ink: #06210f;
+  --danger: #ff8a80;
+  --danger-bg: #3a1714;
+  --warn: #ffc46b;
+  --warn-bg: #3a2c10;
+  --ok: #7fd69b;
+  --ok-bg: #14301f;
+  --info-bg: #16243a;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
 }
 
 * { box-sizing: border-box; }
