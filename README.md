@@ -15,9 +15,21 @@ other later. There is no server to pay for and no account to create.
 
 ## Open it
 
+**https://samebimo10-cpu.github.io/Stock-/farm/**
+
+That is the permanent address. Open it on a phone and use **Add to home screen**; it
+then launches like any other app and keeps working with the data switched off. A workflow
+in this repository republishes it whenever anything under `douvalue/web/` changes.
+
+The page is public, because GitHub Pages on a public repository is. **The farm's records
+are not**: everything anyone enters is stored in their own browser on their own phone and
+never leaves it. A stranger who opens the link gets an empty app, not your farm.
+
+To run it locally instead:
+
 ```bash
 cd douvalue/web
-python3 -m http.server 8000     # or: npx http-server -p 8000
+python3 -m http.server 8000     # or, from douvalue/:  npm start
 ```
 
 Then open `http://localhost:8000` and press **Load a sample farm** to look around.
