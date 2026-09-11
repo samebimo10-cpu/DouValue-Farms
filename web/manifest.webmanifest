@@ -1,0 +1,15 @@
+{
+  "name": "DouValue Farm Manager",
+  "short_name": "DouValue",
+  "description": "Farm management, crop clinic and forecasting for DouValue Farm, Port Harcourt.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f5f1",
+  "theme_color": "#14361f",
+  "lang": "en-NG",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

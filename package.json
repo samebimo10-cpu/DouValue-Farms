@@ -1,0 +1,12 @@
+{
+  "name": "douvalue-farm-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline-first farm management, crop clinic and forecasting for DouValue Farm, Port Harcourt.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "start": "npx --yes http-server web -p 8000 -c-1"
+  },
+  "license": "MIT"
+}
