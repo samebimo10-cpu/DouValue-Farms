@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16305c">
+<title>Connect DouValue Farms to a sync server</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f6f8; --surface: #fff; --surface-2: #eaeff4;
+    --ink: #101820; --ink-2: #46545f; --line: #cfd8e0;
+    --accent: #1b7a42; --accent-ink: #fff; --navy: #16305c;
+    --warn: #8a5100; --warn-bg: #fff3e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1418; --surface:#161e24; --surface-2:#1f2930; --ink:#eef3f7;
+      --ink-2:#a8b8c4; --line:#2d3a44; --accent:#4ecb7b; --accent-ink:#052213;
+      --navy:#0f2444; --warn:#ffc46b; --warn-bg:#3a2c10; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); line-height:1.55;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { background:var(--navy); color:#fff; padding:18px 16px; }
+  header b { display:block; font-size:1.05rem; }
+  header small { color:#a9c2e4; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; }
+  main { max-width:720px; margin:0 auto; padding:16px; padding-bottom:48px; }
+  h1 { font-size:1.35rem; margin:18px 0 6px; }
+  h2 { font-size:1.05rem; margin:26px 0 8px; }
+  p { margin:0 0 12px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:16px; margin:0 0 16px; }
+  ol { padding-left:20px; margin:0 0 12px; }
+  li { margin-bottom:10px; }
+  code, pre { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  pre { background:var(--surface-2); border:1px solid var(--line); border-radius:12px;
+    padding:12px; overflow-x:auto; font-size:.8rem; margin:0 0 10px; white-space:pre-wrap;
+    word-break:break-all; }
+  button { font:inherit; font-weight:700; border:0; border-radius:12px; min-height:50px;
+    padding:12px 20px; background:var(--accent); color:var(--accent-ink); cursor:pointer; width:100%; }
+  button.ghost { background:var(--surface-2); color:var(--ink); border:2px solid var(--line); }
+  .note { background:var(--warn-bg); border-left:6px solid var(--warn); border-radius:10px;
+    padding:12px 14px; margin:0 0 14px; }
+  .note b { display:block; }
+  small { color:var(--ink-2); }
+  details { margin-top:12px; }
+  summary { cursor:pointer; font-weight:600; min-height:44px; display:flex; align-items:center; }
+  .ok { color:var(--accent); font-weight:700; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <b>DouValue Farms Limited</b>
+  <small>Connecting the farm to a sync server</small>
+</header>
+<main>
+
+<h1>What to paste, and where</h1>
+<p>This gives every person on the farm their own account, so a farm hand's phone
+is never sent wages or sales. It is free and takes about five minutes.</p>
+
+<div class="card">
+  <h2>1. Open Deno Deploy and start a Playground</h2>
+  <p>Go to <a href="https://dash.deno.com" target="_blank" rel="noopener">dash.deno.com</a>
+  and sign in with GitHub. Look for <b>New Playground</b>. On some versions it sits
+  behind <b>New Project</b> first.</p>
+  <p>A Playground opens a code editor with a short example already in it, usually
+  something with <code>Deno.serve</code>. <b>That example is what you replace.</b></p>
+  <p><small>Tap into the editor, select everything that is there (Ctrl+A, or
+  Cmd+A on a Mac), and delete it. The editor should be empty before you paste.</small></p>
+</div>
+
+<div class="card">
+  <h2>2. Paste this one line</h2>
+  <p>That is the whole thing. It loads the farm server from your own site.</p>
+  <pre id="oneliner">import "https://samebimo10-cpu.github.io/Stock-/farm/server/deno-entry.js";</pre>
+  <button onclick="copyText(document.getElementById('oneliner').textContent, this)">Copy the line</button>
+  <details>
+    <summary>Rather paste the whole thing?</summary>
+    <p><small>If you would prefer the server to have no link back to this site, copy
+    the full file instead. It is long, so use the button rather than selecting by hand.
+    Both do exactly the same job.</small></p>
+    <button class="ghost" onclick="copyFull(this)">Copy the full file</button>
+    <p><small>You can also read it at
+    <a href="./deno-entry.js">deno-entry.js</a>.</small></p>
+  </details>
+</div>
+
+<div class="card">
+  <h2>3. Save and deploy</h2>
+  <p>Press <b>Save &amp; Deploy</b>, usually at the top right. It takes a few seconds.</p>
+  <p>Your address then appears at the top of the page. It looks like
+  <code>https://something-something-12.deno.dev</code>.</p>
+  <p>Open that address in a new tab. If it says
+  <span class="ok">DouValue farm server is running</span>, it worked.</p>
+</div>
+
+<div class="card">
+  <h2>4. Tell the app about it</h2>
+  <p>In the farm app: <b>Settings</b>, then <b>Sync</b>, then <b>Connect the farm</b>.
+  Paste the address, choose your PIN, and press Create the farm.</p>
+  <p>After that, <b>People → Add someone</b> gives you a link and a password to send
+  each person. They tap the link, type the password once, pick their own PIN, and
+  that phone is theirs.</p>
+</div>
+
+<div class="note">
+  <b>Use the https address</b>
+  Deno gives you an https address. Use it exactly as shown. PINs travel in the
+  request, and plain http would put them on the wire in clear.
+</div>
+
+<div class="card">
+  <h2>If something looks different</h2>
+  <p>Deno Deploy changes its screens from time to time, so the buttons may not be
+  worded exactly as above. What you are looking for is any way to create a
+  <b>Playground</b>, which is simply an editor that runs one file.</p>
+  <p>If you get stuck, tell Claude what you can see on the screen and it will
+  work out the rest.</p>
+</div>
+
+<p><small>Everything here runs on your own accounts. The farm's records live on
+your Deno project and on the phones, and nowhere else.</small></p>
+
+</main>
+<script>
+  async function copyText(text, btn) {
+    const original = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = 'Copied';
+    } catch {
+      btn.textContent = 'Could not copy — select it by hand';
+    }
+    setTimeout(() => { btn.textContent = original; }, 2500);
+  }
+  async function copyFull(btn) {
+    const original = btn.textContent;
+    btn.textContent = 'Fetching…';
+    try {
+      const res = await fetch('./deno-entry.js');
+      if (!res.ok) throw new Error('not found');
+      await copyText(await res.text(), btn);
+    } catch {
+      btn.textContent = 'Could not fetch it — open deno-entry.js and copy';
+      setTimeout(() => { btn.textContent = original; }, 3500);
+    }
+  }
+</script>
+</body>
+</html>

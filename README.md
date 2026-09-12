@@ -327,11 +327,24 @@ not whoever the sending app claimed, so work cannot be attributed to someone els
 its next exchange, within seconds. Nobody else has to change anything, because
 nobody else shared a password with them.
 
-**Setting the server up.** One file, free to run:
+**Setting the server up.** Free, and about five minutes. There is a page that
+walks through it and hands you the text to paste:
 
-1. Open **dash.deno.com**, create a new Playground.
-2. Paste in `douvalue/server/deno-sync.ts`, press Save & Deploy.
-3. In the app: Settings → Sync → Connect the farm, and paste the address.
+**https://samebimo10-cpu.github.io/Stock-/farm/server/**
+
+1. Open **dash.deno.com** and start a new Playground, which is an editor that
+   runs one file. Clear the example already in it.
+2. Paste this single line, which loads the server from your own site:
+   `import "https://samebimo10-cpu.github.io/Stock-/farm/server/deno-entry.js";`
+   The setup page has a copy button, and a second button for the whole file if
+   you would rather the server had no link back here.
+3. Press Save & Deploy and copy the address it gives you. Opening it should say
+   *DouValue farm server is running*.
+4. In the app: Settings → Sync → Connect the farm, and paste that address.
+
+The one-line version works because the site serves that file as JavaScript,
+which is what Deno needs to import it. Deno fetches it once at deploy time and
+caches it, so the running server does not depend on this site staying up.
 
 Prefer your own machine? `douvalue/server/node-sync.mjs` serves the same contract
 and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
