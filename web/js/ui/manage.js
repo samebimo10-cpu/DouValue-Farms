@@ -2,7 +2,7 @@
 
 import {
   badge, bar, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
-  input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
+  input, link, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
 import {
   activeCycles, assignableRoles, can, canEditPerson, canRemovePerson, closedCycles,
@@ -986,10 +986,11 @@ function syncCard(ctx) {
         + 'account yet. Connect the farm to a server and each person gets a login of their own, '
         + 'with the server deciding what their role is allowed to see.</small>')
       + (owner
-        ? '<p><small>You need a server first. It is free and takes about five minutes: open '
-          + '<b>dash.deno.com</b>, make a new Playground, paste in the file at '
-          + '<b>douvalue/server/deno-sync.ts</b>, press Save &amp; Deploy, and copy the address.</small></p>'
-          + button('Connect the farm', 'sync-setup', { cls: 'btn-block btn-lg', icon: '🔗' })
+        ? '<p><small>You need a server of your own first. It is free and it is one tap: the '
+          + 'setup page below opens Deno with everything already filled in. Press Deploy, wait '
+          + 'about a minute, copy the address it gives you, then come back here and paste it.</small></p>'
+          + link('Get a server', 'server/', { cls: 'btn-block btn-lg', icon: '🚀', newTab: true })
+          + button('I have the address', 'sync-setup', { cls: 'btn-block btn-lg', icon: '🔗' })
         : note('info', 'Ask the CEO',
           '<small>Only the CEO can connect the farm. Until then, back this phone up from '
           + 'Backup and sharing below.</small>')),
@@ -1029,7 +1030,7 @@ function openSyncSetup(ctx) {
     + '<p><small>This creates the farm on your server and makes you its first account. '
     + 'From then on you create everyone else here, and each of them signs in as themselves.</small></p>'
     + '<form data-act="sync-save">'
-    + field('Server address', input('url', { required: true, placeholder: 'https://your-farm.deno.dev' }),
+    + field('Server address', input('url', { required: true, placeholder: 'https://your-farm.deno.net' }),
       'The address your server gave you. Use https.')
     + field('Your PIN', input('password', { type: 'password', required: true, inputmode: 'numeric', placeholder: '0000' }),
       'At least 4 digits. This is what you type to sign in on this phone.')

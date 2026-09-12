@@ -81,7 +81,10 @@ export function button(text, act, opts = {}) {
 }
 
 export function link(text, href, opts = {}) {
-  return `<a class="btn ${opts.cls || ''}" href="${esc(href)}">${opts.icon ? `<span>${opts.icon}</span>` : ''}${esc(text)}</a>`;
+  // Anything leaving the app opens in its own tab, so a half-finished entry on
+  // the screen behind it is not lost.
+  const away = opts.newTab ? ' target="_blank" rel="noopener"' : '';
+  return `<a class="btn ${opts.cls || ''}" href="${esc(href)}"${away}>${opts.icon ? `<span>${opts.icon}</span>` : ''}${esc(text)}</a>`;
 }
 
 export function tick(id, label, sub = '', on = false) {
