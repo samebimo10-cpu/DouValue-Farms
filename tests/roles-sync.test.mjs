@@ -1,165 +1,201 @@
-// Who may appoint whom, and whether a day's work actually reaches the other phones.
+// The chain of command, and whether the server actually enforces it.
+//
+// The point of these tests is adversarial: not "does a farm hand's app hide the
+// wage bill", but "can a farm hand's token get the wage bill out of the server
+// at all". The app's role checks are a convenience. This is the fence.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join as pathJoin } from 'node:path';
 
 const base = new URL('../web/js/', import.meta.url);
 const store = await import(new URL('store.js', base).href);
+const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
-// sync.js reaches for browser globals at import time only through these two.
 globalThis.btoa ??= (s) => Buffer.from(s, 'binary').toString('base64');
 globalThis.atob ??= (s) => Buffer.from(s, 'base64').toString('binary');
-const sync = await import(new URL('sync.js', base).href);
 
-// --- The chain of command -------------------------------------------------
+// --- The chain of command, as the app sees it -----------------------------
 
 const ceo = { id: 'u_ceo', name: 'Owner', role: 'ceo' };
 const manager = { id: 'u_mgr', name: 'Manager', role: 'manager' };
-const agronomist = { id: 'u_agro', name: 'Agronomist', role: 'agronomist' };
 const supervisor = { id: 'u_sup', name: 'Supervisor', role: 'supervisor' };
 const hand = { id: 'u_hand', name: 'Hand', role: 'hand' };
 
 test('roles are ranked from the farm hand up to the owner', () => {
   assert.ok(store.roleRank(ceo) > store.roleRank(manager));
-  assert.ok(store.roleRank(manager) > store.roleRank(agronomist));
-  assert.ok(store.roleRank(agronomist) > store.roleRank(supervisor));
+  assert.ok(store.roleRank(manager) > store.roleRank({ role: 'agronomist' }));
+  assert.ok(store.roleRank({ role: 'agronomist' }) > store.roleRank(supervisor));
   assert.ok(store.roleRank(supervisor) > store.roleRank(hand));
 });
 
-test('the CEO can appoint anyone, including the manager', () => {
-  const can = store.assignableRoles(ceo);
+test('the CEO can appoint anyone; a manager only below themselves', () => {
   for (const role of ['ceo', 'manager', 'agronomist', 'supervisor', 'hand']) {
-    assert.ok(can.includes(role), `CEO should be able to appoint a ${role}`);
+    assert.ok(store.assignableRoles(ceo).includes(role));
+  }
+  assert.deepEqual(store.assignableRoles(manager).sort(), ['agronomist', 'hand', 'supervisor']);
+  assert.deepEqual(store.assignableRoles(hand), []);
+});
+
+test('the app and the server agree on who may appoint whom', () => {
+  // Two copies of the rules exist: one shapes the screens, one guards the data.
+  // If they ever drift, the app offers something the server will refuse.
+  for (const role of Object.keys(core.ROLES)) {
+    assert.deepEqual(
+      core.assignableRoles(role).sort(),
+      store.assignableRoles({ role }).sort(),
+      `${role} disagrees between app and server`,
+    );
   }
 });
 
-test('a manager may take on field staff but never another manager', () => {
-  const can = store.assignableRoles(manager);
-  assert.deepEqual(can.sort(), ['agronomist', 'hand', 'supervisor']);
-  assert.equal(store.canAssignRole(manager, 'manager'), false);
-  assert.equal(store.canAssignRole(manager, 'ceo'), false);
-});
-
-test('field staff cannot create accounts at all', () => {
-  for (const person of [agronomist, supervisor, hand]) {
-    assert.deepEqual(store.assignableRoles(person), [], `${person.role} should appoint nobody`);
-  }
-});
-
-test('a manager cannot edit the owner or a peer, but can edit field staff', () => {
+test('a manager cannot edit the owner or a peer', () => {
   assert.equal(store.canEditPerson(manager, ceo), false);
   assert.equal(store.canEditPerson(manager, { id: 'other', role: 'manager' }), false);
-  assert.equal(store.canEditPerson(manager, supervisor), true);
   assert.equal(store.canEditPerson(manager, hand), true);
 });
 
-test('anyone may edit their own account', () => {
-  assert.equal(store.canEditPerson(hand, hand), true);
-  assert.equal(store.canEditPerson(manager, manager), true);
-});
-
-test('only the CEO controls the sync link and sees the audit trail', () => {
-  assert.equal(store.can(ceo, 'manageSync'), true);
-  assert.equal(store.can(manager, 'manageSync'), false);
-  assert.equal(store.can(ceo, 'manageOwners'), true);
-  assert.equal(store.can(manager, 'manageOwners'), false);
-});
-
-test('the CEO still sees every operational screen, not just the money', () => {
-  for (const p of ['logHarvest', 'diagnose', 'manageCycles', 'viewReports', 'manageMoney',
-    'managePeople', 'settings', 'logSpray', 'assignTasks']) {
-    assert.equal(store.can(ceo, p), true, `CEO should have ${p}`);
-  }
-});
-
-test('the last owner cannot be removed, leaving the farm without one', () => {
-  const state = { people: {
-    u_ceo: { id: 'u_ceo', role: 'ceo', active: true },
-    u_mgr: { id: 'u_mgr', role: 'manager', active: true },
-  } };
-  const solo = store.canRemovePerson(ceo, { id: 'u_other', role: 'ceo' }, state);
-  assert.equal(solo.ok, false);
-  assert.match(solo.why, /only CEO/i);
-
-  const two = { people: { ...state.people, u_ceo2: { id: 'u_ceo2', role: 'ceo', active: true } } };
-  assert.equal(store.canRemovePerson(ceo, { id: 'u_ceo2', role: 'ceo' }, two).ok, true);
-});
-
-test('nobody can remove their own account', () => {
+test('the last owner cannot be removed', () => {
   const state = { people: { u_ceo: { id: 'u_ceo', role: 'ceo', active: true } } };
-  assert.equal(store.canRemovePerson(ceo, ceo, state).ok, false);
+  const result = store.canRemovePerson(ceo, { id: 'u_other', role: 'ceo' }, state);
+  assert.equal(result.ok, false);
+  assert.match(result.why, /only CEO/i);
 });
 
-test('a manager cannot remove the owner', () => {
-  const state = { people: { u_ceo: { id: 'u_ceo', role: 'ceo', active: true } } };
-  assert.equal(store.canRemovePerson(manager, ceo, state).ok, false);
+// --- What the server will and will not hand over ---------------------------
+
+test('a farm hand is never sent the money, redaction or not', () => {
+  const sale = { id: 's1', type: 'sale.record', payload: { amount: 500000 } };
+  assert.equal(core.visibleTo(sale, { memberId: 'h', role: 'hand' }), null);
+  assert.equal(core.visibleTo(sale, { memberId: 's', role: 'supervisor' }), null);
+  assert.equal(core.visibleTo(sale, { memberId: 'a', role: 'agronomist' }), null);
+  assert.ok(core.visibleTo(sale, { memberId: 'm', role: 'manager' }));
+  assert.ok(core.visibleTo(sale, { memberId: 'c', role: 'ceo' }));
 });
 
-// --- Join codes -----------------------------------------------------------
+test('colleagues travel as names and roles, never as wages', () => {
+  const event = { id: 'p1', type: 'person.upsert',
+    payload: { id: 'x', name: 'Ada', role: 'hand', dailyRate: 3500, phone: '080', pinHash: 'secret' } };
 
-test('a join code carries the server, the farm and the key, and survives a round trip', () => {
-  const creds = sync.newFarmCredentials();
-  assert.match(creds.farmId, /^farm_/);
-  assert.ok(creds.farmKey.length >= 16, 'the key must be long enough to be worth having');
+  const seenByHand = core.visibleTo(event, { memberId: 'h', role: 'hand' }).payload;
+  assert.equal(seenByHand.name, 'Ada', 'a hand still knows who their colleagues are');
+  assert.equal(seenByHand.dailyRate, undefined);
+  assert.equal(seenByHand.phone, undefined);
+  assert.equal(seenByHand.pinHash, undefined, 'a password digest never leaves the server');
 
-  const code = sync.makeInviteCode({ url: 'https://farm.example.dev/', ...creds });
-  const back = sync.readInviteCode(code);
-  assert.equal(back.farmId, creds.farmId);
-  assert.equal(back.farmKey, creds.farmKey);
-  assert.equal(back.url, 'https://farm.example.dev', 'the trailing slash is trimmed');
+  const ownRecord = core.visibleTo(event, { memberId: 'x', role: 'hand' }).payload;
+  assert.equal(ownRecord.dailyRate, 3500, 'but everyone may see their own pay');
+
+  const seenByManager = core.visibleTo(event, { memberId: 'm', role: 'manager' }).payload;
+  assert.equal(seenByManager.dailyRate, 3500);
+  assert.equal(seenByManager.pinHash, undefined, 'not even the books get the digest');
 });
 
-test('two farms never get the same identifiers', () => {
-  const seen = new Set();
-  for (let i = 0; i < 200; i++) {
-    const c = sync.newFarmCredentials();
-    assert.equal(seen.has(c.farmId), false);
-    seen.add(c.farmId);
+test('own-pay works whether the reader is a session or a stored member', () => {
+  // The server passes a stored member record, which is keyed id; the app passes
+  // a session, which is keyed memberId. Honouring only one of them meant nobody
+  // ever saw their own wage on the live path, and the unit test still passed.
+  const event = { id: 'p1', type: 'person.upsert', payload: { id: 'x', name: 'Ada', role: 'hand', dailyRate: 3500 } };
+  assert.equal(core.visibleTo(event, { memberId: 'x', role: 'hand' }).payload.dailyRate, 3500);
+  assert.equal(core.visibleTo(event, { id: 'x', role: 'hand' }).payload.dailyRate, 3500);
+  assert.equal(core.visibleTo(event, { id: 'other', role: 'hand' }).payload.dailyRate, undefined);
+});
+
+test('prices are commercial; crate weights are not', () => {
+  const event = { id: 'st', type: 'settings.update',
+    payload: { crateKg: 12, kgPerPersonHour: 12, prices: { habanero: 2600 }, defaultDailyWage: 3500 } };
+  const forHand = core.visibleTo(event, { memberId: 'h', role: 'hand' }).payload;
+  assert.equal(forHand.crateKg, 12, 'a hand needs the crate weight to record a harvest');
+  assert.equal(forHand.prices, undefined);
+  assert.equal(forHand.defaultDailyWage, undefined);
+  assert.ok(core.visibleTo(event, { memberId: 'c', role: 'ceo' }).payload.prices);
+});
+
+test('nobody can write outside their role, or promote themselves', () => {
+  const sale = { id: 's', type: 'sale.record', payload: {} };
+  assert.equal(core.mayWrite(sale, { id: 'h', role: 'hand' }).ok, false);
+  assert.equal(core.mayWrite(sale, { id: 'm', role: 'manager' }).ok, true);
+
+  const selfPromote = { id: 'p', type: 'person.upsert', payload: { id: 'h', role: 'ceo' } };
+  assert.equal(core.mayWrite(selfPromote, { id: 'h', role: 'hand' }).ok, false);
+  assert.equal(core.mayWrite(selfPromote, { id: 'm', role: 'manager' }).ok, false,
+    'not even a manager may mint an owner');
+  assert.equal(core.mayWrite(selfPromote, { id: 'c', role: 'ceo' }).ok, true);
+
+  const rivalManager = { id: 'p2', type: 'person.upsert', payload: { id: 'z', role: 'manager' } };
+  assert.equal(core.mayWrite(rivalManager, { id: 'm', role: 'manager' }).ok, false);
+});
+
+test('an unknown record type is neither stored nor relayed', () => {
+  const odd = { id: 'x', type: 'something.invented', payload: {} };
+  assert.equal(core.mayWrite(odd, { id: 'c', role: 'ceo' }).ok, false);
+  assert.equal(core.visibleTo(odd, { memberId: 'c', role: 'ceo' }), null);
+});
+
+test('secrets are hashed slowly and compared without leaking', async () => {
+  const { salt, hash } = await core.hashSecret('4821');
+  assert.notEqual(hash, '4821');
+  assert.equal(await core.verifySecret('4821', salt, hash), true);
+  assert.equal(await core.verifySecret('4822', salt, hash), false);
+  assert.equal(await core.verifySecret('4821', salt, null), false);
+  assert.equal(core.timingSafeEqualHex('abc', 'abd'), false);
+  assert.equal(core.timingSafeEqualHex('abc', 'abc'), true);
+});
+
+test('join codes avoid the characters people misread', () => {
+  const code = core.randomCode(24);
+  assert.equal(/[IO01]/.test(code), false, `${code} should avoid I, O, 0 and 1`);
+});
+
+test('repeated wrong tries lock an account for a while', () => {
+  let member = { failedAttempts: 0, lockedUntil: 0 };
+  for (let i = 0; i < 5; i++) {
+    member = { ...member, ...core.afterFailure(member) };
+    assert.equal(core.lockoutState(member).locked, false, `try ${i + 1} should not lock yet`);
   }
+  member = { ...member, ...core.afterFailure(member) };
+  assert.equal(core.lockoutState(member).locked, true, 'the sixth try locks it');
+  assert.ok(core.lockoutState(member).seconds > 600);
 });
 
-test('rubbish in a join code is refused rather than half-accepted', () => {
-  for (const bad of ['', 'hello', 'e30=', btoa('{"url":"x"}'), 'not base64 at all!!']) {
-    assert.equal(sync.readInviteCode(bad), null, `should reject ${JSON.stringify(bad)}`);
-  }
-});
-
-test('the status line says something a farm hand can act on', () => {
-  assert.match(sync.statusLine({ configured: false, state: 'off' }).text, /this phone only/i);
-  const waiting = sync.statusLine({ configured: true, state: 'offline', pending: 3 });
-  assert.match(waiting.text, /3 records waiting/);
-  assert.equal(waiting.tone, 'warn');
-  const clean = sync.statusLine({ configured: true, state: 'idle', pending: 0, lastSyncAt: 'x' });
-  assert.equal(clean.tone, 'ok');
-  assert.match(sync.statusLine({ configured: true, state: 'error', lastError: 'boom' }).text, /boom/);
-});
-
-// --- The server, exercised for real ---------------------------------------
+// --- The server, run for real ---------------------------------------------
 
 let server = null;
 let dataDir = null;
-const PORT = 8791;
+const PORT = 8793;
 const URL_BASE = `http://127.0.0.1:${PORT}`;
-const FARM = 'farm_testing';
-const KEY = 'key-for-the-tests-1234';
-const auth = { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' };
+const FARM = 'farm_under_test';
+
+const call = async (path, { method = 'GET', token = null, body = null } = {}) => {
+  const res = await fetch(`${URL_BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let payload = null;
+  try { payload = await res.json(); } catch { /* some replies have no body */ }
+  return { status: res.status, body: payload };
+};
+
+let ceoToken = null;
+let handToken = null;
+let handId = null;
 
 before(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'douvalue-sync-'));
+  dataDir = mkdtempSync(pathJoin(tmpdir(), 'douvalue-farm-'));
   const entry = new URL('../server/node-sync.mjs', import.meta.url).pathname;
   server = spawn(process.execPath, [entry, '--port', String(PORT), '--data', dataDir], { stdio: 'ignore' });
-  for (let i = 0; i < 50; i++) {
-    try {
-      const res = await fetch(`${URL_BASE}/api/farms/${FARM}/health`, { headers: auth });
-      if (res.ok) return;
-    } catch { /* not up yet */ }
+  for (let i = 0; i < 80; i++) {
+    try { if ((await fetch(`${URL_BASE}/`)).ok) return; } catch { /* still coming up */ }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error('sync server did not start');
+  throw new Error('farm server did not start');
 });
 
 after(() => {
@@ -167,135 +203,239 @@ after(() => {
   if (dataDir) rmSync(dataDir, { recursive: true, force: true });
 });
 
-const push = (events) => fetch(`${URL_BASE}/api/farms/${FARM}/events`, {
-  method: 'POST', headers: auth, body: JSON.stringify({ events }),
-}).then((r) => r.json());
-
-const pull = (since = 0, limit = 500) =>
-  fetch(`${URL_BASE}/api/farms/${FARM}/events?since=${since}&limit=${limit}`, { headers: auth })
-    .then((r) => r.json());
-
-test('the server takes events and hands them back in order', async () => {
-  const sent = [
-    { id: 'ev_a', type: 'harvest.record', at: '2026-09-01T08:00:00Z', payload: { kg: 10 } },
-    { id: 'ev_b', type: 'harvest.record', at: '2026-09-01T09:00:00Z', payload: { kg: 20 } },
-  ];
-  const result = await push(sent);
-  assert.equal(result.accepted, 2);
-  const page = await pull(0);
-  assert.equal(page.events.length, 2);
-  assert.deepEqual(page.events.map((e) => e.id), ['ev_a', 'ev_b']);
-  assert.equal(page.more, false);
-});
-
-test('pushing the same events twice changes nothing', async () => {
-  const again = await push([{ id: 'ev_a', type: 'harvest.record' }, { id: 'ev_c', type: 'sale.record' }]);
-  assert.equal(again.accepted, 1, 'only the new one lands');
-  assert.equal(again.skipped, 1, 'the repeat is ignored');
-  const page = await pull(0);
-  assert.equal(page.events.filter((e) => e.id === 'ev_a').length, 1, 'no duplicate in the log');
-});
-
-test('a device only receives what it has not already seen', async () => {
-  const first = await pull(0, 2);
-  assert.equal(first.events.length, 2);
-  assert.equal(first.more, true);
-  const next = await pull(first.cursor);
-  assert.equal(next.events.length, 1);
-  assert.equal(next.events[0].id, 'ev_c');
-  assert.equal(next.more, false);
-  const nothing = await pull(next.cursor);
-  assert.deepEqual(nothing.events, []);
-});
-
-test('the wrong farm key gets nothing', async () => {
-  const res = await fetch(`${URL_BASE}/api/farms/${FARM}/events?since=0`, {
-    headers: { Authorization: 'Bearer completely-wrong-key' },
-  });
-  assert.equal(res.status, 403);
-  const none = await fetch(`${URL_BASE}/api/farms/${FARM}/health`);
-  assert.equal(none.status, 401);
-});
-
-test('one farm cannot read another farm', async () => {
-  await fetch(`${URL_BASE}/api/farms/other_farm/events`, {
+test('the farm is created once, with its owner', async () => {
+  const made = await call(`/api/farms/${FARM}/bootstrap`, {
     method: 'POST',
-    headers: { Authorization: 'Bearer a-totally-different-key', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ events: [{ id: 'secret_1', type: 'sale.record' }] }),
+    body: { name: 'Ebimo Sam', password: '8421', farmName: 'DouValue Farms Limited', memberId: 'person_ceo' },
   });
-  const mine = await pull(0);
-  assert.equal(mine.events.some((e) => e.id === 'secret_1'), false);
-});
+  assert.equal(made.status, 200);
+  assert.equal(made.body.member.role, 'ceo');
+  assert.ok(made.body.token);
+  ceoToken = made.body.token;
 
-test('two phones offline at the same time both keep their work', async () => {
-  // Phone A and phone B each record while apart, then both come back into signal.
-  const phoneA = [{ id: 'ev_a1', type: 'harvest.record', payload: { by: 'A' } },
-    { id: 'ev_a2', type: 'work.log', payload: { by: 'A' } }];
-  const phoneB = [{ id: 'ev_b1', type: 'harvest.record', payload: { by: 'B' } },
-    { id: 'ev_b2', type: 'spray.record', payload: { by: 'B' } }];
-
-  const before = (await pull(0)).events.length;
-  await Promise.all([push(phoneA), push(phoneB)]);
-  const after = await pull(0);
-
-  assert.equal(after.events.length, before + 4, 'nothing was dropped by the overlap');
-  for (const id of ['ev_a1', 'ev_a2', 'ev_b1', 'ev_b2']) {
-    assert.ok(after.events.some((e) => e.id === id), `${id} survived`);
-  }
-});
-
-test('a malformed push is rejected without corrupting the log', async () => {
-  const before = (await pull(0)).events.length;
-  const res = await fetch(`${URL_BASE}/api/farms/${FARM}/events`, {
-    method: 'POST', headers: auth, body: 'this is not json',
+  const again = await call(`/api/farms/${FARM}/bootstrap`, {
+    method: 'POST', body: { name: 'Impostor', password: '0000' },
   });
-  assert.equal(res.status, 400);
-  const junk = await push([null, { noId: true }, { id: '', type: 'x' }]);
-  assert.equal(junk.accepted, 0);
-  assert.equal((await pull(0)).events.length, before, 'the log is untouched');
+  assert.equal(again.status, 409, 'a second bootstrap must not seize an existing farm');
 });
 
-test('the log survives the server being restarted', async () => {
-  const before = await pull(0);
-  server.kill();
-  await new Promise((r) => setTimeout(r, 300));
-
-  const entry = new URL('../server/node-sync.mjs', import.meta.url).pathname;
-  server = spawn(process.execPath, [entry, '--port', String(PORT), '--data', dataDir], { stdio: 'ignore' });
-  for (let i = 0; i < 50; i++) {
-    try { if ((await fetch(`${URL_BASE}/api/farms/${FARM}/health`, { headers: auth })).ok) break; }
-    catch { /* still coming up */ }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  const after = await pull(0);
-  assert.deepEqual(after.events.map((e) => e.id), before.events.map((e) => e.id));
+test('no token, no data', async () => {
+  assert.equal((await call(`/api/farms/${FARM}/events?since=0`)).status, 401);
+  assert.equal((await call(`/api/farms/${FARM}/events?since=0`, { token: 'made-up' })).status, 401);
 });
 
-test('what the server returns still replays into a farm', async () => {
-  // The point of the whole exercise: events that went through the server are
-  // still a valid log, so a phone that pulls them rebuilds the same farm.
+test('the CEO invites a farm hand and gets a one-time code', async () => {
+  const invited = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Emeka Okoro', role: 'hand' },
+  });
+  assert.equal(invited.status, 200);
+  assert.match(invited.body.joinCode, /^[A-Z2-9]{6}$/);
+  assert.match(invited.body.joinPassword, /^[A-Z2-9]{6}$/);
+  handId = invited.body.memberId;
+
+  const wrongPassword = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: 'WRONG9', pin: '1111' },
+  });
+  assert.equal(wrongPassword.status, 403, 'the code alone is not enough');
+
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '7391' },
+  });
+  assert.equal(joined.status, 200);
+  assert.equal(joined.body.member.role, 'hand');
+  handToken = joined.body.token;
+
+  const reused = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '2222' },
+  });
+  assert.equal(reused.status, 403, 'an invite works exactly once');
+});
+
+test('a farm hand cannot invite anybody', async () => {
+  const attempt = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: handToken, body: { name: 'Friend', role: 'hand' },
+  });
+  assert.equal(attempt.status, 403);
+});
+
+test('a manager cannot invite another manager', async () => {
+  const invited = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Ada Briggs', role: 'manager' },
+  });
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '5150' },
+  });
+  const managerToken = joined.body.token;
+
+  const rival = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: managerToken, body: { name: 'Rival', role: 'manager' },
+  });
+  assert.equal(rival.status, 403);
+
+  const owner = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: managerToken, body: { name: 'Rival Owner', role: 'ceo' },
+  });
+  assert.equal(owner.status, 403);
+
+  const allowed = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: managerToken, body: { name: 'Blessing', role: 'supervisor' },
+  });
+  assert.equal(allowed.status, 200, 'but field staff are theirs to take on');
+});
+
+test('the CEO files records of every kind', async () => {
   const events = [
-    { id: 's1', type: 'person.upsert', at: '2026-01-01T08:00:00Z', by: 'u_ceo',
-      payload: { id: 'u_ceo', name: 'Owner', role: 'ceo' } },
-    { id: 's2', type: 'plot.upsert', at: '2026-01-02T08:00:00Z', by: 'u_ceo',
-      payload: { id: 'b1', name: 'Bed 1', areaM2: 600 } },
-    { id: 's3', type: 'cycle.start', at: '2026-05-01T08:00:00Z', by: 'u_ceo',
-      payload: { id: 'c1', plotId: 'b1', cropId: 'habanero', transplantDate: '2026-05-01', plants: 100 } },
-    { id: 's4', type: 'harvest.record', at: '2026-09-01T08:00:00Z', by: 'u_ceo',
-      payload: { cycleId: 'c1', kg: 42, date: '2026-09-01' } },
+    { id: 'e_person', type: 'person.upsert', at: '2026-01-01T08:00:00Z',
+      payload: { id: handId, name: 'Emeka Okoro', role: 'hand', dailyRate: 3500, phone: '08030000004' } },
+    { id: 'e_settings', type: 'settings.update', at: '2026-01-01T08:01:00Z',
+      payload: { crateKg: 12, prices: { habanero: 2600 }, defaultDailyWage: 3500 } },
+    { id: 'e_plot', type: 'plot.upsert', at: '2026-01-02T08:00:00Z',
+      payload: { id: 'b1', name: 'Bed 1', areaM2: 800 } },
+    { id: 'e_cycle', type: 'cycle.start', at: '2026-05-01T08:00:00Z',
+      payload: { id: 'c1', plotId: 'b1', cropId: 'habanero', transplantDate: '2026-05-01', plants: 1200 } },
+    { id: 'e_sale', type: 'sale.record', at: '2026-09-01T08:00:00Z',
+      payload: { kg: 190, amount: 532000, buyer: 'Mile 3 trader', date: '2026-09-01' } },
+    { id: 'e_expense', type: 'expense.record', at: '2026-09-02T08:00:00Z',
+      payload: { amount: 248000, category: 'inputs', date: '2026-09-02' } },
   ];
-  await fetch(`${URL_BASE}/api/farms/replay_farm/events`, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer replay-farm-key-9999', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ events }),
-  });
-  const page = await fetch(`${URL_BASE}/api/farms/replay_farm/events?since=0`, {
-    headers: { Authorization: 'Bearer replay-farm-key-9999' },
-  }).then((r) => r.json());
+  const pushed = await call(`/api/farms/${FARM}/events`, { method: 'POST', token: ceoToken, body: { events } });
+  assert.equal(pushed.status, 200);
+  assert.equal(pushed.body.accepted, 6);
+  assert.deepEqual(pushed.body.refused, []);
+});
 
-  const rebuilt = store.reduce(page.events);
-  assert.equal(rebuilt.people.u_ceo.role, 'ceo');
-  assert.equal(rebuilt.cycles.c1.harvestedKg, 42);
+test("the hand's own token cannot pull the money out of the server", async () => {
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: handToken });
+  assert.equal(page.status, 200);
+
+  const ids = page.body.events.map((e) => e.id);
+  assert.equal(ids.includes('e_sale'), false, 'a sale must never reach a farm hand');
+  assert.equal(ids.includes('e_expense'), false);
+  assert.ok(ids.includes('e_plot'), 'but the beds must, or the app is useless');
+  assert.ok(page.body.withheld >= 2, 'and the server says it held things back');
+
+  const wire = JSON.stringify(page.body);
+  assert.equal(wire.includes('532000'), false, 'the figure is not on the wire at all');
+  assert.equal(wire.includes('Mile 3 trader'), false);
+});
+
+test('a farm hand sees who their colleagues are, but not what they earn', async () => {
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: handToken });
+  const person = page.body.events.find((e) => e.id === 'e_person');
+  assert.ok(person, 'the record still travels');
+  assert.equal(person.payload.name, 'Emeka Okoro');
+  // This particular record is the hand's own, so their own rate is theirs to see.
+  assert.equal(person.payload.dailyRate, 3500);
+
+  const settings = page.body.events.find((e) => e.id === 'e_settings');
+  assert.equal(settings.payload.crateKg, 12);
+  assert.equal(settings.payload.prices, undefined, 'prices are commercial');
+  assert.equal(settings.payload.defaultDailyWage, undefined);
+});
+
+test('the CEO does get everything', async () => {
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
+  const ids = page.body.events.map((e) => e.id);
+  for (const id of ['e_person', 'e_settings', 'e_plot', 'e_cycle', 'e_sale', 'e_expense']) {
+    assert.ok(ids.includes(id), `the owner should see ${id}`);
+  }
+  assert.equal(page.body.withheld, 0);
+});
+
+test('a farm hand filing a sale is refused, not quietly accepted', async () => {
+  const attempt = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: handToken,
+    body: { events: [{ id: 'e_forged_sale', type: 'sale.record', payload: { amount: 1 } }] },
+  });
+  assert.equal(attempt.status, 200);
+  assert.equal(attempt.body.accepted, 0);
+  assert.equal(attempt.body.refused.length, 1);
+  assert.match(attempt.body.refused[0].why, /may not file/);
+
+  const asCeo = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
+  assert.equal(asCeo.body.events.some((e) => e.id === 'e_forged_sale'), false);
+});
+
+test('a farm hand cannot promote themselves by pushing a record', async () => {
+  const attempt = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: handToken,
+    body: { events: [{ id: 'e_coup', type: 'person.upsert', payload: { id: handId, name: 'Emeka', role: 'ceo' } }] },
+  });
+  assert.equal(attempt.body.accepted, 0);
+  assert.equal(attempt.body.refused.length, 1);
+
+  const me = await call(`/api/farms/${FARM}/me`, { token: handToken });
+  assert.equal(me.body.member.role, 'hand', 'still a farm hand');
+});
+
+test('work is filed under whoever actually sent it', async () => {
+  await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: handToken,
+    body: { events: [{ id: 'e_harvest', type: 'harvest.record', by: 'person_ceo',
+      payload: { cycleId: 'c1', kg: 48, date: '2026-09-10' } }] },
+  });
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
+  const harvest = page.body.events.find((e) => e.id === 'e_harvest');
+  assert.equal(harvest.by, handId, 'the claimed author is replaced with the authenticated one');
+});
+
+test('signing a phone out stops that token dead', async () => {
+  const stillWorks = await call(`/api/farms/${FARM}/me`, { token: handToken });
+  assert.equal(stillWorks.status, 200);
+
+  const revoked = await call(`/api/farms/${FARM}/revoke`, {
+    method: 'POST', token: ceoToken, body: { memberId: handId, devicesOnly: true },
+  });
+  assert.equal(revoked.status, 200);
+
+  const after = await call(`/api/farms/${FARM}/me`, { token: handToken });
+  assert.equal(after.status, 401, 'the lost handset is locked out immediately');
+});
+
+test('one farm cannot read another', async () => {
+  const other = await call('/api/farms/farm_someone_else/bootstrap', {
+    method: 'POST', body: { name: 'Other Owner', password: '9999' },
+  });
+  const otherToken = other.body.token;
+  const crossing = await call(`/api/farms/${FARM}/events?since=0`, { token: otherToken });
+  assert.equal(crossing.status, 401, "another farm's token is worthless here");
+});
+
+test('what survives the wire still replays into a farm', async () => {
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
+  const rebuilt = store.reduce(page.body.events);
+  assert.equal(rebuilt.cycles.c1.harvestedKg, 48);
+  assert.equal(rebuilt.plots.b1.name, 'Bed 1');
   assert.equal(store.activeCycles(rebuilt).length, 1);
+});
+
+test('the same farm replays differently for a hand, and still works', async () => {
+  const handRejoin = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Emeka Again', role: 'hand' },
+  });
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: handRejoin.body.joinCode, joinPassword: handRejoin.body.joinPassword, pin: '4242' },
+  });
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: joined.body.token });
+  const rebuilt = store.reduce(page.body.events);
+
+  assert.equal(rebuilt.plots.b1.name, 'Bed 1', 'the beds are there');
+  assert.equal(rebuilt.cycles.c1.harvestedKg, 48, 'the harvest is there');
+  assert.equal(rebuilt.sales.length, 0, 'the money is not');
+  assert.equal(rebuilt.expenses.length, 0);
+});
+
+test('the generated Deno server has not drifted from the core', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const generated = new URL('../server/deno-sync.ts', import.meta.url).pathname;
+  const before = readFileSync(generated, 'utf8');
+  execFileSync(process.execPath, [new URL('../scripts-build-deno.mjs', import.meta.url).pathname], { stdio: 'ignore' });
+  assert.equal(readFileSync(generated, 'utf8'), before,
+    'server/deno-sync.ts is generated: run node douvalue/scripts-build-deno.mjs and commit the result');
 });

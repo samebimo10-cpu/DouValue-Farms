@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 /**
- * DouValue farm sync server, self-hosted edition.
- *
- * The same contract as server/deno-sync.ts, for anyone who would rather run it
- * on their own box, a VPS, or a Raspberry Pi in the farm office. Events are held
- * in one append-only JSON-lines file per farm, which means a backup is a file
- * copy and a recovery is putting the file back.
+ * DouValue farm server, self-hosted edition.
  *
  *   node douvalue/server/node-sync.mjs --port 8787 --data ./farm-data
  *
- * Security model, stated plainly: one shared farm key guards one farm. Anyone
- * holding the join code can read and write that farm's records. Put it behind
- * HTTPS before exposing it beyond the farm's own network.
+ * All the rules live in core.mjs. This file is only storage and plumbing: it
+ * keeps each farm in a folder, with its records in one append-only JSON-lines
+ * file, so a backup is a file copy and a recovery is putting the file back.
+ *
+ * Put it behind HTTPS before exposing it beyond the farm's own network. Tokens
+ * and PINs travel in the request, and plain HTTP puts them on the wire in clear.
  */
 
 import { createServer } from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { handleRequest } from './core.mjs';
 
 const args = process.argv.slice(2);
 const arg = (name, fallback) => {
@@ -27,162 +25,144 @@ const arg = (name, fallback) => {
 
 const PORT = Number(arg('port', process.env.PORT || 8787));
 const DATA_DIR = resolve(arg('data', process.env.DATA_DIR || './farm-data'));
-const MAX_EVENTS_PER_PUSH = 1000;
-const MAX_BODY_BYTES = 5_000_000;
-const MAX_PULL = 1000;
-
 mkdirSync(DATA_DIR, { recursive: true });
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age': '86400',
+const readJsonFile = (path, fallback) => {
+  try { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : fallback; }
+  catch { return fallback; }
+};
+const writeJsonFile = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
+
+const farmDir = (farmId) => {
+  const dir = join(DATA_DIR, farmId);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 };
 
-const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+// Loaded once per farm and kept current on write; the log is the source of truth.
+const cache = new Map();
 
-function sameSecret(a, b) {
-  const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
-}
-
-const safeId = (id) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
-
-/** In-memory view of a farm, loaded from disk once and kept current on write. */
-const farms = new Map();
-
-function farmPaths(farmId) {
-  return { meta: join(DATA_DIR, `${farmId}.meta.json`), log: join(DATA_DIR, `${farmId}.events.jsonl`) };
-}
-
-function loadFarm(farmId) {
-  if (farms.has(farmId)) return farms.get(farmId);
-  const paths = farmPaths(farmId);
-  if (!existsSync(paths.meta)) return null;
-
-  const meta = JSON.parse(readFileSync(paths.meta, 'utf8'));
-  const events = [];
-  const ids = new Set();
-  if (existsSync(paths.log)) {
-    for (const line of readFileSync(paths.log, 'utf8').split('\n')) {
+function farmState(farmId) {
+  if (cache.has(farmId)) return cache.get(farmId);
+  const dir = farmDir(farmId);
+  const state = {
+    dir,
+    meta: readJsonFile(join(dir, 'farm.json'), null),
+    members: readJsonFile(join(dir, 'members.json'), {}),
+    events: [],
+    ids: new Set(),
+  };
+  const logPath = join(dir, 'events.jsonl');
+  if (existsSync(logPath)) {
+    for (const line of readFileSync(logPath, 'utf8').split('\n')) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        if (event && event.id && !ids.has(event.id)) { ids.add(event.id); events.push(event); }
-      } catch { /* a torn last line after a power cut: skip it, keep the rest */ }
+        if (event && event.id && !state.ids.has(event.id)) { state.ids.add(event.id); state.events.push(event); }
+      } catch { /* a torn last line after a power cut: keep the rest */ }
     }
   }
-  const farm = { meta, events, ids, paths };
-  farms.set(farmId, farm);
-  return farm;
+  cache.set(farmId, state);
+  return state;
 }
 
-function createFarm(farmId, keyHash) {
-  const paths = farmPaths(farmId);
-  const meta = { keyHash, created: new Date().toISOString() };
-  writeFileSync(paths.meta, JSON.stringify(meta, null, 2));
-  const farm = { meta, events: [], ids: new Set(), paths };
-  farms.set(farmId, farm);
-  return farm;
-}
+const TOKENS_PATH = join(DATA_DIR, 'tokens.json');
+let tokens = readJsonFile(TOKENS_PATH, {});
+const saveTokens = () => writeJsonFile(TOKENS_PATH, tokens);
 
-function send(res, status, body) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...CORS });
-  res.end(text);
-}
+// Pending invites, keyed by a digest of the code so redeeming one is a single
+// lookup rather than a scan through everyone who has ever been invited.
+const INVITES_PATH = join(DATA_DIR, 'invites.json');
+let invites = readJsonFile(INVITES_PATH, {});
+const saveInvites = () => writeJsonFile(INVITES_PATH, invites);
 
-function readBody(req) {
-  return new Promise((resolveBody, reject) => {
-    let size = 0;
-    const chunks = [];
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) { reject(new Error('too large')); req.destroy(); return; }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
+const store = {
+  async getFarm(farmId) { return farmState(farmId).meta; },
+  async setFarm(farmId, farm) {
+    const s = farmState(farmId);
+    s.meta = farm;
+    writeJsonFile(join(s.dir, 'farm.json'), farm);
+  },
 
-const server = createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
+  async getMember(farmId, memberId) { return farmState(farmId).members[memberId] || null; },
+  async listMembers(farmId) { return Object.values(farmState(farmId).members); },
+  async setMember(farmId, member) {
+    const s = farmState(farmId);
+    s.members[member.id] = member;
+    writeJsonFile(join(s.dir, 'members.json'), s.members);
+  },
 
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const parts = url.pathname.split('/').filter(Boolean);
+  async getInviteIndex(lookup) { return invites[lookup] || null; },
+  async setInviteIndex(lookup, rec) { invites[lookup] = rec; saveInvites(); },
+  async deleteInviteIndex(lookup) { if (invites[lookup]) { delete invites[lookup]; saveInvites(); } },
 
-  if (!parts.length) {
-    res.writeHead(200, { 'Content-Type': 'text/plain', ...CORS });
-    res.end('DouValue farm sync server is running.\n\nPut this URL into the app under Settings, Sync.\n');
-    return;
-  }
-  if (parts[0] !== 'api' || parts[1] !== 'farms' || !parts[2]) return send(res, 404, { error: 'Not found' });
+  async getToken(digest) { return tokens[digest] || null; },
+  async setToken(digest, rec) { tokens[digest] = rec; saveTokens(); },
+  async touchToken(digest, at) { if (tokens[digest]) { tokens[digest].lastSeen = at; saveTokens(); } },
+  async deleteTokensFor(farmId, memberId) {
+    let changed = false;
+    for (const [digest, rec] of Object.entries(tokens)) {
+      if (rec.farmId === farmId && rec.memberId === memberId) { delete tokens[digest]; changed = true; }
+    }
+    if (changed) saveTokens();
+  },
 
-  const farmId = decodeURIComponent(parts[2]);
-  if (!safeId(farmId)) return send(res, 400, { error: 'Bad farm id' });
-  const action = parts[3] || '';
-
-  const header = req.headers.authorization || '';
-  const key = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  if (!key || key.length < 8) return send(res, 401, { error: 'Missing farm key' });
-  const keyHash = sha256(key);
-
-  // A farm that does not exist yet is claimed by the first key presented. The
-  // farm id is random and only travels inside a join code, so whoever sets the
-  // farm up owns it and nobody else can join without that code.
-  let farm = loadFarm(farmId) || createFarm(farmId, keyHash);
-  if (!sameSecret(farm.meta.keyHash, keyHash)) return send(res, 403, { error: 'Wrong farm key' });
-
-  if (action === 'health' && req.method === 'GET') {
-    return send(res, 200, {
-      ok: true, farmId, events: farm.events.length, cursor: farm.events.length, since: farm.meta.created,
-    });
-  }
-
-  if (action === 'events' && req.method === 'GET') {
-    const since = Math.max(0, Number(url.searchParams.get('since') || 0) || 0);
-    const limit = Math.min(MAX_PULL, Math.max(1, Number(url.searchParams.get('limit') || 500) || 500));
-    const slice = farm.events.slice(since, since + limit);
-    return send(res, 200, {
-      events: slice,
-      cursor: since + slice.length,
-      more: since + slice.length < farm.events.length,
-      total: farm.events.length,
-    });
-  }
-
-  if (action === 'events' && req.method === 'POST') {
-    let raw;
-    try { raw = await readBody(req); }
-    catch { return send(res, 413, { error: 'That batch is too large' }); }
-
-    let body;
-    try { body = JSON.parse(raw); } catch { return send(res, 400, { error: 'Body was not valid JSON' }); }
-    const incoming = Array.isArray(body.events) ? body.events : [];
-    if (incoming.length > MAX_EVENTS_PER_PUSH) return send(res, 413, { error: 'Too many events in one push' });
-
-    let accepted = 0, skipped = 0;
+  async appendEvents(farmId, events) {
+    const s = farmState(farmId);
     const lines = [];
-    for (const event of incoming) {
-      if (!event || typeof event.id !== 'string' || !event.id || farm.ids.has(event.id)) { skipped++; continue; }
-      farm.ids.add(event.id);
-      farm.events.push(event);
+    let accepted = 0, skipped = 0;
+    for (const event of events) {
+      if (s.ids.has(event.id)) { skipped++; continue; }
+      s.ids.add(event.id);
+      s.events.push(event);
       lines.push(JSON.stringify(event));
       accepted++;
     }
-    // One append, then the write is durable before the client is told it landed.
-    if (lines.length) appendFileSync(farm.paths.log, lines.join('\n') + '\n');
+    // One append, and it is on disk before the phone is told the work landed.
+    if (lines.length) appendFileSync(join(s.dir, 'events.jsonl'), lines.join('\n') + '\n');
+    return { accepted, skipped, cursor: s.events.length };
+  },
 
-    return send(res, 200, { accepted, skipped, total: farm.events.length, cursor: farm.events.length });
+  async listEvents(farmId, since, limit) {
+    const s = farmState(farmId);
+    const slice = s.events.slice(since, since + limit);
+    return { events: slice, cursor: since + slice.length, more: since + slice.length < s.events.length };
+  },
+
+  async countEvents(farmId) { return farmState(farmId).events.length; },
+};
+
+const server = createServer(async (req, res) => {
+  const url = `http://${req.headers.host || 'localhost'}${req.url}`;
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+
+  const request = new Request(url, {
+    method: req.method,
+    headers: req.headers,
+    body: ['GET', 'HEAD'].includes(req.method) ? undefined : body,
+  });
+
+  let response;
+  try {
+    response = await handleRequest(request, store);
+  } catch (err) {
+    console.error('Request failed:', err);
+    response = new Response(JSON.stringify({ error: 'Something went wrong on the server' }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    });
   }
 
-  return send(res, 404, { error: 'Not found' });
+  res.writeHead(response.status, Object.fromEntries(response.headers));
+  res.end(Buffer.from(await response.arrayBuffer()));
 });
 
 server.listen(PORT, () => {
-  console.log(`DouValue sync server listening on http://localhost:${PORT}`);
-  console.log(`Storing farm data in ${DATA_DIR}`);
+  console.log(`DouValue farm server listening on http://localhost:${PORT}`);
+  console.log(`Farm data in ${DATA_DIR}`);
+  const farms = existsSync(DATA_DIR)
+    ? readdirSync(DATA_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+    : [];
+  console.log(farms.length ? `Farms held: ${farms.join(', ')}` : 'No farms yet. The app will create one.');
 });

@@ -181,42 +181,100 @@ them and lose nothing.
 
 ### Automatic sync
 
-Once the CEO switches sync on, each phone keeps an **outbox** of what it has not
+Once the CEO connects the farm, each phone keeps an **outbox** of what it has not
 yet handed over. Whenever it has signal it pushes that outbox and pulls whatever
-the other phones have recorded, then rebuilds itself. Nobody has to remember to
-send anything.
+the other phones recorded, then rebuilds itself. Nobody has to remember to send
+anything.
 
 A sync runs when the phone comes back online, a few seconds after anything is
-recorded, when the app is brought back to the foreground, and on a slow
-background tick. Failures back off (5s, 15s, 45s, 2m, 5m) instead of hammering a
-bad connection, and overlapping triggers share one exchange rather than sending
-the same batch three times.
+recorded, when the app returns to the foreground, and on a slow background tick.
+Failures back off (5s, 15s, 45s, 2m, 5m) instead of hammering a bad connection,
+and overlapping triggers share one exchange. A line across the top of every
+screen says where the phone stands; tapping it forces an exchange.
 
-A line across the top of every screen always says where the phone stands: *All
-phones up to date*, *No network, 3 records waiting to send*, or the error if
-there is one. Tapping it forces an exchange.
+### Accounts, and who can read what
 
-**Setting it up.** The server is one file and free to run:
+**There is no shared password.** Every person has their own account, and the
+server decides what their role may see. This is the part that matters, so it is
+worth being exact about it.
+
+**Joining takes two things, and both come from the CEO.** You create the account
+in the app, and it hands you a link and a six-character password. The person taps
+the link, types the password once, chooses their own PIN, and that phone is
+theirs. The link says *which account*; the password proves *it is them*. Both work
+exactly once and expire after two weeks.
+
+**A PIN alone gets nobody in.** Enrolling a device requires an invite. Someone who
+watches a farm hand type their PIN cannot use it on another phone, because that
+phone was never invited. Six wrong tries locks the account for fifteen minutes.
+
+**The role is enforced on the server, not in the app.** A farm hand's phone is not
+sent the sales, the costs or anybody else's wages. Not hidden on the screen:
+never transmitted. Open that phone's storage and the figures are not there,
+because the server filtered them before they left it. The app's own role checks
+are a convenience for the person using it; the server is the fence.
+
+What each role receives:
+
+| | Beds, crops, harvest, sprays, tasks | Colleagues' names | Colleagues' wages | Sales and costs |
+|---|---|---|---|---|
+| CEO | yes | yes | yes | yes |
+| Farm manager | yes | yes | yes | yes |
+| Agronomist | yes | yes | no | no |
+| Supervisor | yes | yes | no | no |
+| Farm hand | yes | yes | no | no |
+
+Everyone always sees their own pay. Nobody, at any level, receives anybody's PIN
+digest: it stays on the server.
+
+**Writes are checked the same way.** A farm hand who pushes a sale, or pushes a
+record making themselves CEO, gets it refused and told why. A manager cannot mint
+another manager or an owner. Every record is filed under whoever actually sent it,
+not whoever the sending app claimed, so work cannot be attributed to someone else.
+
+**Lost phone?** The CEO presses *Sign out their phones*. That device is dead on
+its next exchange, within seconds. Nobody else has to change anything, because
+nobody else shared a password with them.
+
+**Setting the server up.** One file, free to run:
 
 1. Open **dash.deno.com**, create a new Playground.
 2. Paste in `douvalue/server/deno-sync.ts`, press Save & Deploy.
-3. Copy the address it gives you into the app under **Settings → Sync**.
-
-To add a phone, the CEO presses **Add a phone** and sends the join code. On that
-phone, **Join with a code**, paste, done: it pulls the whole farm down and stays
-in step from then on.
+3. In the app: Settings → Sync → Connect the farm, and paste the address.
 
 Prefer your own machine? `douvalue/server/node-sync.mjs` serves the same contract
-and keeps each farm in one append-only JSON-lines file, so a backup is a file
-copy.
+and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
+Put either behind HTTPS: tokens and PINs travel in the request, and plain HTTP
+puts them on the wire in clear.
 
-**What the sync protects, and what it does not.** One shared farm key guards one
-farm. It keeps the books off the open internet, which is the thing that matters
-here. It is not a password per person: anyone holding the join code can read and
-write everything, wages and sales included. Give it only to phones you trust, and
-send it directly rather than posting it in a group chat.
+`server/core.mjs` holds all the rules; the two servers are only storage and
+plumbing. `server/deno-sync.ts` is generated from it by
+`node douvalue/scripts-build-deno.mjs`, and a test fails if the two drift apart.
 
-### Without a server
+### Why not Google Drive or Gmail?
+
+A fair question, and the short answer is that email is not a database.
+
+Mailing records to yourself gives you no way for two phones to write at the same
+time, no way to ask "what changed since Tuesday", and no way to send a farm hand
+the beds without also sending them the wage bill. The moment two people record a
+harvest while out of signal, you have two attachments and no way to merge them.
+
+Google Drive is closer, but it still has no field-level permissions, so the
+filtering above would be impossible: either a phone can read the farm file or it
+cannot. On top of that every worker would need a Google account, the setup needs
+a Google Cloud project and a consent screen, and refresh tokens on a phone that
+has been offline for a week are a reliable source of mystery sign-outs.
+
+Signing in **with** Google is a different and more reasonable idea, and it would
+suit the CEO and manager. It is a poor fit for farm hands sharing cheap handsets
+with patchy data, which is why the app uses invites and a PIN instead.
+
+If what you want is a copy in your own hands, use **Settings → Export a backup
+file** and mail that to yourself. It is one file, it holds everything, and merging
+it back in later is one button.
+
+### Without a server### Without a server
 
 Sync is optional. Export a backup from a hand's phone, send it over WhatsApp or
 Bluetooth, and merge it into the manager's phone: the two logs are joined and
@@ -235,10 +293,15 @@ backup file*, weekly.
 
 ## About the PIN
 
-The PIN separates roles on a shared farm phone so entries land under the right name and
-payroll is not open to everyone. It is a workplace control, **not security**: anyone who
-can open the browser's storage on that handset can read the log. Keep the money screens on
-the manager's own phone.
+On a **connected** farm the PIN unlocks one enrolled phone, and the account behind it is
+real: the server decides what that person may read and write, and their phone is never
+sent anything else. The PIN is not what protects the data; the enrolment is. That is why a
+PIN copied over someone's shoulder is worthless on another handset.
+
+On a farm running **without a server**, the PIN is only a workplace control: it keeps
+entries landing under the right name on a shared phone, but anyone who can open the
+browser's storage on that handset can read what is on it. If wages and sales matter to
+you, connect the farm.
 
 ---
 
@@ -270,7 +333,7 @@ douvalue/
 │  ├─ css/app.css
 │  └─ js/
 │     ├─ app.js          boot and routing table
-│     ├─ sync.js         outbox, push/pull, backoff, join codes
+│     ├─ sync.js         outbox, push/pull, backoff, invites and enrolment
 │     ├─ store.js        event log → farm state, roles, selectors
 │     ├─ db.js           IndexedDB log, merge, export/import, photo compression
 │     ├─ util.js         dates, naira, HTML escaping
@@ -285,8 +348,9 @@ douvalue/
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
 │     └─ ui/             shell, kit, worker, field, clinic, manage
 ├─ server/
-│  ├─ deno-sync.ts      the sync server, for Deno Deploy (free, no CLI)
-│  └─ node-sync.mjs     the same contract, self-hosted
+│  ├─ core.mjs          the rules: accounts, roles, what each may read and write
+│  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
+│  └─ node-sync.mjs     the same core, self-hosted, storing to files
 └─ tests/               domain, roles and sync
 ```
 
@@ -300,11 +364,13 @@ node --test "douvalue/tests/**/*.test.mjs"
 # or, from the douvalue directory:  npm test
 ```
 
-85 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
+92 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
 planting-window optimiser, event-log replay including out-of-order merges, the account
-hierarchy, and the sync server run for real: push, pull, de-duplication, two phones offline
-at once, a wrong key, restart durability, and a replay of what came back off the wire.
+hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own
+token trying to pull the wage bill, a hand pushing a sale, a hand pushing a record that
+promotes themselves, a manager trying to mint another manager, a reused invite, a wrong
+password, one farm reaching into another, and a revoked phone.
 
 ## Limits worth knowing
 

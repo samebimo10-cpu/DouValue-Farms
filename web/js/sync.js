@@ -1,15 +1,16 @@
-// Keeping every phone on the farm in step.
+// Keeping every phone on the farm in step, with each person signed in as
+// themselves.
 //
-// The data model makes this far simpler than it usually is. Everything the farm
-// records is an event with a globally unique id, and nothing is ever edited in
-// place, so merging two devices is a set union. There is no last-writer-wins,
-// no field-level conflict, and no possibility of one phone silently overwriting
-// another's morning. Two hands can record harvests all day with no signal
-// between them and lose nothing.
+// The data model does the hard part. Everything recorded is an event with a
+// globally unique id and nothing is edited in place, so merging two devices is
+// a set union: no last-writer-wins, no field-level conflict, and no way for one
+// phone to overwrite another's morning.
 //
-// So the whole job is: push what this device has that the server does not, pull
-// what the server has that this device does not, and be patient about the
-// network, because in Port Harcourt the network is the unreliable part.
+// What this file adds is identity. Each device holds a token that belongs to one
+// person. The server knows their role and decides what they may read and write,
+// so a farm hand's phone is never sent the wage bill in the first place. A PIN
+// on its own gets nobody in from a new handset: enrolling a device takes an
+// invite, and an invite is single-use and expires.
 
 import {
   countUnsynced, getMeta, markSynced, mergeEvents, setMeta, unsyncedEvents,
@@ -17,134 +18,237 @@ import {
 
 const PUSH_BATCH = 400;
 const PULL_BATCH = 500;
-const POLL_MS = 120000;            // a quiet check every two minutes while online
+const POLL_MS = 120000;
 const BACKOFF_MS = [5000, 15000, 45000, 120000, 300000];
 const REQUEST_TIMEOUT_MS = 20000;
 
-let config = null;                 // { url, farmId, farmKey }
+let auth = null;          // { url, farmId, token, memberId, role, name, farmName }
 let store = null;
 let timer = null;
 let inFlight = null;
 let failures = 0;
-let status = {
-  state: 'off',                    // off | offline | idle | syncing | error
-  pending: 0,
-  lastSyncAt: null,
-  lastError: null,
-  serverEvents: null,
-};
+let status = { state: 'off', pending: 0, lastSyncAt: null, lastError: null, serverEvents: null, withheld: 0 };
 const listeners = new Set();
 
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-export function getStatus() { return { ...status, configured: !!config }; }
+export function getStatus() { return { ...status, configured: !!auth, member: auth ? { ...auth } : null }; }
+export function getAuth() { return auth ? { ...auth } : null; }
+export function isConnected() { return !!auth; }
 
 function setStatus(patch) {
   status = { ...status, ...patch };
   for (const fn of listeners) { try { fn(getStatus()); } catch { /* a listener must not break sync */ } }
 }
 
-export function getConfig() { return config ? { ...config } : null; }
+const trimUrl = (u) => String(u || '').trim().replace(/\/+$/, '');
 
-/** Everything a second phone needs to join this farm, as one pasteable code. */
-export function makeInviteCode(cfg = config) {
-  if (!cfg) return '';
-  const payload = JSON.stringify({ v: 1, url: cfg.url, farmId: cfg.farmId, farmKey: cfg.farmKey });
-  return btoa(unescape(encodeURIComponent(payload)));
-}
-
-export function readInviteCode(code) {
-  try {
-    const parsed = JSON.parse(decodeURIComponent(escape(atob(String(code).trim()))));
-    if (!parsed || !parsed.url || !parsed.farmId || !parsed.farmKey) return null;
-    return { url: String(parsed.url).replace(/\/+$/, ''), farmId: parsed.farmId, farmKey: parsed.farmKey };
-  } catch {
-    return null;
+/** A device name, so the CEO can tell one enrolled handset from another. */
+async function deviceLabel() {
+  let label = await getMeta('deviceLabel', null);
+  if (!label) {
+    const ua = navigator.userAgent || '';
+    const guess = /Android/i.test(ua) ? 'Android phone'
+      : /iPhone|iPad/i.test(ua) ? 'iPhone'
+      : /Windows/i.test(ua) ? 'Windows PC'
+      : /Mac/i.test(ua) ? 'Mac' : 'Device';
+    label = `${guess} ${Math.random().toString(36).slice(2, 6)}`;
+    await setMeta('deviceLabel', label);
   }
+  return label;
 }
 
-/** A new farm's identifiers. The key is the shared secret that guards the data. */
-export function newFarmCredentials() {
-  const rand = (n) => {
-    const bytes = new Uint8Array(n);
-    (globalThis.crypto || {}).getRandomValues?.(bytes);
-    if (!bytes.some(Boolean)) for (let i = 0; i < n; i++) bytes[i] = Math.floor(Math.random() * 256);
-    return [...bytes].map((b) => b.toString(36).padStart(2, '0')).join('').slice(0, n * 2);
-  };
-  return { farmId: `farm_${rand(6)}`, farmKey: rand(16) };
-}
-
-async function request(path, options = {}) {
+async function api(path, { method = 'GET', body = null, token = auth && auth.token, base = auth && auth.url } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${config.url}${path}`, {
-      ...options,
+    const res = await fetch(`${base}${path}`, {
+      method,
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.farmKey}`,
-        ...(options.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
+      body: body ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 401 || res.status === 403) {
-      throw new Error('The farm key was refused. Check the join code on this phone.');
+    let payload = null;
+    try { payload = await res.json(); } catch { payload = null; }
+    if (!res.ok) {
+      const message = (payload && payload.error) || `Server said ${res.status}`;
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
     }
-    if (!res.ok) throw new Error(`Server said ${res.status}`);
-    return await res.json();
+    return payload;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-/** Hand the server everything it has not acknowledged. */
+// --- Setting a farm up and joining one ------------------------------------
+
+export function newFarmId() {
+  const a = new Uint8Array(6);
+  (globalThis.crypto || {}).getRandomValues?.(a);
+  const hex = [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `farm_${hex || Math.random().toString(36).slice(2, 14)}`;
+}
+
+/** Check an address is a farm server before asking anyone to trust it. */
+export async function checkServer(url) {
+  try {
+    const res = await fetch(`${trimUrl(url)}/`, { method: 'GET' });
+    const text = await res.text();
+    if (!/DouValue farm server/i.test(text)) {
+      return { ok: false, error: 'That address answered, but it is not a DouValue farm server.' };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: `Could not reach it. ${err.message || err}` };
+  }
+}
+
+/** The CEO creates the farm on the server and enrols this phone as the owner. */
+export async function bootstrapFarm({ url, farmId, farmName, name, password, memberId }) {
+  const base = trimUrl(url);
+  const id = farmId || newFarmId();
+  const result = await api(`/api/farms/${encodeURIComponent(id)}/bootstrap`, {
+    method: 'POST', base, token: null,
+    body: { name, password, farmName, memberId, device: await deviceLabel() },
+  });
+  await saveAuth({
+    url: base, farmId: id, token: result.token,
+    memberId: result.member.id, role: result.member.role, name: result.member.name,
+    farmName: (result.farm && result.farm.name) || farmName,
+  });
+  return result;
+}
+
+/** Create an account for someone and get the one-time code to hand them. */
+export async function inviteMember({ name, role, memberId }) {
+  if (!auth) throw new Error('This phone is not connected to a farm server');
+  const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/invite`, {
+    method: 'POST', body: { name, role, memberId },
+  });
+  return { ...result, link: joinLink(result.joinCode) };
+}
+
+/** The link that opens the app straight on the join screen with the code filled in. */
+export function joinLink(joinCode, at = location.href) {
+  if (!auth) return '';
+  const base = String(at).split('#')[0];
+  const params = new URLSearchParams({ s: auth.url, f: auth.farmId, c: joinCode });
+  return `${base}#/join?${params.toString()}`;
+}
+
+/** Redeem an invite on this phone and set the person's own PIN. */
+export async function joinFarm({ url, farmId, joinCode, joinPassword, pin }) {
+  const base = trimUrl(url);
+  const result = await api(`/api/farms/${encodeURIComponent(farmId)}/join`, {
+    method: 'POST', base, token: null,
+    body: { joinCode, joinPassword, pin, device: await deviceLabel() },
+  });
+  await saveAuth({
+    url: base, farmId, token: result.token,
+    memberId: result.member.id, role: result.member.role, name: result.member.name,
+    farmName: (result.farm && result.farm.name) || 'DouValue Farms Limited',
+  });
+  await setMeta('syncCursor', 0);
+  return result;
+}
+
+/** Confirm a PIN against the server, and change it if asked. */
+export async function verifyPin(pin, newPin = null) {
+  if (!auth) return { ok: false, error: 'not connected' };
+  try {
+    await api(`/api/farms/${encodeURIComponent(auth.farmId)}/unlock`, {
+      method: 'POST', body: { pin, newPin },
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message, status: err.status };
+  }
+}
+
+export async function listMembers() {
+  if (!auth) return [];
+  const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/members`);
+  return result.members || [];
+}
+
+/** Cut someone off, or just sign every one of their handsets out. */
+export async function revokeMember(memberId, { devicesOnly = false } = {}) {
+  if (!auth) throw new Error('This phone is not connected to a farm server');
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/revoke`, {
+    method: 'POST', body: { memberId, devicesOnly },
+  });
+}
+
+async function saveAuth(next) {
+  auth = next;
+  await setMeta('farmAuth', next);
+  failures = 0;
+  setStatus({ state: navigator.onLine ? 'idle' : 'offline', lastError: null, pending: await countUnsynced() });
+}
+
+/** Forget the link on this device. The farm's records stay on the server. */
+export async function signOutDevice() {
+  auth = null;
+  await setMeta('farmAuth', null);
+  await setMeta('syncCursor', 0);
+  clearTimeout(timer);
+  setStatus({ state: 'off', lastError: null, serverEvents: null });
+}
+
+// --- Exchanging records ---------------------------------------------------
+
 async function push() {
-  let sent = 0;
+  let sent = 0, refused = 0;
   for (;;) {
     const batch = await unsyncedEvents(PUSH_BATCH);
     if (!batch.length) break;
-    // The synced stamp is this device's bookkeeping; the server has no use for it.
     const payload = batch.map(({ synced, ...rest }) => rest);
-    const result = await request(`/api/farms/${encodeURIComponent(config.farmId)}/events`, {
-      method: 'POST',
-      body: JSON.stringify({ events: payload }),
+    const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/events`, {
+      method: 'POST', body: { events: payload },
     });
+    // Records the server refused are marked as done too. They were written by
+    // someone whose role does not allow them, so retrying forever would jam the
+    // outbox behind a record that will never be accepted.
     await markSynced(batch.map((e) => e.id));
-    sent += batch.length;
-    if (result && typeof result.total === 'number') setStatus({ serverEvents: result.total });
+    sent += result.accepted || 0;
+    refused += (result.refused || []).length;
+    if (result.refused && result.refused.length) {
+      console.warn('The server would not accept some records:', result.refused);
+    }
+    if (typeof result.total === 'number') setStatus({ serverEvents: result.total });
     if (batch.length < PUSH_BATCH) break;
   }
-  return sent;
+  return { sent, refused };
 }
 
-/** Take everything recorded on the other phones since last time. */
 async function pull() {
-  let received = 0;
+  let received = 0, withheld = 0;
   for (;;) {
     const cursor = (await getMeta('syncCursor', 0)) || 0;
-    const result = await request(
-      `/api/farms/${encodeURIComponent(config.farmId)}/events?since=${cursor}&limit=${PULL_BATCH}`,
+    const result = await api(
+      `/api/farms/${encodeURIComponent(auth.farmId)}/events?since=${cursor}&limit=${PULL_BATCH}`,
     );
-    const events = (result && result.events) || [];
-    if (events.length) {
-      const merged = await mergeEvents(events, true);
-      received += merged.added;
-    }
-    if (result && typeof result.cursor === 'number' && result.cursor > cursor) {
-      await setMeta('syncCursor', result.cursor);
-    }
-    if (typeof result?.total === 'number') setStatus({ serverEvents: result.total });
-    if (!result || !result.more) break;
+    const events = result.events || [];
+    if (events.length) received += (await mergeEvents(events, true)).added;
+    withheld += result.withheld || 0;
+    if (typeof result.cursor === 'number' && result.cursor > cursor) await setMeta('syncCursor', result.cursor);
+    if (typeof result.total === 'number') setStatus({ serverEvents: result.total });
+    if (!result.more) break;
   }
-  return received;
+  return { received, withheld };
 }
 
 /**
- * One full exchange. Concurrent callers share the same run rather than stacking
- * up: coming back into signal fires several triggers at once, and a farm phone
- * should not spend its bundle sending the same batch three times.
+ * One full exchange. Concurrent callers share the same run: coming back into
+ * signal fires several triggers at once, and a farm phone should not spend its
+ * bundle sending the same batch three times.
  */
 export async function syncNow({ silent = false } = {}) {
-  if (!config) return { ok: false, reason: 'not configured' };
+  if (!auth) return { ok: false, reason: 'not connected' };
   if (inFlight) return inFlight;
   if (!navigator.onLine) {
     setStatus({ state: 'offline', pending: await countUnsynced() });
@@ -154,22 +258,29 @@ export async function syncNow({ silent = false } = {}) {
   setStatus({ state: 'syncing' });
   inFlight = (async () => {
     try {
-      const sent = await push();
-      const received = await pull();
+      const pushed = await push();
+      const pulled = await pull();
       failures = 0;
-      const pending = await countUnsynced();
+      const at = new Date().toISOString();
+      await setMeta('lastSyncAt', at);
       setStatus({
-        state: 'idle', pending, lastError: null, lastSyncAt: new Date().toISOString(),
+        state: 'idle', pending: await countUnsynced(), lastError: null,
+        lastSyncAt: at, withheld: pulled.withheld,
       });
-      await setMeta('lastSyncAt', status.lastSyncAt);
-      if (received && store) await store.reload();
-      return { ok: true, sent, received };
+      if (pulled.received && store) await store.reload();
+      return { ok: true, sent: pushed.sent, refused: pushed.refused, received: pulled.received };
     } catch (err) {
       failures++;
+      // A token that no longer works means this device was cut off, or the
+      // person was removed. Say so plainly rather than retrying for ever.
+      if (err.status === 401 || err.status === 403) {
+        setStatus({ state: 'error', lastError: `${err.message} Ask the CEO for a new invite.` });
+        clearTimeout(timer);
+        return { ok: false, reason: err.message, signedOut: true };
+      }
       setStatus({
         state: navigator.onLine ? 'error' : 'offline',
-        pending: await countUnsynced(),
-        lastError: err.message || String(err),
+        pending: await countUnsynced(), lastError: err.message || String(err),
       });
       if (!silent) console.warn('Sync failed:', err);
       return { ok: false, reason: err.message || String(err) };
@@ -183,86 +294,42 @@ export async function syncNow({ silent = false } = {}) {
 
 function schedule() {
   clearTimeout(timer);
-  if (!config) return;
+  if (!auth) return;
   const delay = failures ? BACKOFF_MS[Math.min(failures - 1, BACKOFF_MS.length - 1)] : POLL_MS;
   timer = setTimeout(() => { syncNow({ silent: true }); }, delay);
 }
 
-/** Check a server and key before saving them, so a typo is caught at setup. */
-export async function testConnection(cfg) {
-  const previous = config;
-  config = { ...cfg, url: String(cfg.url).replace(/\/+$/, '') };
-  try {
-    const health = await request(`/api/farms/${encodeURIComponent(config.farmId)}/health`);
-    return { ok: true, events: health && health.events };
-  } catch (err) {
-    return { ok: false, error: err.message || String(err) };
-  } finally {
-    config = previous;
-  }
-}
-
-export async function configure(cfg) {
-  config = cfg ? { ...cfg, url: String(cfg.url).replace(/\/+$/, '') } : null;
-  await setMeta('syncConfig', config);
-  failures = 0;
-  if (!config) {
-    clearTimeout(timer);
-    setStatus({ state: 'off', lastError: null });
-    return;
-  }
-  setStatus({ state: navigator.onLine ? 'idle' : 'offline', pending: await countUnsynced() });
-  syncNow({ silent: true });
-}
-
-/** Forget the link on this device. The farm's records stay put. */
-export async function disconnect() {
-  await setMeta('syncCursor', 0);
-  await configure(null);
-}
-
 /**
- * Wire sync into the running app.
- *
- * Three things start a sync: coming back online, a record being written, and a
- * slow background tick. The write trigger is debounced so a supervisor entering
- * ten harvests in a row causes one exchange, not ten.
+ * Wire sync into the running app. Four things start an exchange: coming back
+ * online, a record being written, the app returning to the foreground, and a
+ * slow background tick. The write trigger is debounced, so a supervisor
+ * entering ten harvests causes one exchange rather than ten.
  */
 export async function startSync(appStore) {
   store = appStore;
-  config = await getMeta('syncConfig', null);
+  auth = await getMeta('farmAuth', null);
   const lastSyncAt = await getMeta('lastSyncAt', null);
   setStatus({
-    state: config ? (navigator.onLine ? 'idle' : 'offline') : 'off',
-    pending: await countUnsynced(),
-    lastSyncAt,
+    state: auth ? (navigator.onLine ? 'idle' : 'offline') : 'off',
+    pending: await countUnsynced(), lastSyncAt,
   });
 
-  window.addEventListener('online', () => {
-    failures = 0;
-    setStatus({ state: config ? 'idle' : 'off' });
-    syncNow({ silent: true });
-  });
-  window.addEventListener('offline', () => {
-    setStatus({ state: config ? 'offline' : 'off' });
-  });
+  window.addEventListener('online', () => { failures = 0; syncNow({ silent: true }); });
+  window.addEventListener('offline', () => setStatus({ state: auth ? 'offline' : 'off' }));
 
   let writeTimer = null;
   store.subscribe(async () => {
     setStatus({ pending: await countUnsynced() });
-    if (!config) return;
+    if (!auth) return;
     clearTimeout(writeTimer);
     writeTimer = setTimeout(() => syncNow({ silent: true }), 4000);
   });
 
-  // A phone that has been in a drawer wakes up behind; catch up when it returns.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && config && navigator.onLine) {
-      syncNow({ silent: true });
-    }
+    if (document.visibilityState === 'visible' && auth && navigator.onLine) syncNow({ silent: true });
   });
 
-  if (config) syncNow({ silent: true });
+  if (auth) syncNow({ silent: true });
   schedule();
   return getStatus();
 }
@@ -279,13 +346,21 @@ export function statusLine(s = getStatus()) {
           : 'No network. Everything here is already sent',
         tone: 'warn',
       };
-    case 'error':
-      return { text: `Could not sync: ${s.lastError || 'unknown problem'}`, tone: 'danger' };
+    case 'error': return { text: s.lastError || 'Could not sync', tone: 'danger' };
     case 'idle':
       return s.pending
         ? { text: `${s.pending} record${s.pending === 1 ? '' : 's'} waiting to send`, tone: 'warn' }
         : { text: s.lastSyncAt ? 'All phones up to date' : 'Connected, waiting for the first sync', tone: 'ok' };
-    default:
-      return { text: 'Saved on this phone only', tone: 'warn' };
+    default: return { text: 'Saved on this phone only', tone: 'warn' };
   }
+}
+
+/** Read an invite link's parameters, so a tapped link fills the join form in. */
+export function readJoinLink(hash = location.hash) {
+  const query = String(hash).split('?')[1];
+  if (!query) return null;
+  const p = new URLSearchParams(query);
+  const url = p.get('s'), farmId = p.get('f'), joinCode = p.get('c');
+  if (!url || !farmId) return null;
+  return { url: trimUrl(url), farmId, joinCode: joinCode || '' };
 }

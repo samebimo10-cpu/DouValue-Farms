@@ -1,15 +1,3 @@
-// DouValue farm server, for Deno Deploy.
-//
-// GENERATED FILE. Do not edit here: change server/core.mjs and run
-//   node douvalue/scripts-build-deno.mjs
-//
-// To run it, with no command line and no card:
-//   1. Open https://dash.deno.com and create a new Playground.
-//   2. Paste this whole file in.
-//   3. Press Save & Deploy and copy the address it gives you.
-//   4. Put that address into the app when the CEO sets the farm up.
-//
-// Storage is Deno KV, which is built in and persistent.
 // The farm server's brain: who may join, who may read what, and who may write it.
 //
 // Runtime-agnostic on purpose. It takes a Request and a storage adapter and
@@ -37,7 +25,7 @@
 // --- Roles ----------------------------------------------------------------
 // Mirrors web/js/store.js. The app's copy shapes the screens; this copy decides.
 
-const ROLES = {
+export const ROLES = {
   hand: {
     rank: 10,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose'],
@@ -67,11 +55,11 @@ const ROLES = {
   },
 };
 
-const can = (role, permission) => !!ROLES[role] && ROLES[role].can.includes(permission);
-const rankOf = (role) => (ROLES[role] ? ROLES[role].rank : -1);
+export const can = (role, permission) => !!ROLES[role] && ROLES[role].can.includes(permission);
+export const rankOf = (role) => (ROLES[role] ? ROLES[role].rank : -1);
 
 /** Which roles a person may hand out: the CEO anyone, everyone else below themselves. */
-function assignableRoles(role) {
+export function assignableRoles(role) {
   if (!can(role, 'managePeople')) return [];
   if (can(role, 'manageOwners')) return Object.keys(ROLES);
   return Object.keys(ROLES).filter((r) => rankOf(r) < rankOf(role));
@@ -86,7 +74,7 @@ const ANY = 'viewGuide';   // every role holds this, so it means "everyone on th
  * read:  the permission needed to receive it at all.
  * redact: strips fields the reader has no business seeing.
  */
-const EVENT_POLICY = {
+export const EVENT_POLICY = {
   'settings.update':   { write: 'settings',      read: ANY, redact: redactSettings },
   'person.upsert':     { write: 'managePeople',  read: ANY, redact: redactPerson, guard: guardPersonWrite },
   'person.deactivate': { write: 'managePeople',  read: ANY, guard: guardPersonWrite },
@@ -164,7 +152,7 @@ function guardPersonWrite(event, author) {
   return { ok: true };
 }
 
-function mayWrite(event, author) {
+export function mayWrite(event, author) {
   const policy = EVENT_POLICY[event.type];
   if (!policy) return { ok: false, why: `Unknown record type ${event.type}` };
   if (!can(author.role, policy.write)) {
@@ -174,7 +162,7 @@ function mayWrite(event, author) {
   return { ok: true };
 }
 
-function visibleTo(event, reader) {
+export function visibleTo(event, reader) {
   const policy = EVENT_POLICY[event.type];
   if (!policy) return null;                            // unknown types are not relayed
   if (!can(reader.role, policy.read)) return null;
@@ -188,21 +176,21 @@ const enc = new TextEncoder();
 
 const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 
-function randomHex(bytes = 16) {
+export function randomHex(bytes = 16) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
   return toHex(a);
 }
 
 /** A short code a person can read out over the phone without confusion. */
-function randomCode(length = 6) {
+export function randomCode(length = 6) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';  // no I, O, 0, 1
   const a = new Uint8Array(length);
   crypto.getRandomValues(a);
   return [...a].map((n) => alphabet[n % alphabet.length]).join('');
 }
 
-async function hashSecret(secret, salt = randomHex(16)) {
+export async function hashSecret(secret, salt = randomHex(16)) {
   const key = await crypto.subtle.importKey('raw', enc.encode(String(secret)), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', salt: enc.encode(salt), iterations: PBKDF2_ROUNDS, hash: 'SHA-256' },
@@ -211,14 +199,14 @@ async function hashSecret(secret, salt = randomHex(16)) {
   return { salt, hash: toHex(bits) };
 }
 
-async function verifySecret(secret, salt, expected) {
+export async function verifySecret(secret, salt, expected) {
   if (!salt || !expected) return false;
   const { hash } = await hashSecret(secret, salt);
   return timingSafeEqualHex(hash, expected);
 }
 
 /** Compare without leaking where two strings first differ. */
-function timingSafeEqualHex(a, b) {
+export function timingSafeEqualHex(a, b) {
   const x = String(a), y = String(b);
   if (x.length !== y.length) return false;
   let diff = 0;
@@ -227,7 +215,7 @@ function timingSafeEqualHex(a, b) {
 }
 
 /** Device tokens are stored only as a digest, so a stolen database grants nothing. */
-async function tokenDigest(token) {
+export async function tokenDigest(token) {
   return toHex(await crypto.subtle.digest('SHA-256', enc.encode(String(token))));
 }
 
@@ -239,7 +227,7 @@ async function tokenDigest(token) {
  * with PBKDF2 would take a second per invite, which is both slow for the person
  * joining and an easy way for a stranger to tie the server in knots.
  */
-async function codeDigest(farmId, code) {
+export async function codeDigest(farmId, code) {
   return toHex(await crypto.subtle.digest('SHA-256', enc.encode(`${farmId}:${String(code).toUpperCase()}`)));
 }
 
@@ -248,21 +236,21 @@ async function codeDigest(farmId, code) {
 const LOCKOUT_AFTER = 6;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
-function lockoutState(member, now = Date.now()) {
+export function lockoutState(member, now = Date.now()) {
   const fails = member.failedAttempts || 0;
   const until = member.lockedUntil || 0;
   if (until > now) return { locked: true, seconds: Math.ceil((until - now) / 1000) };
   return { locked: false, fails: until ? 0 : fails };
 }
 
-function afterFailure(member, now = Date.now()) {
+export function afterFailure(member, now = Date.now()) {
   const fails = (lockoutState(member, now).fails || 0) + 1;
   return fails >= LOCKOUT_AFTER
     ? { failedAttempts: 0, lockedUntil: now + LOCKOUT_MS }
     : { failedAttempts: fails, lockedUntil: 0 };
 }
 
-const afterSuccess = () => ({ failedAttempts: 0, lockedUntil: 0 });
+export const afterSuccess = () => ({ failedAttempts: 0, lockedUntil: 0 });
 
 // --- HTTP -----------------------------------------------------------------
 
@@ -302,7 +290,7 @@ async function readJson(req) {
  *   GET  /api/farms/:id/events      everything this role may see since a cursor
  *   POST /api/farms/:id/events      file records, each checked against the author
  */
-async function handleRequest(req, store) {
+export async function handleRequest(req, store) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
   const url = new URL(req.url);
@@ -577,77 +565,4 @@ async function writeEvents(farmId, body, me, store) {
   });
 }
 
-
-
-
-// --- Storage on Deno KV ----------------------------------------------------
-
-const kv = await Deno.openKv();
-
-const store = {
-  async getFarm(farmId) { return (await kv.get(["farm", farmId, "meta"])).value; },
-  async setFarm(farmId, farm) { await kv.set(["farm", farmId, "meta"], farm); },
-
-  async getMember(farmId, memberId) { return (await kv.get(["farm", farmId, "member", memberId])).value; },
-  async listMembers(farmId) {
-    const out = [];
-    for await (const e of kv.list({ prefix: ["farm", farmId, "member"] })) out.push(e.value);
-    return out;
-  },
-  async setMember(farmId, member) { await kv.set(["farm", farmId, "member", member.id], member); },
-
-  async getInviteIndex(lookup) { return (await kv.get(["invite", lookup])).value; },
-  async setInviteIndex(lookup, rec) { await kv.set(["invite", lookup], rec); },
-  async deleteInviteIndex(lookup) { await kv.delete(["invite", lookup]); },
-
-  async getToken(digest) { return (await kv.get(["token", digest])).value; },
-  async setToken(digest, rec) { await kv.set(["token", digest], rec); },
-  async touchToken(digest, at) {
-    const cur = (await kv.get(["token", digest])).value;
-    if (cur) await kv.set(["token", digest], { ...cur, lastSeen: at });
-  },
-  async deleteTokensFor(farmId, memberId) {
-    for await (const e of kv.list({ prefix: ["token"] })) {
-      const rec = e.value;
-      if (rec && rec.farmId === farmId && rec.memberId === memberId) await kv.delete(e.key);
-    }
-  },
-
-  async appendEvents(farmId, events) {
-    const countKey = ["farm", farmId, "count"];
-    let accepted = 0, skipped = 0;
-    for (const event of events) {
-      let placed = false;
-      for (let attempt = 0; attempt < 5 && !placed; attempt++) {
-        const current = await kv.get(countKey);
-        const seq = (current.value || 0) + 1;
-        const result = await kv.atomic()
-          .check({ key: ["farm", farmId, "ev", event.id], versionstamp: null })
-          .check({ key: countKey, versionstamp: current.versionstamp })
-          .set(["farm", farmId, "ev", event.id], seq)
-          .set(["farm", farmId, "seq", seq], event)
-          .set(countKey, seq)
-          .commit();
-        if (result.ok) { accepted++; placed = true; break; }
-        if ((await kv.get(["farm", farmId, "ev", event.id])).value !== null) { skipped++; placed = true; }
-      }
-      if (!placed) skipped++;
-    }
-    return { accepted, skipped, cursor: (await kv.get(countKey)).value || 0 };
-  },
-
-  async listEvents(farmId, since, limit) {
-    const out = [];
-    let cursor = since;
-    const iter = kv.list({
-      start: ["farm", farmId, "seq", since + 1],
-      end: ["farm", farmId, "seq", Number.MAX_SAFE_INTEGER],
-    }, { limit });
-    for await (const entry of iter) { out.push(entry.value); cursor = Number(entry.key[3]); }
-    return { events: out, cursor, more: out.length === limit };
-  },
-
-  async countEvents(farmId) { return (await kv.get(["farm", farmId, "count"])).value || 0; },
-};
-
-Deno.serve((req) => handleRequest(req, store));
+export { json, CORS };

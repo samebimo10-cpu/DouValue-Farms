@@ -4,7 +4,7 @@ import {
   badge, bar, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
   input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
-import { activeCycles, closedCycles, cycleLabel, spraysForCycle } from '../store.js';
+import { activeCycles, can, closedCycles, cycleLabel, spraysForCycle } from '../store.js';
 import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, waterDemandMmPerDay } from '../domain/crops.js';
 import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../domain/predict.js';
 import { harvestClearance, PRODUCTS, PRODUCT_BY_ID, reentryClearance, resistanceWarnings, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
@@ -143,6 +143,11 @@ export const cycleView = {
     const clearance = harvestClearance(sprays);
     const plants = cycle.plants || plantsForArea(cycle.cropId, cycle.areaM2 || 0);
 
+    // Prices and crop values are commercial. A role without money authority is
+    // not sent the farm's real prices at all, so showing a value here would be
+    // the app's built-in estimate dressed up as this farm's figure.
+    const showsMoney = can(ctx.user, 'manageMoney');
+
     let out = card(
       `<div class="card-head">${cropDot(cycle.cropId)}<h2>${esc(cycleLabel(state, cycle.id))}</h2>`
       + badge(forecast.stage.name) + '</div>'
@@ -153,8 +158,10 @@ export const cycleView = {
       + '<div class="grid">'
       + stat('Forecast', kg(forecast.totalKg, 0), `${round(forecast.perPlantKg, 2)} kg/plant`)
       + stat('Picked', kg(cycle.harvestedKg || 0, 0), `${harvests.length} pickings`)
-      + stat('Still to come', kg(forecast.remainingKg, 0), naira(revenue.remainingRevenue, true))
-      + stat('Crop value', naira(revenue.totalRevenue, true), `at ~${naira(revenue.averagePrice)}/kg`)
+      + stat('Still to come', kg(forecast.remainingKg, 0), showsMoney ? naira(revenue.remainingRevenue, true) : 'to pick')
+      + (showsMoney
+        ? stat('Crop value', naira(revenue.totalRevenue, true), `at ~${naira(revenue.averagePrice)}/kg`)
+        : stat('Picking until', friendlyDate(forecast.milestones.lastHarvest), 'end of the window'))
       + '</div>',
       { tight: true },
     );
@@ -180,12 +187,16 @@ export const cycleView = {
       + spark(forecast.curve.map((w) => ({ value: w.kg, dim: w.past, label: `${w.from}: ${w.kg} kg` })),
         { caption: 'Grey weeks are already past. Height is kilograms expected that week.' })
       + (future.length
-        ? table([{ label: 'Week of' }, { label: 'Expect', num: true }, { label: 'Price', num: true }, { label: 'Worth', num: true }],
-          revenue.weeks.filter((w) => !w.past).slice(0, 6).map((w) => [
-            friendlyDate(w.from), kg(w.kg, 0), naira(w.priceNgnPerKg), naira(w.revenue, true)]))
+        ? (showsMoney
+          ? table([{ label: 'Week of' }, { label: 'Expect', num: true }, { label: 'Price', num: true }, { label: 'Worth', num: true }],
+            revenue.weeks.filter((w) => !w.past).slice(0, 6).map((w) => [
+              friendlyDate(w.from), kg(w.kg, 0), naira(w.priceNgnPerKg), naira(w.revenue, true)]))
+          : table([{ label: 'Week of' }, { label: 'Expect', num: true }],
+            forecast.curve.filter((w) => !w.past).slice(0, 6).map((w) => [friendlyDate(w.from), kg(w.kg, 0)])))
         : '<p><small>Picking window has closed.</small></p>')
       + '<details style="margin-top:10px"><summary><small>How this was worked out</small></summary>'
-      + '<ul>' + forecast.assumptions.concat(revenue.assumptions).map((a) => `<li><small>${esc(a)}</small></li>`).join('') + '</ul>'
+      + '<ul>' + forecast.assumptions.concat(showsMoney ? revenue.assumptions : [])
+        .map((a) => `<li><small>${esc(a)}</small></li>`).join('') + '</ul>'
       + '</details>',
     );
 
