@@ -5,9 +5,14 @@ import {
   input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
 import {
-  activeCycles, closedCycles, costsBetween, cycleLabel, inputsList, inputUsage,
-  openReports, openTasks, payrollBetween, revenueBetween, ROLES, DEFAULT_SETTINGS,
+  activeCycles, assignableRoles, can, canEditPerson, canRemovePerson, closedCycles,
+  costsBetween, cycleLabel, inputsList, inputUsage, openReports, openTasks,
+  payrollBetween, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
+import {
+  configure, disconnect as disconnectSync, getConfig, getStatus, makeInviteCode,
+  newFarmCredentials, readInviteCode, statusLine, syncNow, testConnection,
+} from '../sync.js';
 import {
   bestSowingWindow, calibrate, cashflowForecast, forecastAccuracy, harvestForecast,
   labourForecast, revenueForecast, stockForecast, breakEven,
@@ -360,33 +365,59 @@ export const reportsView = {
 export const peopleView = {
   perm: 'managePeople',
   render(ctx) {
-    const people = Object.values(ctx.state.people);
+    const people = ROLE_LIST.flatMap((role) =>
+      Object.values(ctx.state.people).filter((p) => p.role === role.id));
+    const canAppoint = assignableRoles(ctx.user);
+    const isOwner = can(ctx.user, 'manageOwners');
+
     return card(
       cardHead('People', button('Add someone', 'open-person', { cls: 'btn-sm' }))
-      + '<ul class="list">' + people.map((p) => `<li><div class="grow"><b>${esc(p.name)}</b>`
-        + `<small>${esc(ROLES[p.role]?.name || p.role)} · ${p.dailyRate ? esc(naira(p.dailyRate)) + ' a day' : 'no rate set'}`
-        + `${p.active === false ? ' · inactive' : ''}</small></div>`
-        + button('Edit', 'open-person', { cls: 'btn-sm btn-ghost', data: { id: p.id } })
-        + '</li>').join('') + '</ul>',
+      + '<ul class="list">' + people.map((p) => {
+        const role = ROLES[p.role];
+        const editable = canEditPerson(ctx.user, p);
+        return `<li><div class="grow"><b>${esc(p.name)}</b>`
+          + `<small>${esc(role?.name || p.role)} · ${p.dailyRate ? esc(naira(p.dailyRate)) + ' a day' : 'no rate set'}`
+          + `${p.active === false ? ' · removed' : ''}${p.id === ctx.user.id ? ' · you' : ''}</small></div>`
+          + (p.role === 'ceo' ? badge('owner', 'ok') : '')
+          + (editable
+            ? button('Edit', 'open-person', { cls: 'btn-sm btn-ghost', data: { id: p.id } })
+            : badge('locked'))
+          + '</li>';
+      }).join('') + '</ul>'
+      + (canAppoint.length
+        ? `<p style="margin:10px 0 0"><small>You can appoint: `
+          + `${esc(canAppoint.map((r) => ROLES[r].name).join(', '))}.</small></p>`
+        : ''),
     )
-    + card(cardHead('What each role can do')
-      + '<ul class="list">' + Object.values(ROLES).map((r) => `<li><div class="grow"><b>${esc(r.name)}</b>`
+    + card(cardHead('Who can do what')
+      + '<ul class="list">' + ROLE_LIST.map((r) => `<li><div class="grow"><b>${esc(r.name)}</b>`
         + `<small>${esc(r.blurb)}</small></div></li>`).join('') + '</ul>'
-      + note('info', 'About the PIN',
-        '<small>The PIN keeps people out of each other\'s records on a shared farm phone. It is a workplace '
-        + 'control, not security: anyone who can open the browser\'s storage on that handset can read the log. '
-        + 'Keep payroll on your own phone.</small>'));
+      + (isOwner
+        ? note('info', 'You are the CEO',
+          '<small>Only you can appoint or change a farm manager, and only you can set up the sync '
+          + 'link that keeps every phone in step. A manager can take on supervisors, agronomists and '
+          + 'farm hands, but cannot create another manager or touch your account.</small>')
+        : note('info', 'What you can do here',
+          '<small>You can take on the people below your own level. Appointing or changing a manager, '
+          + 'and setting up sync, is the CEO\'s to do.</small>'))
+      + note('warn', 'About the PIN',
+        '<small>The PIN keeps people out of each other\'s records on a shared farm phone. It is a '
+        + 'workplace control, not security: anyone who can open the browser\'s storage on that '
+        + 'handset can read what is on it. Keep the money screens on your own phone.</small>'));
   },
 
   actions: {
     'open-person': (ctx, el) => openPersonSheet(ctx, el.dataset.id),
     'save-person': (ctx, form) => savePerson(ctx, form),
     'deactivate-person': async (ctx, el) => {
+      const target = ctx.state.people[el.dataset.id];
+      const allowed = canRemovePerson(ctx.user, target, ctx.state);
+      if (!allowed.ok) { toast(allowed.why, true); return; }
       const ok = await confirmSheet('Remove this person?',
-        'They will not be able to sign in and will drop off the payroll. Their past records stay in the log.',
-        'Remove');
+        `${target.name} will not be able to sign in and will drop off the payroll. `
+        + 'Everything they recorded stays in the farm\'s records.', 'Remove');
       if (!ok) return;
-      await ctx.store.dispatch('person.deactivate', { id: el.dataset.id });
+      await ctx.store.dispatch('person.deactivate', { id: target.id });
       closeSheet();
       toast('Removed');
     },
@@ -395,27 +426,58 @@ export const peopleView = {
 
 function openPersonSheet(ctx, id) {
   const p = id ? ctx.state.people[id] : null;
+  if (p && !canEditPerson(ctx.user, p)) {
+    toast('That account is above your level. The CEO handles it.', true);
+    return;
+  }
+
+  const allowed = assignableRoles(ctx.user);
+  // Editing someone keeps their current role on the list even if you could not
+  // have granted it, so a CEO editing their own account does not lose the role.
+  const options = ROLE_LIST
+    .filter((r) => allowed.includes(r.id) || (p && p.role === r.id))
+    .map((r) => ({ value: r.id, label: `${r.name} — ${r.blurb}` }));
+
+  if (!options.length) { toast('You cannot create accounts.', true); return; }
+
+  const removable = p ? canRemovePerson(ctx.user, p, ctx.state) : { ok: false };
+
   openSheet(`<h2>${p ? 'Edit' : 'Add'} person</h2>`
     + '<form data-act="save-person">'
     + (p ? `<input type="hidden" name="id" value="${esc(p.id)}">` : '')
     + field('Name', input('name', { value: p?.name || '', required: true }))
-    + field('Role', select('role', Object.values(ROLES).map((r) => ({ value: r.id, label: `${r.name} — ${r.blurb}` })), p?.role || 'hand'))
+    + field('Role', select('role', options, p?.role || options[options.length - 1].value))
     + field('Phone', input('phone', { value: p?.phone || '', type: 'tel', placeholder: '080...' }))
-    + field('Daily rate', input('dailyRate', { type: 'number', min: 0, step: '100', value: p?.dailyRate ?? ctx.state.settings.defaultDailyWage }))
+    + field('Daily rate', input('dailyRate', { type: 'number', min: 0, step: '100',
+      value: p?.dailyRate ?? ctx.state.settings.defaultDailyWage }))
     + field(p ? 'New 4-digit PIN (leave empty to keep)' : '4-digit PIN',
-      input('pin', { inputmode: 'numeric', placeholder: '0000' }))
+      input('pin', { inputmode: 'numeric', placeholder: '0000' }),
+      p ? 'Set a new one only if they have forgotten it.' : 'Give this to them privately.')
     + '<button class="btn-block btn-lg" type="submit">Save</button>'
     + '</form>'
-    + (p ? button('Remove from the farm', 'deactivate-person', { cls: 'btn-ghost btn-block', data: { id: p.id } }) : ''));
+    + (removable.ok
+      ? button('Remove from the farm', 'deactivate-person', { cls: 'btn-ghost btn-block', data: { id: p.id } })
+      : p && p.id !== ctx.user.id ? note('warn', 'Cannot be removed', `<small>${esc(removable.why)}</small>`) : ''));
 }
 
 async function savePerson(ctx, form) {
   const data = readForm(form);
-  if (!data.name) { toast('Name is needed', true); return; }
+  if (!data.name || !String(data.name).trim()) { toast('Name is needed', true); return; }
+
   const existing = data.id ? ctx.state.people[data.id] : null;
+  if (existing && !canEditPerson(ctx.user, existing)) { toast('You cannot change that account.', true); return; }
+
+  // The role must be one this person may hand out. Keeping an unchanged role on
+  // your own account is fine; granting yourself a new one is not.
+  const keepingOwnRole = existing && existing.role === data.role;
+  if (!keepingOwnRole && !assignableRoles(ctx.user).includes(data.role)) {
+    toast('You cannot give out that role.', true);
+    return;
+  }
+
   const payload = {
     id: data.id || uid('person'),
-    name: data.name, role: data.role, phone: data.phone || '',
+    name: String(data.name).trim(), role: data.role, phone: data.phone || '',
     dailyRate: Number(data.dailyRate) || 0, active: true,
   };
   if (data.pin) {
@@ -423,10 +485,14 @@ async function savePerson(ctx, form) {
     payload.pinHash = await hashPin(data.pin);
   } else if (existing) {
     payload.pinHash = existing.pinHash;
+  } else {
+    toast('Give them a 4-digit PIN so they can sign in', true);
+    return;
   }
+
   await ctx.store.dispatch('person.upsert', payload);
   closeSheet();
-  toast('Saved');
+  toast(existing ? 'Saved' : `${payload.name} can now sign in as ${ROLES[payload.role].name}`);
 }
 
 // --- Store (inputs) -------------------------------------------------------
@@ -674,6 +740,7 @@ export const settingsView = {
         }))
       + `<p><small>Climate for reference: ${MONTH_NAMES.map((n, i) =>
         `${n} ${climateFor(i + 1).rain}mm`).join(' · ')}</small></p>`)
+    + syncCard(ctx)
     + card(cardHead('Backup and sharing')
       + '<p><small>Everything lives on this phone. Export regularly, and merge the hands\' phones into '
       + 'yours when they come back to the office. Merging never overwrites: the two logs are joined and '
@@ -691,6 +758,44 @@ export const settingsView = {
   },
 
   actions: {
+    'sync-setup': (ctx) => openSyncSetup(ctx),
+    'sync-save': (ctx, form) => saveSyncSetup(ctx, form),
+    'sync-run': async () => {
+      toast('Syncing…');
+      const r = await syncNow();
+      toast(r.ok ? `Up to date. Sent ${r.sent}, received ${r.received}.` : `Could not sync: ${r.reason}`, !r.ok);
+    },
+    'sync-invite': (ctx) => showInvite(ctx),
+    'sync-copy': async (ctx, el) => {
+      const code = el.dataset.code || makeInviteCode();
+      try {
+        await navigator.clipboard.writeText(code);
+        toast('Join code copied. Send it to that phone.');
+      } catch {
+        toast('Could not copy. Select the code and copy it by hand.', true);
+      }
+    },
+    'sync-share': async () => {
+      const code = makeInviteCode();
+      if (!code) { toast('Set up sync first', true); return; }
+      const text = `Join DouValue Farms on the farm app. Open the app, press "Join with a code", `
+        + `and paste this:\n\n${code}`;
+      if (navigator.share) {
+        try { await navigator.share({ title: 'DouValue farm join code', text }); return; } catch { /* cancelled */ }
+      }
+      try { await navigator.clipboard.writeText(code); toast('Join code copied'); }
+      catch { toast('Could not share on this phone. Use Show code and copy it.', true); }
+    },
+    'sync-disconnect': async (ctx) => {
+      const ok = await confirmSheet('Unlink this phone?',
+        'This phone will stop sending and receiving. Its records stay on it, and anything it has '
+        + 'not sent yet will remain unsent until you link it again.', 'Unlink');
+      if (!ok) return;
+      await disconnectSync();
+      closeSheet();
+      toast('This phone is no longer linked');
+    },
+
     'save-settings': async (ctx, form) => {
       const data = readForm(form);
       const prices = {};
@@ -772,3 +877,117 @@ export const settingsView = {
     }
   },
 };
+
+// --- Sync -----------------------------------------------------------------
+
+function syncCard(ctx) {
+  const owner = can(ctx.user, 'manageSync');
+  const status = getStatus();
+  const cfg = getConfig();
+  const line = statusLine(status);
+
+  if (!status.configured) {
+    return card(
+      cardHead('Sync', badge('off', 'warn'))
+      + note('warn', 'This phone is on its own',
+        '<small>Records are safe here, but they are not reaching anyone else. Switch sync on and '
+        + 'every phone on the farm updates itself whenever it finds signal, with no one having to '
+        + 'remember to send anything.</small>')
+      + (owner
+        ? '<p><small>You need a sync server first. It is free and takes about five minutes: '
+          + 'open <b>dash.deno.com</b>, make a new Playground, paste in the file at '
+          + '<b>douvalue/server/deno-sync.ts</b> from the project, press Save &amp; Deploy, and copy '
+          + 'the address it gives you.</small></p>'
+          + button('Set up sync', 'sync-setup', { cls: 'btn-block btn-lg', icon: '🔗' })
+        : note('info', 'Ask the CEO',
+          '<small>Only the CEO can set up the sync link. Until then, back this phone up from '
+          + 'Backup and sharing below.</small>')),
+    );
+  }
+
+  const pending = status.pending || 0;
+  return card(
+    cardHead('Sync', badge(status.state === 'idle' && !pending ? 'in step' : status.state,
+      line.tone === 'ok' ? 'ok' : line.tone === 'danger' ? 'danger' : 'warn'))
+    + note(line.tone === 'ok' ? 'ok' : line.tone === 'danger' ? 'danger' : 'warn', line.text,
+      `<small>${status.lastSyncAt ? `Last exchange ${esc(friendlyDate(status.lastSyncAt.slice(0, 10)))} `
+        + `at ${esc(new Date(status.lastSyncAt).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))}.`
+        : 'No exchange yet.'}`
+      + `${status.serverEvents != null ? ` The farm's store holds ${status.serverEvents} records.` : ''}</small>`)
+    + '<div class="grid">'
+    + stat('Waiting to send', String(pending), pending ? 'will go automatically' : 'nothing queued')
+    + stat('Farm store', status.serverEvents != null ? String(status.serverEvents) : '—', 'records held')
+    + '</div>'
+    + `<p style="margin-top:12px"><small>Server: ${esc(cfg ? cfg.url : '—')}<br>`
+    + `Farm: ${esc(cfg ? cfg.farmId : '—')}</small></p>`
+    + '<div class="row wrap">'
+    + button('Sync now', 'sync-run', { icon: '🔄' })
+    + (owner ? button('Add a phone', 'sync-invite', { cls: 'btn-ghost', icon: '📲' }) : '')
+    + (owner ? button('Change server', 'sync-setup', { cls: 'btn-quiet btn-sm' }) : '')
+    + button('Unlink this phone', 'sync-disconnect', { cls: 'btn-quiet btn-sm' })
+    + '</div>',
+  );
+}
+
+function openSyncSetup(ctx) {
+  const cfg = getConfig() || {};
+  const fresh = newFarmCredentials();
+  openSheet('<h2>Set up sync</h2>'
+    + '<p><small>Point this app at a sync server you control. Everything the farm records then '
+    + 'flows through it to every other phone, automatically, whenever there is signal.</small></p>'
+    + '<form data-act="sync-save">'
+    + field('Server address', input('url', {
+      value: cfg.url || '', required: true, placeholder: 'https://your-farm.deno.dev' }),
+      'The address your sync server gave you. It must start with https.')
+    + field('Farm name on the server', input('farmId', { value: cfg.farmId || fresh.farmId, required: true }),
+      'Leave this as it is unless you are reconnecting to a farm that already exists.')
+    + field('Farm key', input('farmKey', { value: cfg.farmKey || fresh.farmKey, required: true }),
+      'The shared secret that guards your records. Anyone holding it can read and write '
+      + 'this farm, so treat it like the key to the store room.')
+    + '<button class="btn-block btn-lg" type="submit">Check and connect</button>'
+    + '</form>'
+    + note('info', 'What this does and does not protect',
+      '<small>One key guards the whole farm. It keeps your books off the open internet, which is '
+      + 'the thing that matters here. It is not a password per person: anyone with the join code '
+      + 'can read everything. Give it only to phones you trust.</small>'));
+}
+
+async function saveSyncSetup(ctx, form) {
+  const data = readForm(form);
+  const url = String(data.url || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(url)) { toast('The address must start with http or https', true); return; }
+  if (!/^[A-Za-z0-9_-]{3,64}$/.test(String(data.farmId || ''))) {
+    toast('The farm name may only use letters, numbers, dashes and underscores', true); return;
+  }
+  if (String(data.farmKey || '').length < 12) { toast('The farm key is too short to be safe', true); return; }
+
+  const cfg = { url, farmId: data.farmId, farmKey: data.farmKey };
+  toast('Checking the server…');
+  const check = await testConnection(cfg);
+  if (!check.ok) { toast(`Could not reach it: ${check.error}`, true); return; }
+
+  await configure(cfg);
+  const result = await syncNow();
+  closeSheet();
+  await ctx.store.reload();
+  toast(result.ok
+    ? `Connected. Sent ${result.sent}, received ${result.received}.`
+    : 'Connected, but the first exchange failed. It will keep trying.', !result.ok);
+}
+
+function showInvite(ctx) {
+  const code = makeInviteCode();
+  if (!code) { toast('Set up sync first', true); return; }
+  openSheet('<h2>Add a phone</h2>'
+    + '<p><small>On the other phone, open the app and press <b>Join with a code</b> on the setup '
+    + 'screen, or Settings then Sync if it is already running. Paste this code. That phone will '
+    + 'pull down the farm and stay in step from then on.</small></p>'
+    + `<div class="code-box">${esc(code)}</div>`
+    + '<div class="row wrap">'
+    + button('Copy code', 'sync-copy', { data: { code } })
+    + button('Share', 'sync-share', { cls: 'btn-ghost' })
+    + '</div>'
+    + note('warn', 'Treat this like a key',
+      '<small>Anyone with this code can read and write your farm\'s records, including wages and '
+      + 'sales. Send it directly to the person, and do not post it in a group chat.</small>'));
+}

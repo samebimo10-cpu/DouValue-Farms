@@ -6,35 +6,41 @@
 :root {
   color-scheme: light dark;
 
-  --green-900: #14361f;
-  --green-700: #1d6b39;
-  --green-600: #24824a;
-  --green-100: #e3f2e8;
-  --earth-700: #6b4a22;
-  --chili: #c62828;
-  --habanero: #ef6c00;
-  --bell: #d32f2f;
+  /* Brand, taken from the DouValue Farms mark: a green living half, a blue data
+     half, and the navy of the wordmark. The accent is a darkened brand green so
+     white text on a button clears contrast in direct sun. */
+  --brand-navy: #16305c;
+  --brand-navy-deep: #0f2444;
+  --brand-blue: #1b7fc4;
+  --brand-blue-light: #2ba9e0;
+  --brand-green: #2e9b4e;
+  --brand-green-light: #7fc241;
 
-  --bg: #f6f5f1;
+  --bg: #f4f6f8;
   --surface: #ffffff;
-  --surface-2: #f0efe9;
-  --ink: #14181a;
-  --ink-2: #414a4e;
-  --line: #d4d2c8;
-  --accent: var(--green-700);
+  --surface-2: #eaeff4;
+  --ink: #101820;
+  --ink-2: #46545f;
+  --line: #cfd8e0;
+  --accent: #1b7a42;
   --accent-ink: #ffffff;
+  --accent-soft: #e6f3ea;
+  --topbar: var(--brand-navy);
+  --topbar-ink: #ffffff;
+  --topbar-ink-2: #a9c2e4;
   --danger: #b3261e;
   --danger-bg: #fdecea;
-  --warn: #a35c00;
-  --warn-bg: #fff4e0;
-  --ok: #1d6b39;
-  --ok-bg: #e3f2e8;
-  --info-bg: #e8f0fb;
+  --warn: #8a5100;
+  --warn-bg: #fff3e0;
+  --ok: #1b7a42;
+  --ok-bg: #e6f3ea;
+  --info: #15559e;
+  --info-bg: #e7f0fb;
 
   --radius: 14px;
   --tap: 52px;
   --pad: 16px;
-  --shadow: 0 1px 2px rgba(0,0,0,.10), 0 4px 14px rgba(0,0,0,.06);
+  --shadow: 0 1px 2px rgba(16,48,92,.10), 0 4px 14px rgba(16,48,92,.07);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
@@ -45,42 +51,52 @@
    picks dark by hand, so the stamped selector repeats them. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #10140f;
-    --surface: #191f19;
-    --surface-2: #222a21;
-    --ink: #f0f2ec;
-    --ink-2: #b6bfb4;
-    --line: #333d32;
-    --accent: #4caf6d;
-    --accent-ink: #06210f;
+    --bg: #0e1418;
+    --surface: #161e24;
+    --surface-2: #1f2930;
+    --ink: #eef3f7;
+    --ink-2: #a8b8c4;
+    --line: #2d3a44;
+    --accent: #4ecb7b;
+    --accent-ink: #052213;
+    --accent-soft: #14301f;
+    --topbar: #0f2444;
+    --topbar-ink: #ffffff;
+    --topbar-ink-2: #9dbbe0;
     --danger: #ff8a80;
     --danger-bg: #3a1714;
     --warn: #ffc46b;
     --warn-bg: #3a2c10;
     --ok: #7fd69b;
     --ok-bg: #14301f;
-    --info-bg: #16243a;
-    --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --info: #8dc2ff;
+    --info-bg: #13233a;
+    --shadow: 0 1px 2px rgba(0,0,0,.45);
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #10140f;
-  --surface: #191f19;
-  --surface-2: #222a21;
-  --ink: #f0f2ec;
-  --ink-2: #b6bfb4;
-  --line: #333d32;
-  --accent: #4caf6d;
-  --accent-ink: #06210f;
+  --bg: #0e1418;
+  --surface: #161e24;
+  --surface-2: #1f2930;
+  --ink: #eef3f7;
+  --ink-2: #a8b8c4;
+  --line: #2d3a44;
+  --accent: #4ecb7b;
+  --accent-ink: #052213;
+  --accent-soft: #14301f;
+  --topbar: #0f2444;
+  --topbar-ink: #ffffff;
+  --topbar-ink-2: #9dbbe0;
   --danger: #ff8a80;
   --danger-bg: #3a1714;
   --warn: #ffc46b;
   --warn-bg: #3a2c10;
   --ok: #7fd69b;
   --ok-bg: #14301f;
-  --info-bg: #16243a;
-  --shadow: 0 1px 2px rgba(0,0,0,.4);
+  --info: #8dc2ff;
+  --info-bg: #13233a;
+  --shadow: 0 1px 2px rgba(0,0,0,.45);
 }
 
 * { box-sizing: border-box; }
@@ -110,18 +126,64 @@ small { font-size: .82rem; color: var(--ink-2); }
 
 .topbar {
   position: sticky; top: 0; z-index: 40;
-  background: var(--green-900); color: #fff;
+  background: var(--topbar); color: var(--topbar-ink);
   padding: 10px var(--pad); display: flex; align-items: center; gap: 10px;
   padding-top: max(10px, env(safe-area-inset-top));
 }
-.topbar .brand { font-weight: 800; letter-spacing: .2px; font-size: 1.05rem; }
-.topbar .brand small { color: #b9d6c3; display: block; font-size: .68rem; letter-spacing: .4px; text-transform: uppercase; }
+.topbar .brand {
+  font-weight: 800; letter-spacing: .2px; font-size: 1rem;
+  /* A registered company name is long. Keep it on one line so the bar stays
+     one height and the buttons never get pushed off a narrow screen. */
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.topbar .brand small {
+  color: var(--topbar-ink-2); display: block; font-size: .64rem;
+  letter-spacing: .4px; text-transform: uppercase;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
 .topbar .spacer { flex: 1; }
 .topbar button {
   background: rgba(255,255,255,.14); color: #fff; border: 0; border-radius: 10px;
   min-height: 40px; min-width: 40px; padding: 0 10px; font-size: .85rem; font-weight: 600;
 }
 .topbar button:active { background: rgba(255,255,255,.28); }
+
+/* The company mark on the screens people meet before signing in. */
+.brandmark { text-align: center; padding: 22px 16px 4px; }
+.brandmark img {
+  width: min(220px, 56vw); height: auto; display: block; margin: 0 auto;
+  border-radius: 12px; background: #fff;
+}
+.brandmark-where {
+  margin: 10px 0 0; font-size: .72rem; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-2); font-weight: 700;
+}
+
+.topbar-mark {
+  width: 32px; height: 32px; border-radius: 8px; background: #fff;
+  object-fit: contain; flex: 0 0 32px;
+}
+
+/* One line, always visible, saying whether this phone's work has got out yet.
+   It is a button: tapping it forces a sync when someone finds a bar of signal. */
+.syncbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px var(--pad); font-size: .82rem; font-weight: 600;
+  cursor: pointer; border-bottom: 1px solid var(--line);
+  background: var(--surface-2); color: var(--ink-2);
+}
+.syncbar .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: 0 0 9px; }
+.syncbar.ok { background: var(--ok-bg); color: var(--ok); }
+.syncbar.warn { background: var(--warn-bg); color: var(--warn); }
+.syncbar.danger { background: var(--danger-bg); color: var(--danger); }
+.syncbar.info { background: var(--info-bg); color: var(--info); }
+
+.code-box {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .78rem; line-height: 1.45; word-break: break-all;
+  background: var(--surface-2); border: 2px dashed var(--line); border-radius: 12px;
+  padding: 12px; margin: 0 0 10px; max-height: 30vh; overflow-y: auto;
+}
 
 main { flex: 1; padding: var(--pad); padding-bottom: 96px; max-width: 900px; width: 100%; margin: 0 auto; }
 
@@ -216,7 +278,7 @@ textarea { min-height: 90px; }
 .note.ok { background: var(--ok-bg); border-color: var(--ok); }
 .note.warn { background: var(--warn-bg); border-color: var(--warn); }
 .note.danger { background: var(--danger-bg); border-color: var(--danger); }
-.note.info { background: var(--info-bg); border-color: #4a6fa5; }
+.note.info { background: var(--info-bg); border-color: var(--info); }
 .note b { display: block; }
 
 .badge {
@@ -261,7 +323,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 80;
-  background: var(--green-900); color: #fff; padding: 12px 18px; border-radius: 12px;
+  background: var(--brand-navy); color: #fff; padding: 12px 18px; border-radius: 12px;
   box-shadow: var(--shadow); font-weight: 600; max-width: 90vw; text-align: center;
 }
 .toast.bad { background: var(--danger); }
@@ -289,7 +351,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   padding: 14px 10px; text-align: center; cursor: pointer; min-height: 110px;
 }
 .person-tile .av {
-  width: 48px; height: 48px; border-radius: 50%; background: var(--green-100); color: var(--green-900);
+  width: 48px; height: 48px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
   display: grid; place-items: center; font-weight: 800; font-size: 1.1rem; margin: 0 auto 8px;
 }
 .person-tile b { display: block; }
@@ -314,7 +376,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 @media (min-width: 720px) {
-  .tabbar { position: sticky; top: 56px; bottom: auto; border-top: 0; border-bottom: 2px solid var(--line); max-width: 900px; margin: 0 auto; }
+  .tabbar { position: sticky; top: 92px; bottom: auto; border-top: 0; border-bottom: 2px solid var(--line); max-width: 900px; margin: 0 auto; }
   main { padding-bottom: 40px; }
   .sticky-actions { bottom: 0; }
   .sheet-back { align-items: center; }

@@ -29,6 +29,11 @@ function openDb() {
         store.createIndex('at', 'at');
         store.createIndex('type', 'type');
       }
+      // Events carry a "synced" stamp so the app always knows what has not yet
+      // reached the server. Without it, a phone coming back from three days
+      // offline would have to re-send its whole history to find out.
+      const eventStore = req.transaction.objectStore(EVENT_STORE);
+      if (!eventStore.indexNames.contains('synced')) eventStore.createIndex('synced', 'synced');
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
     };
     req.onsuccess = () => resolve(req.result);
@@ -90,13 +95,68 @@ export async function appendEvents(events) {
   }
 }
 
-/** Merge incoming events, skipping ones already held. Returns how many were new. */
-export async function mergeEvents(incoming) {
+/**
+ * Merge incoming events, skipping ones already held. Returns how many were new.
+ *
+ * `fromServer` marks the arrivals as already synced: they came off the server,
+ * so pushing them straight back would be pointless traffic on a metered phone.
+ */
+export async function mergeEvents(incoming, fromServer = false) {
   const existing = await loadEvents();
   const known = new Set(existing.map((e) => e.id));
-  const fresh = incoming.filter((e) => e && e.id && !known.has(e.id));
+  const stamp = fromServer ? new Date().toISOString() : undefined;
+  const fresh = incoming
+    .filter((e) => e && e.id && !known.has(e.id))
+    .map((e) => (fromServer ? { ...e, synced: e.synced || stamp } : e));
   if (fresh.length) await appendEvents(fresh);
   return { added: fresh.length, skipped: incoming.length - fresh.length };
+}
+
+/** Events this device has not yet handed to the server. */
+export async function unsyncedEvents(limit = 500) {
+  const all = await loadEvents();
+  return all.filter((e) => !e.synced).slice(0, limit);
+}
+
+export async function countUnsynced() {
+  const all = await loadEvents();
+  return all.reduce((n, e) => n + (e.synced ? 0 : 1), 0);
+}
+
+/** Stamp events the server has confirmed it holds. */
+export async function markSynced(ids, at = new Date().toISOString()) {
+  const wanted = new Set(ids);
+  if (!wanted.size) return 0;
+
+  if (!hasIndexedDB()) {
+    const list = memoryFallback || lsRead();
+    let n = 0;
+    for (const e of list) if (wanted.has(e.id) && !e.synced) { e.synced = at; n++; }
+    memoryFallback = list;
+    lsWrite(list);
+    return n;
+  }
+
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(EVENT_STORE, 'readwrite');
+      const store = tx.objectStore(EVENT_STORE);
+      let n = 0;
+      for (const id of wanted) {
+        const get = store.get(id);
+        get.onsuccess = () => {
+          const rec = get.result;
+          if (rec && !rec.synced) { rec.synced = at; store.put(rec); n++; }
+        };
+      }
+      tx.oncomplete = () => resolve(n);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } catch {
+    return 0;
+  }
 }
 
 export async function clearEvents() {

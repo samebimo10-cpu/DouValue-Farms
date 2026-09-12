@@ -3,7 +3,10 @@
 
 import { can, ROLES } from '../store.js';
 import { getLang, LANGS, setLang, t } from '../i18n.js';
-import { badge, button, closeSheet, empty, esc, initials, readForm, sheetOpen, toast } from './kit.js';
+import {
+  badge, button, closeSheet, empty, esc, field, initials, input, openSheet, readForm, sheetOpen, toast,
+} from './kit.js';
+import { configure, getStatus, onStatus, readInviteCode, statusLine, syncNow, testConnection } from '../sync.js';
 import { isoDate } from '../util.js';
 
 const routes = new Map();
@@ -52,11 +55,11 @@ let pending = { personId: null, pin: '' };
 
 function loginScreen(state) {
   const people = Object.values(state.people).filter((p) => p.active !== false);
-  if (!people.length) return firstRunScreen();
+  if (!people.length) return firstRunScreen(state);
 
   if (!pending.personId) {
-    return `<div class="card"><h1>${esc(state.settings.farmName)}</h1>`
-      + `<p>${esc(t('login.who'))}</p><div class="people-grid">`
+    return brandMark(state)
+      + `<div class="card"><h2>${esc(t('login.who'))}</h2><div class="people-grid">`
       + people.map((p) => `<div class="person-tile" data-act="pick-person" data-id="${esc(p.id)}">`
         + `<div class="av">${esc(initials(p.name))}</div><b>${esc(p.name)}</b>`
         + `<small>${esc(ROLES[p.role]?.name || p.role)}</small></div>`).join('')
@@ -67,7 +70,7 @@ function loginScreen(state) {
   const dots = [0, 1, 2, 3].map((i) => `<span class="${i < pending.pin.length ? 'on' : ''}"></span>`).join('');
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'ok'];
   return `<div class="card"><div class="row"><div class="av" style="width:44px;height:44px;border-radius:50%;`
-    + `background:var(--green-100);color:var(--green-900);display:grid;place-items:center;font-weight:800">`
+    + `background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:800">`
     + `${esc(initials(person.name))}</div><div class="grow"><b>${esc(person.name)}</b><br>`
     + `<small>${esc(ROLES[person.role]?.name || '')}</small></div></div>`
     + `<p style="margin-top:12px">${esc(t('login.pin'))}</p>`
@@ -83,21 +86,43 @@ function loginScreen(state) {
     + '</div>';
 }
 
-function firstRunScreen() {
-  return '<div class="card"><h1>Set up DouValue Farm</h1>'
-    + '<p>Nobody is registered on this phone yet. Create the manager account first. '
-    + 'Everyone else can be added afterwards, from the People screen.</p>'
+/** The company mark, shown on the screens people see before they are signed in. */
+function brandMark(state) {
+  return '<div class="brandmark">'
+    + '<picture><source srcset="img/logo.webp" type="image/webp"><img src="img/logo.jpg" alt="DouValue Farms Limited" width="502" height="518"></picture>'
+    + `<p class="brandmark-where">${esc(state?.settings?.location || 'Port Harcourt, Rivers State')}</p>`
+    + '</div>';
+}
+
+function firstRunScreen(state) {
+  return brandMark(state)
+    + '<div class="card"><h1>Set up the farm</h1>'
+    + '<p>This phone has no accounts yet. The first account is the <b>CEO</b>, the owner of the '
+    + 'farm. From there you appoint the farm manager, and the manager takes on supervisors and '
+    + 'farm hands.</p>'
     + '<form data-act="first-run">'
-    + '<div class="field"><label>Your name</label><input name="name" required placeholder="e.g. Ada Briggs"></div>'
+    + '<div class="field"><label>Your name</label>'
+    + '<input name="name" required placeholder="e.g. Ebimo Sam" autocomplete="name"></div>'
     + '<div class="field"><label>Choose a 4-digit PIN</label>'
     + '<input name="pin" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="0000">'
-    + '<div class="hint">You will type this to sign in. Do not use 1234.</div></div>'
-    + '<div class="field"><label>Farm name</label><input name="farmName" value="DouValue Farm"></div>'
-    + '<button class="btn-block btn-lg" type="submit">Create manager account</button>'
+    + '<div class="hint">You type this to sign in. Do not use 1234 or your year of birth.</div></div>'
+    + '<div class="field"><label>Farm name</label><input name="farmName" value="DouValue Farms Limited"></div>'
+    + '<button class="btn-block btn-lg" type="submit">Create the CEO account</button>'
     + '</form>'
-    + '<p style="margin-top:16px"><small>Everything stays on this phone until you export or sync it. '
-    + 'No account, no data bundle needed.</small></p>'
-    + '<div style="margin-top:8px">' + button('Load a sample farm to look around', 'load-sample', { cls: 'btn-ghost btn-block' }) + '</div>'
+    + '<p style="margin-top:16px"><small>Records are kept on this phone and work with no network. '
+    + 'Once you are in, set up Sync under Settings and every phone on the farm stays in step '
+    + 'automatically whenever it finds signal.</small></p>'
+    + '</div>'
+    + '<div class="card tight">'
+    + '<b>Joining a farm that already exists?</b>'
+    + '<p><small>If the CEO has already set this farm up on another phone, paste the join code '
+    + 'they gave you instead of creating a new farm.</small></p>'
+    + button('Join with a code', 'open-join', { cls: 'btn-ghost btn-block' })
+    + '</div>'
+    + '<div class="card tight">'
+    + button('Load a sample farm to look around', 'load-sample', { cls: 'btn-quiet btn-block' })
+    + '<p style="margin:8px 0 0"><small>Fills the app with an example farm so you can see how it '
+    + 'works. Erase it from Settings before you start recording real work.</small></p>'
     + '</div>';
 }
 
@@ -117,16 +142,18 @@ function tabsFor(user) {
 
 function chrome(user, state, body) {
   const lang = getLang();
-  const online = navigator.onLine;
   const tabs = tabsFor(user);
   const here = routeKey();
-  return `<header class="topbar">`
+  const sync = statusLine();
+  return '<header class="topbar">'
+    + '<img class="topbar-mark" src="img/mark.jpg" alt="" width="256" height="256">'
     + `<div class="brand">${esc(state.settings.farmName)}<small>${esc(state.settings.location)}</small></div>`
     + '<div class="spacer"></div>'
     + `<button data-act="toggle-lang" title="Language">${lang === 'pcm' ? 'Pidgin' : 'English'}</button>`
     + `<button data-act="open-account" title="Account">${esc(initials(user.name))}</button>`
     + '</header>'
-    + (online ? '' : `<div class="offline-flag">${esc(t('common.offline'))}</div>`)
+    + `<div class="syncbar ${esc(sync.tone)}" data-act="sync-now" role="status">`
+    + `<span class="dot"></span><span>${esc(sync.text)}</span></div>`
     + `<main>${body}</main>`
     + '<nav class="tabbar">' + tabs.map((tab) => `<a href="${tab.hash}" class="${here === tab.hash ? 'on' : ''}">`
       + `<span class="ic">${tab.icon}</span>${esc(t(tab.key))}</a>`).join('') + '</nav>';
@@ -172,7 +199,8 @@ function accountSheet() {
   const state = ctx.store.state;
   const role = ROLES[user.role];
   return `<h2>${esc(user.name)}</h2><p>${badge(role?.name || user.role)} <small>${esc(role?.blurb || '')}</small></p>`
-    + `<p><small>Signed in on this phone. ${esc(state.log.length)} records stored.</small></p>`
+    + `<p><small>Signed in on this phone. ${esc(state.log.length)} records stored. `
+    + `${esc(statusLine().text)}.</small></p>`
     + '<div class="field"><label>Language</label>'
     + Object.entries(LANGS).map(([code, name]) => `<button class="chip ${getLang() === code ? 'on' : ''}" `
       + `data-act="set-lang" data-lang="${code}">${esc(name)}</button>`).join(' ')
@@ -210,14 +238,17 @@ const shellActions = {
   'first-run': async (c, el) => {
     const data = readForm(el);
     if (!/^\d{4}$/.test(String(data.pin || ''))) { toast('PIN must be exactly 4 digits', true); return; }
-    const id = 'person_manager';
+    if (!String(data.name || '').trim()) { toast('Enter your name', true); return; }
+    const id = 'person_ceo';
     await c.store.dispatchMany([
-      { type: 'settings.update', payload: { farmName: data.farmName || 'DouValue Farm' } },
-      { type: 'person.upsert', payload: { id, name: data.name, role: 'manager', pinHash: await hashPin(data.pin), dailyRate: 0 } },
+      { type: 'settings.update', payload: { farmName: data.farmName || 'DouValue Farms Limited' } },
+      { type: 'person.upsert', payload: {
+        id, name: String(data.name).trim(), role: 'ceo', pinHash: await hashPin(data.pin), dailyRate: 0 } },
     ]);
     c.store.setUser(c.store.state.people[id]);
     sessionStorage.setItem('douvalue.user', id);
     navigate('#/dashboard');
+    toast('CEO account created. Next: add your farm manager under People.');
   },
   'load-sample': async (c) => {
     const { seedSampleFarm } = await import('../sample.js');
@@ -247,6 +278,47 @@ const shellActions = {
     pending = { personId: null, pin: '' };
     render();
   },
+  'sync-now': async () => {
+    const s = getStatus();
+    if (!s.configured) {
+      toast('Sync is not set up yet. The CEO can switch it on under Settings.');
+      return;
+    }
+    toast('Syncing…');
+    const result = await syncNow();
+    toast(result.ok
+      ? `Up to date. Sent ${result.sent}, received ${result.received}.`
+      : `Could not sync: ${result.reason}`, !result.ok);
+  },
+
+  'open-join': () => {
+    openSheet('<h2>Join a farm</h2>'
+      + '<p><small>The CEO can show you a join code from Settings, Sync on their phone. '
+      + 'Paste the whole code here. This phone will then pull down the farm\'s records and stay '
+      + 'in step from now on.</small></p>'
+      + '<form data-act="save-join">'
+      + field('Join code', '<textarea name="code" placeholder="Paste the code here" rows="4"></textarea>')
+      + '<button class="btn-block btn-lg" type="submit">Join this farm</button>'
+      + '</form>');
+  },
+
+  'save-join': async (c, form) => {
+    const { code } = readForm(form);
+    const cfg = readInviteCode(code);
+    if (!cfg) { toast('That code could not be read. Copy the whole thing and try again.', true); return; }
+    toast('Checking the code…');
+    const check = await testConnection(cfg);
+    if (!check.ok) { toast(`Could not reach that farm: ${check.error}`, true); return; }
+    await configure(cfg);
+    const result = await syncNow();
+    closeSheet();
+    await c.store.reload();
+    toast(result.ok
+      ? `Joined. Pulled down ${result.received} records.`
+      : 'Joined, but the first sync failed. It will retry on its own.', !result.ok);
+    render();
+  },
+
   'go': (c, el) => navigate(el.dataset.to),
   'back': () => history.back(),
   'print': () => window.print(),
@@ -311,6 +383,7 @@ export async function startShell(store) {
   });
 
   window.addEventListener('hashchange', () => { closeSheet(); render(); });
+  onStatus(() => { if (ctx && ctx.store.user) render(); });
   window.addEventListener('online', render);
   window.addEventListener('offline', render);
   store.subscribe(() => render());

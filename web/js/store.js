@@ -7,36 +7,63 @@
 import { appendEvents, deviceId, loadEvents } from './db.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
+/**
+ * Who can do what.
+ *
+ * `rank` is the authority order, and it decides account creation as well as
+ * visibility: you may only create an account below your own rank, so a manager
+ * can take on hands and supervisors but cannot appoint another manager or
+ * remove the owner. Only the CEO holds `manageOwners`, which lifts that ceiling.
+ */
 export const ROLES = {
   hand: {
-    id: 'hand', name: 'Farm hand', pidgin: 'Farm hand',
+    id: 'hand', name: 'Farm hand', pidgin: 'Farm hand', rank: 10,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose'],
     home: '#/today',
     blurb: 'Sees today\'s jobs, records work and harvest, reports anything wrong.',
   },
   supervisor: {
-    id: 'supervisor', name: 'Supervisor', pidgin: 'Oga for field',
+    id: 'supervisor', name: 'Supervisor', pidgin: 'Oga for field', rank: 50,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout'],
     home: '#/field',
     blurb: 'Assigns the day\'s work, checks the harvest, records sprays and inputs.',
   },
   agronomist: {
-    id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor',
+    id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
     can: ['viewOwnTasks', 'viewGuide', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
       'viewTeam', 'viewReports', 'assignTasks'],
     home: '#/clinic',
     blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
   },
   manager: {
-    id: 'manager', name: 'Farm manager', pidgin: 'Oga',
+    id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
-      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'sync'],
+      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings'],
     home: '#/dashboard',
-    blurb: 'Everything: money, people, planning, reports and settings.',
+    blurb: 'Runs the farm day to day: work, money, people, planning and reports.',
+  },
+  ceo: {
+    id: 'ceo', name: 'CEO', pidgin: 'Chairman', rank: 100,
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+      'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
+      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm'],
+    home: '#/dashboard',
+    blurb: 'Owns the farm. Sees everything, appoints the manager and everyone else, '
+      + 'and controls the link that keeps every phone in step.',
   },
 };
+
+/** Roles from the top down, for pickers and tables. */
+export const ROLE_LIST = Object.values(ROLES).sort((a, b) => b.rank - a.rank);
+
+export function roleRank(person) {
+  if (!person) return -1;
+  const role = ROLES[person.role || person];
+  return role ? role.rank : -1;
+}
 
 export function can(person, permission) {
   if (!person) return false;
@@ -44,8 +71,59 @@ export function can(person, permission) {
   return !!role && role.can.includes(permission);
 }
 
+/**
+ * Which roles this person may hand out.
+ *
+ * The CEO may appoint anyone, including a second owner. Everyone else with
+ * people authority may only appoint below themselves, which is what stops a
+ * manager quietly promoting themselves or creating a rival manager.
+ */
+export function assignableRoles(actor) {
+  if (!can(actor, 'managePeople')) return [];
+  if (can(actor, 'manageOwners')) return ROLE_LIST.map((r) => r.id);
+  const mine = roleRank(actor);
+  return ROLE_LIST.filter((r) => r.rank < mine).map((r) => r.id);
+}
+
+/** Whether this person may create or change an account holding that role. */
+export function canAssignRole(actor, targetRole) {
+  return assignableRoles(actor).includes(targetRole);
+}
+
+/**
+ * Whether this person may edit that account.
+ *
+ * Anyone may edit their own details. Otherwise the target's current role must be
+ * one you could have assigned in the first place, so a manager cannot edit the
+ * CEO or another manager.
+ */
+export function canEditPerson(actor, target) {
+  if (!actor || !target) return false;
+  if (actor.id === target.id) return true;
+  if (!can(actor, 'managePeople')) return false;
+  return canAssignRole(actor, target.role);
+}
+
+/**
+ * The farm must never be left without an owner: removing the last CEO would
+ * lock everyone out of sync setup and account creation for good.
+ */
+export function canRemovePerson(actor, target, state) {
+  if (!canEditPerson(actor, target)) return { ok: false, why: 'You cannot change that account.' };
+  if (actor.id === target.id) return { ok: false, why: 'You cannot remove your own account.' };
+  if (target.role === 'ceo') {
+    const owners = Object.values(state.people)
+      .filter((p) => p.role === 'ceo' && p.active !== false);
+    if (owners.length <= 1) {
+      return { ok: false, why: 'This is the only CEO account. Appoint another owner first, '
+        + 'otherwise nobody can create accounts or manage the sync link.' };
+    }
+  }
+  return { ok: true };
+}
+
 export const DEFAULT_SETTINGS = {
-  farmName: 'DouValue Farm',
+  farmName: 'DouValue Farms Limited',
   location: 'Port Harcourt, Rivers State',
   currency: 'NGN',
   language: 'en',

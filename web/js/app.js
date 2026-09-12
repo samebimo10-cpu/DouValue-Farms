@@ -10,6 +10,7 @@ import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
+import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 
 registerRoute('#/today', todayView);
@@ -51,6 +52,10 @@ async function main() {
   const store = await createStore();
   const ctx = await startShell(store);
   window.__douvalueCtx = ctx;              // the guide's search box reaches back for this
+
+  // Sync runs itself from here: it pushes and pulls whenever the phone has
+  // signal, and quietly queues everything when it does not.
+  await startSync(store);
 
   warmWeather(ctx).catch(() => { /* climatology carries the app without it */ });
 

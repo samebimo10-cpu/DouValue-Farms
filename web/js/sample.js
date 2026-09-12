@@ -1,9 +1,10 @@
-// A worked example of DouValue Farm, so the app can be explored before a single
+// A worked example of DouValue Farms Limited, so the app can be explored before a single
 // real record exists. Dates are built relative to today, so the sample always
 // shows beds at different stages: one in the nursery run-up, one flowering, one
 // in full picking.
 //
-// Every sample person signs in with PIN 1234.
+// Every sample person signs in with PIN 1234. Ebimo Sam is the CEO and sees
+// everything; Ada Briggs runs the farm as manager; the rest are field staff.
 
 import { addDays, isoDate, uid } from './util.js';
 import { hashPin } from './ui/shell.js';
@@ -14,6 +15,7 @@ export async function seedSampleFarm(store) {
   const pin = await hashPin('1234');
 
   const people = [
+    { id: 'sp_owner', name: 'Ebimo Sam', role: 'ceo', phone: '08030000000', dailyRate: 0 },
     { id: 'sp_ada', name: 'Ada Briggs', role: 'manager', phone: '08030000001', dailyRate: 0 },
     { id: 'sp_tamuno', name: 'Tamuno George', role: 'supervisor', phone: '08030000002', dailyRate: 5000 },
     { id: 'sp_chidi', name: 'Chidi Nwosu', role: 'agronomist', phone: '08030000003', dailyRate: 6000 },
@@ -40,7 +42,7 @@ export async function seedSampleFarm(store) {
   ];
 
   const events = [
-    { type: 'settings.update', payload: { farmName: 'DouValue Farm', location: 'Port Harcourt, Rivers State' } },
+    { type: 'settings.update', payload: { farmName: 'DouValue Farms Limited', location: 'Port Harcourt, Rivers State' } },
     ...people.map((p) => ({ type: 'person.upsert', payload: { ...p, pinHash: pin } })),
     ...plots.map((p) => ({ type: 'plot.upsert', payload: p })),
     ...cycles.map((c) => ({ type: 'cycle.start', payload: c })),

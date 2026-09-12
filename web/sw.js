@@ -4,15 +4,20 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-const CACHE = 'douvalue-v1';
+const CACHE = 'douvalue-v2';
 
 const SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './icon.svg',
+  './img/logo.jpg',
+  './img/logo.webp',
+  './img/mark.jpg',
+  './img/mark-192.png',
   './css/app.css',
   './js/app.js',
+  './js/sync.js',
   './js/store.js',
   './js/db.js',
   './js/util.js',
@@ -63,6 +68,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // The sync server lives on another origin and must always go to the network:
+  // a cached reply would hand the app stale events or a stale acknowledgement.
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(

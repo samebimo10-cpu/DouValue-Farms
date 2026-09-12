@@ -1,6 +1,6 @@
-# DouValue Farm Manager
+# DouValue Farms Limited
 
-A farm management app for **DouValue Farm, Port Harcourt** — bell pepper (*tatashe*),
+A farm management app for **DouValue Farms Limited, Port Harcourt** — bell pepper (*tatashe*),
 chili (*shombo*) and habanero (*ata rodo*).
 
 It is built for everyone on the farm, not just the office: a farm hand records what they
@@ -48,6 +48,27 @@ app and keeps working with the data switched off.
 To start a real farm instead, skip the sample and create the manager account.
 
 ---
+
+## Who is who
+
+Accounts come from the top down. The first account created on a new farm is the
+**CEO**, the owner. The CEO appoints the farm manager; the manager takes on
+supervisors, agronomists and farm hands. Nobody can appoint their own level or
+above, so a manager cannot create a second manager or touch the owner's account,
+and the last remaining CEO account cannot be deleted.
+
+| Role | Appoints | Sees |
+|---|---|---|
+| **CEO** | Everyone, including managers and co-owners | Everything, plus the sync link and the audit trail |
+| **Farm manager** | Agronomists, supervisors, farm hands | Work, money, people, planning and reports |
+| **Agronomist** | Nobody | The clinic, the beds, the risk board, reports |
+| **Supervisor** | Nobody | The day's work, harvest checking, sprays and inputs |
+| **Farm hand** | Nobody | Today's jobs, their own harvest and reports |
+
+The CEO is not a separate reporting view bolted on the side. They hold every
+operational permission as well, so they can pick a crate, run a diagnosis or log
+a spray when they are in the field, and still be the only one who can change the
+sync link or appoint a manager.
 
 ## What each person gets
 
@@ -153,10 +174,53 @@ Every action is an **event** appended to a log: who, what, when, on which device
 is overwritten. State is rebuilt by replaying the log, so replaying the same events always
 gives the same farm.
 
-That makes merging trivial and safe. Export a backup from a hand's phone, send it over
-WhatsApp or Bluetooth, and merge it into the manager's phone: the two logs are joined and
-anything already held is skipped. Two people can record harvests all day with no signal
-between them and lose nothing.
+That makes merging trivial and safe: two logs join by set union. There is no
+last-writer-wins, no field-level conflict, and no way for one phone to overwrite
+another's morning. Two hands can record harvests all day with no signal between
+them and lose nothing.
+
+### Automatic sync
+
+Once the CEO switches sync on, each phone keeps an **outbox** of what it has not
+yet handed over. Whenever it has signal it pushes that outbox and pulls whatever
+the other phones have recorded, then rebuilds itself. Nobody has to remember to
+send anything.
+
+A sync runs when the phone comes back online, a few seconds after anything is
+recorded, when the app is brought back to the foreground, and on a slow
+background tick. Failures back off (5s, 15s, 45s, 2m, 5m) instead of hammering a
+bad connection, and overlapping triggers share one exchange rather than sending
+the same batch three times.
+
+A line across the top of every screen always says where the phone stands: *All
+phones up to date*, *No network, 3 records waiting to send*, or the error if
+there is one. Tapping it forces an exchange.
+
+**Setting it up.** The server is one file and free to run:
+
+1. Open **dash.deno.com**, create a new Playground.
+2. Paste in `douvalue/server/deno-sync.ts`, press Save & Deploy.
+3. Copy the address it gives you into the app under **Settings → Sync**.
+
+To add a phone, the CEO presses **Add a phone** and sends the join code. On that
+phone, **Join with a code**, paste, done: it pulls the whole farm down and stays
+in step from then on.
+
+Prefer your own machine? `douvalue/server/node-sync.mjs` serves the same contract
+and keeps each farm in one append-only JSON-lines file, so a backup is a file
+copy.
+
+**What the sync protects, and what it does not.** One shared farm key guards one
+farm. It keeps the books off the open internet, which is the thing that matters
+here. It is not a password per person: anyone holding the join code can read and
+write everything, wages and sales included. Give it only to phones you trust, and
+send it directly rather than posting it in a group chat.
+
+### Without a server
+
+Sync is optional. Export a backup from a hand's phone, send it over WhatsApp or
+Bluetooth, and merge it into the manager's phone: the two logs are joined and
+anything already held is skipped.
 
 Timestamps are not trusted to give causal order, because farm phones drift and paper notes
 get typed up days later. An event about something that does not exist yet is **parked and
@@ -165,8 +229,9 @@ created at 09:00 still counts. Anything still waiting at the end is reported as 
 rather than silently dropped — it is usually the other half of a merge that has not
 arrived yet.
 
-**Backup is manual and it matters.** Everything lives on the phone. A lost phone is a lost
-farm record unless it was exported. Settings → *Export a backup file*, weekly.
+**Back up anyway.** With sync on, the server holds a copy and a lost phone costs
+nothing. Without it, everything lives on that one handset: Settings → *Export a
+backup file*, weekly.
 
 ## About the PIN
 
@@ -205,6 +270,7 @@ douvalue/
 │  ├─ css/app.css
 │  └─ js/
 │     ├─ app.js          boot and routing table
+│     ├─ sync.js         outbox, push/pull, backoff, join codes
 │     ├─ store.js        event log → farm state, roles, selectors
 │     ├─ db.js           IndexedDB log, merge, export/import, photo compression
 │     ├─ util.js         dates, naira, HTML escaping
@@ -218,7 +284,10 @@ douvalue/
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
 │     └─ ui/             shell, kit, worker, field, clinic, manage
-└─ tests/domain.test.mjs
+├─ server/
+│  ├─ deno-sync.ts      the sync server, for Deno Deploy (free, no CLI)
+│  └─ node-sync.mjs     the same contract, self-hosted
+└─ tests/               domain, roles and sync
 ```
 
 No framework, no build step, no dependencies. The whole app is plain ES modules, which is
@@ -231,9 +300,11 @@ node --test "douvalue/tests/**/*.test.mjs"
 # or, from the douvalue directory:  npm test
 ```
 
-61 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
+85 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
-planting-window optimiser, and event-log replay including out-of-order merges.
+planting-window optimiser, event-log replay including out-of-order merges, the account
+hierarchy, and the sync server run for real: push, pull, de-duplication, two phones offline
+at once, a wrong key, restart durability, and a replay of what came back off the wire.
 
 ## Limits worth knowing
 
