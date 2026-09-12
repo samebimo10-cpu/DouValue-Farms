@@ -216,9 +216,16 @@ export async function deviceId() {
 }
 
 /**
- * Photos go in as small JPEGs. A farm phone on a shared bundle cannot afford
- * full-resolution images, and a 640 px picture of a leaf spot is plenty to
- * diagnose from.
+ * Photos go in as small JPEGs, and carry where they came from.
+ *
+ * A farm phone on a shared bundle cannot afford full-resolution images, and a
+ * 640 px picture of a leaf spot is plenty to diagnose from. Evidence photos go
+ * smaller still.
+ *
+ * The provenance matters as much as the picture. A photo taken at the bed, now,
+ * is evidence; one picked out of the gallery days later is a claim. The file's
+ * own modified time tells the two apart, so that is kept alongside it and the
+ * audit can say "this picture was taken three days before it was attached".
  */
 export function compressImage(file, maxSide = 640, quality = 0.7) {
   return new Promise((resolve, reject) => {
@@ -239,6 +246,31 @@ export function compressImage(file, maxSide = 640, quality = 0.7) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+/** How long after a photo was taken it still counts as "taken just now". */
+export const FRESH_PHOTO_MS = 5 * 60 * 1000;
+
+/**
+ * A picture plus everything needed to judge it later.
+ * Evidence shots are deliberately smaller than diagnosis shots: they are there
+ * to show crates in a bed, not to resolve a mite.
+ */
+export async function captureEvidence(file, { maxSide = 560, quality = 0.62 } = {}) {
+  const dataUrl = await compressImage(file, maxSide, quality);
+  const takenAt = file.lastModified ? new Date(file.lastModified).toISOString() : null;
+  const attachedAt = new Date().toISOString();
+  const ageMs = file.lastModified ? Date.now() - file.lastModified : null;
+  return {
+    dataUrl,
+    takenAt,
+    attachedAt,
+    // A picture whose file is older than a few minutes came out of the gallery,
+    // whatever the camera button suggested.
+    fresh: ageMs != null ? ageMs <= FRESH_PHOTO_MS : null,
+    ageMinutes: ageMs != null ? Math.round(ageMs / 60000) : null,
+    bytes: Math.round((dataUrl.length * 3) / 4),
+  };
 }
 
 /** Everything, as a file the manager can keep, mail, or carry on a phone. */

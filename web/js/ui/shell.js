@@ -201,6 +201,31 @@ function joinScreen(state) {
 
 // --- Chrome ---------------------------------------------------------------
 
+/**
+ * Where "back" goes from a screen that is not one of the tabs.
+ *
+ * A fixed parent beats the browser's history: someone who arrived at a bed from
+ * a link, or from the dashboard's alert list, still wants Back to mean "the
+ * field", not "wherever I happened to be three taps ago". It also means Back
+ * never walks them out of the app.
+ */
+const PARENT_OF = {
+  '#/field/cycle': '#/field',
+  '#/diagnose': '#/clinic',
+  '#/guide': '#/clinic',
+  '#/guide/item': '#/guide',
+  '#/plan': '#/dashboard',
+  '#/reports': '#/dashboard',
+  '#/audit': '#/dashboard',
+  '#/people': '#/dashboard',
+  '#/money': '#/dashboard',
+};
+
+function parentOf(route, user) {
+  if (PARENT_OF[route]) return PARENT_OF[route];
+  return ROLES[user.role]?.home || '#/today';
+}
+
 function tabsFor(user) {
   const all = [
     { hash: '#/today', icon: '📋', key: 'nav.today', perm: 'viewOwnTasks' },
@@ -218,8 +243,16 @@ function chrome(user, state, body) {
   const tabs = tabsFor(user);
   const here = routeKey();
   const sync = statusLine();
+  // A tab shows the mark; anything deeper shows the way back in its place, so
+  // the bar stays one height and the target stays a thumb's width.
+  const onTab = tabs.some((tab) => tab.hash === here);
+  const back = onTab ? '' : parentOf(here, user);
+
   return '<header class="topbar">'
-    + '<img class="topbar-mark" src="img/mark.jpg" alt="" width="256" height="256">'
+    + (back
+      ? `<button class="topbar-back" data-act="go" data-to="${esc(back)}" `
+        + 'aria-label="Back">&#8592;</button>'
+      : '<img class="topbar-mark" src="img/mark.jpg" alt="" width="256" height="256">')
     + `<div class="brand">${esc(state.settings.farmName)}<small>${esc(state.settings.location)}</small></div>`
     + '<div class="spacer"></div>'
     + `<button data-act="toggle-lang" title="Language">${lang === 'pcm' ? 'Pidgin' : 'English'}</button>`
@@ -264,6 +297,13 @@ export function render() {
     body = `<div class="card"><h2>Something went wrong on this screen</h2>`
       + `<p>${esc(err.message)}</p><p><small>Your records are safe. Go back and try again.</small></p></div>`;
   }
+  const tabRoots = tabsFor(user).map((tab) => tab.hash);
+  if (!tabRoots.includes(key)) {
+    const home = parentOf(key, user);
+    body += `<div class="card tight return-card">${button('Back', 'go',
+      { cls: 'btn-ghost btn-block', icon: '←', data: { to: home } })}</div>`;
+  }
+
   root.innerHTML = chrome(user, state, body);
   if (view.mounted) view.mounted(ctx);
 }

@@ -11,9 +11,21 @@ import { harvestClearance, PRODUCTS, PRODUCT_BY_ID, reentryClearance, resistance
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
+import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { getLang } from '../i18n.js';
 
 function calibrationFor(state) { return calibrate(closedCycles(state).map((c) => ({ ...c, plants: c.plants }))); }
+
+/** When a record was actually entered, which is not always the day it claims. */
+function stampOf(record) {
+  const at = record.at || record.enteredAt;
+  if (!at) return 'time not recorded';
+  const day = at.slice(0, 10);
+  const clock = new Date(at).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' });
+  return record.date && record.date !== day
+    ? `${friendlyDate(day)} ${clock} (for ${record.date})`
+    : `${friendlyDate(day)} ${clock}`;
+}
 
 function cropDot(cropId) {
   return `<span class="crop-dot" style="background:${getCrop(cropId).colour}"></span>`;
@@ -235,11 +247,12 @@ export const cycleView = {
     out += card(
       cardHead('Spray record', button('Log spray', 'open-spray', { cls: 'btn-sm', data: { id: cycle.id } }))
       + (sprays.length
-        ? table([{ label: 'Date' }, { label: 'Product' }, { label: 'For' }, { label: 'Safe to pick' }],
+        ? table([{ label: 'Date' }, { label: 'Product' }, { label: 'Safe to pick' }, { label: 'Recorded' }, { label: 'Label photo' }],
           [...sprays].reverse().slice(0, 10).map((s) => {
             const product = PRODUCT_BY_ID[s.productId];
-            return [s.date, product ? product.name : s.productName || '—', s.targetProblem || '—',
-              isoDate(addDays(s.date, product ? product.phiDays : 0))];
+            return [s.date, product ? product.name : s.productName || '—',
+              isoDate(addDays(s.date, product ? product.phiDays : 0)),
+              stampOf(s), s.photo ? 'yes' : 'no'];
           }))
         : '<p><small>Nothing sprayed on this bed yet.</small></p>'),
     );
@@ -249,7 +262,10 @@ export const cycleView = {
       cardHead('Scouting', button('Scout now', 'open-scout', { cls: 'btn-sm btn-ghost', data: { id: cycle.id } }))
       + (scouts.length
         ? '<ul class="list">' + scouts.map((s) => `<li><div class="grow"><b>${esc(s.finding || 'Checked, nothing found')}</b>`
-          + `<small>${esc(friendlyDate(s.date))} — ${esc(s.affectedPct ?? 0)}% of plants affected</small></div>`
+          + `<small>${esc(friendlyDate(s.date))} — ${esc(s.affectedPct ?? 0)}% of plants affected</small>`
+          + `<small>Recorded ${esc(stampOf(s))}</small>`
+          + photoThumb(s.photo, { small: true, alt: 'Photo from this scouting round' })
+          + '</div>'
           + badge(s.affectedPct >= 20 ? 'high' : s.affectedPct >= 5 ? 'watch' : 'low',
             s.affectedPct >= 20 ? 'danger' : s.affectedPct >= 5 ? 'warn' : 'ok') + '</li>').join('') + '</ul>'
         : '<p><small>Nobody has walked this bed yet. Scout once a week, more in the rains.</small></p>'),
@@ -370,8 +386,7 @@ async function saveCycle(ctx, form) {
 }
 
 function openScoutSheet(ctx, cycleId) {
-  const cycle = ctx.state.cycles[cycleId];
-  openSheet(`<h2>Scout ${esc(cycleLabel(ctx.state, cycleId))}</h2>`
+  const el = openSheet(`<h2>Scout ${esc(cycleLabel(ctx.state, cycleId))}</h2>`
     + '<p><small>Walk a diagonal across the bed and look at ten plants properly: undersides of the young '
     + 'leaves, the growing tip, the fruit, and the soil line. Ten looked at well beats fifty glanced at.</small></p>'
     + '<form data-act="save-scout">'
@@ -381,16 +396,20 @@ function openScoutSheet(ctx, cycleId) {
     + field('How many of the ten plants were affected?', select('affected',
       [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ value: n, label: `${n} of 10 (${n * 10}%)` })), 0))
     + field('Anything else', textarea('note', { placeholder: 'optional' }))
+    + photoField('Photo of what you found', 'A picture of the leaf or the fruit is worth more than a description.')
     + '<button class="btn-block btn-lg" type="submit">Save scouting</button></form>'
     + note('info', 'Not sure what you are looking at?', 'Use the Clinic. It asks what you can see and narrows it down.'));
+  bindPhoto(el);
 }
 
 async function saveScout(ctx, form) {
   const data = readForm(form);
   await ctx.store.dispatch('scout.record', {
     id: uid('sc'), cycleId: data.cycleId, finding: data.finding || '',
-    affectedPct: (Number(data.affected) || 0) * 10, note: data.note || '', date: isoDate(),
+    affectedPct: (Number(data.affected) || 0) * 10, note: data.note || '',
+    photo: photoPayload(), date: isoDate(), enteredAt: new Date().toISOString(),
   });
+  resetPhoto();
   closeSheet();
   toast('Scouting saved');
 }
@@ -399,7 +418,7 @@ async function saveScout(ctx, form) {
 
 function openSpraySheet(ctx, cycleId) {
   const usable = PRODUCTS.filter((p) => p.hazard !== 'avoid');
-  openSheet(`<h2>Log a spray</h2>`
+  const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
     + '<form data-act="save-spray">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
@@ -415,7 +434,11 @@ function openSpraySheet(ctx, cycleId) {
     + field('Who sprayed?', input('operator', { value: ctx.user.name }))
     + '<div id="spray-hint"></div>'
     + field('Note', textarea('note', { placeholder: 'Rate used, weather, anything unusual' }))
+    + photoField('Photo of the container',
+      'The label carries the real waiting period and the real rate. A picture of it is the record '
+      + 'that settles any question about what actually went on the crop.')
     + '<button class="btn-block btn-lg" type="submit">Save spray</button></form>');
+  bindPhoto(el);
   const sel = document.querySelector('.sheet select[name=productId]');
   if (sel) updateSprayHints(ctx, sel);
 }
@@ -456,8 +479,9 @@ async function saveSpray(ctx, form) {
     productName: product ? product.name : '', phiDays: product ? product.phiDays : 0,
     reiHours: product ? product.reiHours : 24, targetProblem: data.targetProblem || '',
     operator: data.operator || '', note: data.note || '', date: data.date || isoDate(),
-    at: new Date().toISOString(),
+    photo: photoPayload(), at: new Date().toISOString(), enteredAt: new Date().toISOString(),
   });
+  resetPhoto();
   closeSheet();
   toast(product && product.phiDays > 0
     ? `Logged. No picking on that bed until ${isoDate(addDays(data.date || isoDate(), product.phiDays))}`

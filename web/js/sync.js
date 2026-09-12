@@ -201,11 +201,34 @@ export async function signOutDevice() {
 
 // --- Exchanging records ---------------------------------------------------
 
+const MAX_PUSH_BYTES = 3_000_000;   // the server refuses more than 5 MB in one go
+
+/**
+ * Trim a batch so it fits in one request.
+ *
+ * Counting records is not enough once photos are attached: four hundred
+ * pickings with pictures is tens of megabytes, and the server would refuse the
+ * lot. A single record larger than the cap is still sent on its own, so one
+ * oversized photo cannot wedge the outbox for ever.
+ */
+function fitBatch(events) {
+  const out = [];
+  let bytes = 0;
+  for (const event of events) {
+    const size = JSON.stringify(event).length;
+    if (out.length && bytes + size > MAX_PUSH_BYTES) break;
+    out.push(event);
+    bytes += size;
+  }
+  return out;
+}
+
 async function push() {
   let sent = 0, refused = 0;
   for (;;) {
-    const batch = await unsyncedEvents(PUSH_BATCH);
-    if (!batch.length) break;
+    const queued = await unsyncedEvents(PUSH_BATCH);
+    if (!queued.length) break;
+    const batch = fitBatch(queued);
     const payload = batch.map(({ synced, ...rest }) => rest);
     const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/events`, {
       method: 'POST', body: { events: payload },
@@ -220,7 +243,9 @@ async function push() {
       console.warn('The server would not accept some records:', result.refused);
     }
     if (typeof result.total === 'number') setStatus({ serverEvents: result.total });
-    if (batch.length < PUSH_BATCH) break;
+    // Keep going while anything is still queued; the size cap means a full
+    // outbox can take several trips even when the count is small.
+    if (batch.length === queued.length && queued.length < PUSH_BATCH) break;
   }
   return { sent, refused };
 }

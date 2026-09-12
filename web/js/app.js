@@ -9,6 +9,7 @@ import { clinicView, diagnoseView, guideView, guideItemView } from './ui/clinic.
 import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
+import { auditView } from './ui/audit.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
@@ -23,6 +24,7 @@ registerRoute('#/guide/item', guideItemView);
 registerRoute('#/dashboard', dashboardView);
 registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);
+registerRoute('#/audit', auditView);
 registerRoute('#/people', peopleView);
 registerRoute('#/store', storeView);
 registerRoute('#/money', moneyView);

@@ -124,8 +124,9 @@ export async function seedSampleFarm(store) {
     id: uid('t'), title: 'Side-dress Bed 2 with NPK', assignedTo: 'sp_blessing',
     cycleId: 'sp_c3', dueDate: d(1), priority: 'normal' } });
 
-  // Attendance and work over the last fortnight.
-  for (let i = 14; i >= 1; i--) {
+  // Attendance across the whole picking period, so the record checks are not
+  // shouting about work with no matching shift in what is only demo data.
+  for (let i = 45; i >= 1; i--) {
     const day = addDays(today, -i);
     if (day.getDay() === 0) continue; // Sunday off
     for (const person of pickers.concat('sp_tamuno')) {

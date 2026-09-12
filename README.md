@@ -92,6 +92,95 @@ running out of, and when to plant next season.
 
 ---
 
+## Farm check: is it working, and can I believe it?
+
+The CEO and manager get a **Farm check** screen with three tabs. It exists to
+answer two questions that the rest of the app assumes away.
+
+### Analysis: is the farm working?
+
+The test for anything on this tab is whether it would change a decision.
+
+- **Picking trend**, last twelve weeks, with the last four compared against the four before.
+- **What a kilo costs against what it fetches.** Inputs and labour over what was
+  actually picked, against what sales actually realised. This is the number that
+  says whether the season is paying, and it is blunt when it is not.
+- **Which beds are pulling their weight**, judged against the part of each bed's
+  *own* forecast that has already passed, so a young bed is not marked down for
+  being young.
+- **Who is doing what**: hours, pickings and kilos per hour, with the caveat
+  printed on the screen that picking rate depends on the crop and the bed as
+  much as the person.
+- **Grade mix**, because rejects are where the price goes.
+
+### Record checks: can I believe the books?
+
+Eleven checks run over every record. Each finding answers three questions,
+because one that cannot is just noise: what specifically looks wrong in numbers,
+what the innocent explanation is, and what would settle it.
+
+| Check | What it catches |
+|---|---|
+| Late entry | Work written up days after the day it claims |
+| Future-dated | A record dated ahead of when it was made |
+| Bulk backfill | A week of records entered in one sitting |
+| Clock skew | A phone whose clock is adrift, making its times unreliable |
+| Possible duplicate | Same bed, same day, same weight, twice |
+| Unusual weight | A picking far outside what that bed normally gives |
+| No matching shift | Work recorded for a day that person never clocked in |
+| Sold more than picked | More left the farm than was ever recorded as picked |
+| Silent bed | A bed in full picking that nobody has touched for days |
+| Estimated weights | Weights that are always round numbers |
+| Old photo | Evidence attached long after it was taken |
+
+**It never says anyone is dishonest.** On a real farm most of these turn out to
+be a dead phone or a paper book written up on Friday, and an app that cried theft
+every time would be switched off within a week. Each card leads with the innocent
+explanation. The per-person table is explicitly labelled as measuring
+record-keeping, not honesty, with a note that someone working the back field
+with no signal will always look worse than someone at the office, and that this
+is about the network rather than about them.
+
+**Repeated findings collapse.** Thirty cards saying the same thing is a screen
+nobody reads, so the same question about the same person becomes one finding with
+a count and a few examples.
+
+**The headline score** measures how records were *made*, not whether people are
+honest: recorded on the day, backed by a photo, checked by a second person. A
+record made at the bed with a picture, checked by someone else, is one you can
+stand behind at a bank or a buyer. One remembered on Friday is not, however
+truthful.
+
+**Sold more than picked** is the one worth chasing first. Either crates are
+leaving unrecorded or the picking book is incomplete, and both cost real money.
+
+### Evidence: the pictures
+
+Photos can be attached to pickings, scouting rounds, sprays and problem reports,
+and they collect here newest first with who took them and when.
+
+Provenance is recorded, not just the image. A photo taken at the bed at the time
+is evidence; one picked out of the gallery days later is a claim, and the app
+labels it as such using the file's own timestamp. A picture of a spray
+container's label is the record that settles any later argument about what
+actually went on the crop and how long the waiting period really was.
+
+Pictures are compressed hard, because a farm phone on a data bundle cannot
+afford otherwise, and the sync batches by byte size so a run of photos cannot
+jam the outbox.
+
+## Timestamps
+
+Every record carries three times, and the Farm check screen compares them:
+
+- **The day it claims**, which the person picks.
+- **When it was entered**, stamped by the phone.
+- **When it reached the server**, stamped by the server, which is the one that
+  cannot be argued with.
+
+Lists show when a record was entered, and say so explicitly when that differs
+from the day it claims.
+
 ## The four things this app is actually for
 
 ### 1. Recording work, with the safety rule enforced
@@ -151,6 +240,8 @@ State ADP extension service for anything that could take a whole bed.
 - **Labour**: how many pickers are needed next week for the weight expected.
 - **Stock**: how many days of each input are left at the rate it is actually being used.
 - **Cashflow** month by month, and the break-even weight at the current price.
+- **Record checks**: eleven tests over the farm's own books, described under
+  Farm check above.
 
 ### 4. Planting to hit the price
 
@@ -340,13 +431,15 @@ douvalue/
 │     ├─ i18n.js         English and Pidgin
 │     ├─ sample.js       the worked example farm
 │     ├─ domain/
+│     │  ├─ analysis.js  trend, bed performance, labour, unit economics, grades
+│     │  ├─ integrity.js the eleven record checks and the scoring behind them
 │     │  ├─ crops.js     the three peppers: stages, spacing, feeding, water
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
 │     │  ├─ pests.js     32 problems, 67 symptoms, management for each
 │     │  ├─ diagnose.js  symptom scoring, next checks, risk board
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
-│     └─ ui/             shell, kit, worker, field, clinic, manage
+│     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
@@ -364,13 +457,16 @@ node --test "douvalue/tests/**/*.test.mjs"
 # or, from the douvalue directory:  npm test
 ```
 
-92 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
+123 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
 planting-window optimiser, event-log replay including out-of-order merges, the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own
 token trying to pull the wage bill, a hand pushing a sale, a hand pushing a record that
 promotes themselves, a manager trying to mint another manager, a reused invite, a wrong
-password, one farm reaching into another, and a revoked phone.
+password, one farm reaching into another, and a revoked phone. The record checks are tested both ways: that they fire on late
+entry, bulk backfill, duplicates, outliers, clock skew and selling more than was
+picked, and that they stay silent on a clean week, a young bed, a farm that does
+not use clock-in, and ordinary sync delay.
 
 ## Limits worth knowing
 

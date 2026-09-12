@@ -11,7 +11,7 @@ import { getCrop, stageAt } from '../domain/crops.js';
 import { harvestClearance, reentryClearance, SPRAY_RULES } from '../domain/safety.js';
 import { forecastHeadline, seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
-import { compressImage } from '../db.js';
+import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 
 let weather = null; // filled in by app.js when a forecast is available
 export function setWeather(w) { weather = w; }
@@ -105,7 +105,9 @@ export const todayView = {
       out += card(
         cardHead('What you picked today')
         + '<ul class="list">' + myHarvest.map((h) => `<li><div class="grow">`
-          + `<b>${esc(kg(h.kg))}</b><small>${esc(cycleLabel(state, h.cycleId))} — ${esc(timeOfDay(h.at))}</small>`
+          + `<b>${esc(kg(h.kg))}</b><small>${esc(cycleLabel(state, h.cycleId))}</small>`
+          + `<small>Recorded ${esc(timeOfDay(h.at))}${h.date !== isoDate() ? ` for ${esc(h.date)}` : ''}</small>`
+          + photoThumb(h.photo, { small: true, alt: 'Photo of this picking' })
           + `</div>${h.verified ? badge('checked', 'ok') : badge('waiting', 'warn')}</li>`).join('') + '</ul>'
         + `<p style="margin:10px 0 0"><small>Total today: <b>${esc(kg(sum(myHarvest, (h) => h.kg)))}</b></small></p>`,
       );
@@ -204,8 +206,10 @@ function renderHarvestBody(ctx, sheetEl, cycleId) {
       { value: 'reject', label: 'Reject — rotten or spoiled' },
     ], 'first'))
     + field(t('common.note'), textarea('note', { placeholder: 'Anything the supervisor should know' }))
+    + photoField('Photo of the crates', 'Not required, but a picture taken at the bed settles any question later.')
     + '<button class="btn-block btn-lg" type="submit">' + esc(t('common.save')) + '</button>'
     + '</form>';
+  bindPhoto(sheetEl);
 }
 
 async function saveHarvest(ctx, form) {
@@ -225,20 +229,22 @@ async function saveHarvest(ctx, form) {
     crates: Number(data.crates) || null,
     grade: data.grade,
     note: data.note || '',
+    photo: photoPayload(),
+    // The day the work is claimed for. When it was actually entered is stamped
+    // on the event itself, and the two are compared on the Farm check screen.
     date: isoDate(),
+    enteredAt: new Date().toISOString(),
   });
+  resetPhoto();
   closeSheet();
   toast(`${t('harvest.saved')}: ${kg(kgValue)}`);
 }
 
 // --- Problem report -------------------------------------------------------
 
-let photoData = null;
-
 function openReportSheet(ctx) {
-  photoData = null;
   const beds = bedOptions(ctx.store.state);
-  openSheet(
+  const el = openSheet(
     `<h2>${esc(t('today.reportProblem'))}</h2>`
     + '<form data-act="save-report">'
     + field(t('common.bed'), select('cycleId', beds, '', { placeholder: 'Not about one bed' }))
@@ -252,32 +258,14 @@ function openReportSheet(ctx) {
       { value: 'medium', label: 'Spreading — a patch' },
       { value: 'high', label: 'Serious — call somebody now' },
     ], 'medium'))
-    + '<div class="field"><label>' + esc(t('common.photo')) + '</label>'
-    + '<input type="file" accept="image/*" capture="environment" name="photo" style="display:none">'
-    + button('📷 ' + t('common.photo'), 'pick-photo', { cls: 'btn-ghost btn-block' })
-    + '<div id="photo-preview"></div></div>'
+    + photoField(t('common.photo'), 'A picture of the plant helps more than any description.')
     + '<button class="btn-block btn-lg" type="submit">Send report</button>'
     + '</form>'
     + note('info', 'Not sure what it is?',
       'The Clinic can walk you through it question by question and tell you what to do. '
       + 'You can still send the report first.'),
   );
-
-  const fileInput = document.querySelector('.sheet input[type=file]');
-  if (fileInput) {
-    fileInput.onchange = async () => {
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) return;
-      try {
-        photoData = await compressImage(file);
-        const preview = document.querySelector('#photo-preview');
-        if (preview) preview.innerHTML = `<img src="${photoData}" alt="Photo of the problem" `
-          + 'style="max-width:100%;border-radius:12px;margin-top:8px">';
-      } catch (err) {
-        toast(err.message, true);
-      }
-    };
-  }
+  bindPhoto(el);
 }
 
 async function saveReport(ctx, form) {
@@ -288,10 +276,11 @@ async function saveReport(ctx, form) {
     cycleId: data.cycleId || null,
     note: data.note.trim(),
     severity: data.severity,
-    photo: photoData,
+    photo: photoPayload(),
     date: isoDate(),
+    enteredAt: new Date().toISOString(),
   });
-  photoData = null;
+  resetPhoto();
   closeSheet();
   toast(getLang() === 'pcm' ? 'Dem don hear you' : 'Report sent to the supervisor');
 }
