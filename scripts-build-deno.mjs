@@ -3,7 +3,7 @@
 // Deno Deploy's Playground takes one pasted file, so the core cannot be an
 // import. Generating the file keeps a single source of truth and makes the
 // paste-one-file setup honest: the test suite fails if it drifts.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -101,5 +101,27 @@ const store = {
 Deno.serve((req) => handleRequest(req, store));
 `;
 
-writeFileSync(join(here, 'server/deno-sync.ts'), header + core + adapter);
-console.log('server/deno-sync.ts rebuilt from server/core.mjs');
+const built = header + core + adapter;
+writeFileSync(join(here, 'server/deno-sync.ts'), built);
+
+// A second copy under deploy/, named main.ts, so Deno Deploy's "clone this
+// folder" flow finds it by convention with nothing to configure. That folder
+// holds exactly one file on purpose: pointed at it, the clone produces a small
+// repository containing the server and nothing else.
+mkdirSync(join(here, 'server/deploy'), { recursive: true });
+writeFileSync(join(here, 'server/deploy/main.ts'), built);
+writeFileSync(join(here, 'server/deploy/README.md'), `# DouValue farm sync server
+
+GENERATED. Do not edit \`main.ts\` here: change \`../core.mjs\` and run
+
+    node douvalue/scripts-build-deno.mjs
+
+This folder exists so it can be deployed on its own. It holds one file, which is
+the whole server, so pointing Deno Deploy at this directory needs no entry point
+and no configuration.
+
+The farm app then connects to whatever address the deployment is given, under
+Settings, Sync, Connect the farm.
+`);
+
+console.log('server/deno-sync.ts and server/deploy/main.ts rebuilt from server/core.mjs');

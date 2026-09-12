@@ -60,36 +60,52 @@
 <p>This gives every person on the farm their own account, so a farm hand's phone
 is never sent wages or sales. It is free and takes about five minutes.</p>
 
-<div class="note" style="background:var(--surface-2);border-left-color:var(--accent)">
-  <b>Two ways to do this</b>
-  The first involves no pasting at all. Try that one.
+<div class="card">
+  <h2>One tap</h2>
+  <p>This opens Deno Deploy with everything already filled in: your repository,
+  the right folder, and the server file inside it.</p>
+  <p><a id="oneTap"
+     href="https://console.deno.com/new?clone=https://github.com/samebimo10-cpu/Stock-&amp;path=douvalue/server/deploy"
+     target="_blank" rel="noopener">
+     <button type="button">Open Deno Deploy, ready to go</button></a></p>
+  <p>Sign in with GitHub if it asks. Check that it says:</p>
+  <ul>
+    <li><b>Repository URL</b> &mdash; <code>https://github.com/samebimo10-cpu/Stock-</code></li>
+    <li><b>Subdirectory</b> &mdash; <code>/douvalue/server/deploy</code></li>
+  </ul>
+  <p>Leave the repository name as it suggests, then deploy. The folder holds one
+  file and that file is the whole server, so there is nothing else to set.</p>
+  <p><small>This makes a small copy of the server in your own GitHub account.
+  That copy stays as it is: if the server is ever improved, you would deploy
+  again to pick it up. If you would rather it tracked the original, use the
+  repository option below instead.</small></p>
+</div>
+
+<h2 style="margin-top:30px">If that link does not fill itself in</h2>
+<p><small>Deno changes these screens from time to time. Either of the following
+does the same job.</small></p>
+
+<div class="card">
+  <h2>Deploy the repository as it is</h2>
+  <p>Go to <a href="https://console.deno.com/new" target="_blank" rel="noopener">console.deno.com/new</a>
+  with nothing after the address, and look for an option to deploy an
+  <b>existing</b> GitHub repository rather than cloning an example.</p>
+  <ol>
+    <li>Repository: <b>Stock-</b></li>
+    <li>Branch: <pre id="branchname">claude/stock-selector-allocator-app-8lic01</pre>
+      <button onclick="copyText(document.getElementById('branchname').textContent.trim(), this)">Copy the branch name</button></li>
+    <li>Entry point: <pre id="entrypath">douvalue/server/deploy/main.ts</pre>
+      <button onclick="copyText(document.getElementById('entrypath').textContent.trim(), this)">Copy the file path</button></li>
+  </ol>
+  <p><small>Set up this way the server follows the repository, so improvements
+  reach the farm without deploying again.</small></p>
 </div>
 
 <div class="card">
-  <h2>Easiest: point Deno at the repository</h2>
-  <p>Deno Deploy can run a file straight out of your own GitHub repository, so
-  there is nothing to copy and nothing to keep up to date by hand.</p>
-  <ol>
-    <li>Go to <a href="https://dash.deno.com" target="_blank" rel="noopener">dash.deno.com</a>
-      and sign in with GitHub.</li>
-    <li>Create a <b>New Project</b> and choose the option to deploy from a
-      <b>GitHub repository</b> rather than a Playground.</li>
-    <li>Pick the repository <b>Stock-</b> and the branch
-      <b>claude/stock-selector-allocator-app-8lic01</b>.</li>
-    <li>When it asks for the <b>entry point</b> file, give it:
-      <pre id="entrypath">douvalue/server/deno-sync.ts</pre>
-      <button onclick="copyText(document.getElementById('entrypath').textContent.trim(), this)">Copy the file path</button>
-    </li>
-    <li>Deploy. Skip to step 3 below for what happens next.</li>
-  </ol>
-  <p><small>Done this way, the server updates itself whenever the farm app is
-  improved, because it is running the file in your repository rather than a
-  copy.</small></p>
+  <h2>Or paste it into a Playground</h2>
+  <p><small>A Playground is simply an editor that runs one file. Use this if
+  neither of the above works.</small></p>
 </div>
-
-<h2 style="margin-top:30px">Or: paste it into a Playground</h2>
-<p><small>Use this if you cannot find the GitHub option, or you would rather the
-server were a copy that never changes on its own.</small></p>
 
 <div class="card">
   <h2>1. Open Deno Deploy and start a Playground</h2>

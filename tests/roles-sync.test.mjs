@@ -505,12 +505,18 @@ test('the same farm replays differently for a hand, and still works', async () =
   assert.equal(rebuilt.expenses.length, 0);
 });
 
-test('the generated Deno server has not drifted from the core', async () => {
+test('the generated Deno servers have not drifted from the core', async () => {
   const { readFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');
-  const generated = new URL('../server/deno-sync.ts', import.meta.url).pathname;
-  const before = readFileSync(generated, 'utf8');
+  const generated = [
+    new URL('../server/deno-sync.ts', import.meta.url).pathname,
+    new URL('../server/deploy/main.ts', import.meta.url).pathname,
+  ];
+  const before = generated.map((path) => readFileSync(path, 'utf8'));
   execFileSync(process.execPath, [new URL('../scripts-build-deno.mjs', import.meta.url).pathname], { stdio: 'ignore' });
-  assert.equal(readFileSync(generated, 'utf8'), before,
-    'server/deno-sync.ts is generated: run node douvalue/scripts-build-deno.mjs and commit the result');
+  generated.forEach((path, i) => {
+    assert.equal(readFileSync(path, 'utf8'), before[i],
+      `${path} is generated: run node douvalue/scripts-build-deno.mjs and commit the result`);
+  });
+  assert.equal(before[0], before[1], 'both copies of the server must be the same file');
 });
