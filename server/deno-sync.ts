@@ -838,12 +838,15 @@ async function advise(farmId, body, me, store) {
     }
     const text = (answer.content || [])
       .filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    // Citations are URLs the model produced after reading pages nobody here
+    // controls. The app checks them again before it makes a link of one, but
+    // the server should not hand out an address it would not follow itself.
     const sources = [];
     for (const block of answer.content || []) {
       for (const c of block.citations || []) {
-        if (c.url && !sources.some((s) => s.url === c.url)) {
-          sources.push({ url: c.url, title: c.title || c.url });
-        }
+        if (!c.url || !/^https?:\/\//i.test(String(c.url))) continue;
+        if (sources.some((s) => s.url === c.url)) continue;
+        sources.push({ url: String(c.url), title: String(c.title || c.url).slice(0, 200) });
       }
     }
 

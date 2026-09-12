@@ -449,6 +449,9 @@ h2.section {
 
 ul.sources { margin: 4px 0 0; padding-left: 20px; }
 ul.sources a { color: var(--accent); }
+/* The address beside the title, so a convincing name over an unfamiliar host
+   is visible before anybody taps it. */
+.src-host { color: var(--ink-2); word-break: break-all; }
 
 /* The brief, shown verbatim. Scrolls on its own rather than stretching the
    page sideways on a phone. */

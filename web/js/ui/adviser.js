@@ -100,7 +100,7 @@ function head(result) {
 function recCard(r) {
   const u = URGENCY[r.urgency];
   return card(
-    cardHead(`${AREA_ICON[r.area] || '•'} ${esc(r.title)}`, badge(u.label, u.tone))
+    cardHead(`${AREA_ICON[r.area] || '•'} ${r.title}`, badge(u.label, u.tone))
     + `<p class="why"><b>Why:</b> ${esc(r.because)}</p>`
     + (r.cost ? `<p class="cost"><b>If it is left:</b> ${esc(r.cost)}</p>` : '')
     + `<p class="do"><b>Do this:</b> ${esc(r.action)}</p>`
@@ -202,11 +202,41 @@ function prose(text) {
   }).join('');
 }
 
+/**
+ * Only ever link to a web address.
+ *
+ * esc() stops a value breaking out of the attribute, but it says nothing about
+ * what the value *means*, and `javascript:` in an href is dangerous while
+ * perfectly well-formed. These URLs come back from a web search, which is to
+ * say from pages nobody here controls, so the scheme is checked rather than
+ * assumed. Anything else is shown as plain text: the reader still sees what it
+ * claimed to be, and cannot tap it.
+ */
+function safeUrl(url) {
+  try {
+    const parsed = new URL(String(url), location.href);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceList(sources) {
   if (!sources || !sources.length) return '';
   return '<p><small><b>Read from:</b></small></p><ul class="sources">'
-    + sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">`
-      + `<small>${esc(s.title)}</small></a></li>`).join('')
+    + sources.map((s) => {
+      const href = safeUrl(s.url);
+      // The host is shown beside the title so a convincing name over an
+      // unfamiliar address is visible before anybody taps it.
+      const host = href ? new URL(href).hostname : null;
+      const label = `<small>${esc(s.title)}</small>`;
+      return '<li>'
+        + (href
+          ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+            + ` <small class="src-host">${esc(host)}</small>`
+          : `${label} <small class="src-host">not a web address</small>`)
+        + '</li>';
+    }).join('')
     + '</ul>';
 }
 
