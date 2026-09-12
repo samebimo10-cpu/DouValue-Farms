@@ -140,15 +140,72 @@ function redactSettings(event, reader) {
 }
 
 /**
- * Nobody may promote themselves. A write that creates or changes an account is
- * only allowed if the author could have handed out that role in the first place.
+ * Nobody may promote themselves, and nobody may reach upwards.
+ *
+ * Checking only the role being granted is not enough, and getting that wrong is
+ * how a manager quietly unseats the owner: "make this person a farm hand" is a
+ * role a manager may grant, so pointing it at the CEO's own account would pass.
+ * Every app works out who you are from this log, so the owner's next sign-in
+ * would hand them a farm hand's screens. The target's *current* standing has to
+ * be checked as well, which needs the server's own record of them, not the
+ * client's claim. That check lives in mayWritePerson below.
  */
 function guardPersonWrite(event, author) {
-  const target = (event.payload || {}).role;
-  if (!target) return { ok: true };                    // deactivate and the like
-  if (!assignableRoles(author.role).includes(target)) {
-    return { ok: false, why: `A ${author.role} cannot create or change a ${target}` };
+  const payload = event.payload || {};
+  const granting = payload.role;
+  if (!granting) return { ok: true };                  // deactivate and the like
+
+  // Correcting your own details while keeping the role you already hold is
+  // ordinary housekeeping. Without this, a manager could not fix their own
+  // phone number, because "manager" is not a role a manager may hand out.
+  if (payload.id && payload.id === author.id && granting === author.role) return { ok: true };
+
+  if (!assignableRoles(author.role).includes(granting)) {
+    return { ok: false, why: `A ${author.role} cannot create or change a ${granting}` };
   }
+  return { ok: true };
+}
+
+/**
+ * The half of the check that needs to look the target up.
+ *
+ * You may always edit your own details, but never your own role. You may only
+ * touch somebody else if you could have appointed them in the first place, which
+ * is what stops anyone reaching over their own head. And the farm must never be
+ * left without an owner.
+ */
+export async function mayWritePerson(event, author, farmId, store) {
+  if (event.type !== 'person.upsert' && event.type !== 'person.deactivate') return { ok: true };
+
+  const payload = event.payload || {};
+  const targetId = payload.id;
+  if (!targetId) return { ok: false, why: 'That record names nobody' };
+
+  const existing = await store.getMember(farmId, targetId);
+
+  if (targetId === author.id) {
+    if (event.type === 'person.deactivate') {
+      return { ok: false, why: 'You cannot remove your own account' };
+    }
+    if (payload.role && existing && payload.role !== existing.role) {
+      return { ok: false, why: 'You cannot change your own role' };
+    }
+    return { ok: true };
+  }
+
+  // Somebody the server has never heard of is a new account, already covered by
+  // the check on the role being granted.
+  if (!existing) return { ok: true };
+
+  if (!assignableRoles(author.role).includes(existing.role)) {
+    return { ok: false, why: `A ${author.role} cannot change a ${existing.role}` };
+  }
+
+  if (event.type === 'person.deactivate' && existing.role === 'ceo') {
+    const owners = (await store.listMembers(farmId)).filter((m) => m.role === 'ceo' && m.status === 'active');
+    if (owners.length <= 1) return { ok: false, why: 'That is the only CEO account' };
+  }
+
   return { ok: true };
 }
 
@@ -554,6 +611,11 @@ async function writeEvents(farmId, body, me, store) {
     }
     const verdict = mayWrite(event, me);
     if (!verdict.ok) { refused.push({ id: event.id, why: verdict.why }); continue; }
+
+    // Account records need the target's standing on the server, not the claim
+    // in the record, so this check cannot be folded into the table above.
+    const overPerson = await mayWritePerson(event, me, farmId, store);
+    if (!overPerson.ok) { refused.push({ id: event.id, why: overPerson.why }); continue; }
     // Authorship is the server's to decide, never the client's claim.
     allowed.push({ ...event, by: me.id, serverAt: new Date().toISOString() });
   }

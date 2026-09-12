@@ -383,6 +383,81 @@ test('work is filed under whoever actually sent it', async () => {
   assert.equal(harvest.by, handId, 'the claimed author is replaced with the authenticated one');
 });
 
+test('a manager cannot unseat the owner by rewriting their record', async () => {
+  // The dangerous shape: "make this person a farm hand" is a role a manager may
+  // grant, so pointing it at the CEO's own account would slip past a check that
+  // only looked at the role being handed out. Every app reads roles out of this
+  // log, so it would have handed the owner a farm hand's screens.
+  const invited = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Second Manager', role: 'manager' },
+  });
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '3030' },
+  });
+  const managerToken = joined.body.token;
+
+  const demote = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: managerToken,
+    body: { events: [{ id: 'e_demote_ceo', type: 'person.upsert',
+      payload: { id: 'person_ceo', name: 'Ebimo Sam', role: 'hand' } }] },
+  });
+  assert.equal(demote.body.accepted, 0, 'the owner must not be demotable');
+  assert.match(demote.body.refused[0].why, /cannot change a ceo/i);
+
+  const remove = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: managerToken,
+    body: { events: [{ id: 'e_remove_ceo', type: 'person.deactivate', payload: { id: 'person_ceo' } }] },
+  });
+  assert.equal(remove.body.accepted, 0, 'nor removable');
+
+  // And the owner's record in the log is untouched.
+  const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
+  assert.equal(page.body.events.some((e) => e.id === 'e_demote_ceo'), false);
+  assert.equal(page.body.events.some((e) => e.id === 'e_remove_ceo'), false);
+});
+
+test('a manager cannot promote themselves by editing their own record', async () => {
+  const invited = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Third Manager', role: 'manager' },
+  });
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '4040' },
+  });
+  const token = joined.body.token;
+  const myId = joined.body.member.id;
+
+  const selfPromote = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token,
+    body: { events: [{ id: 'e_self_ceo', type: 'person.upsert',
+      payload: { id: myId, name: 'Third Manager', role: 'ceo' } }] },
+  });
+  assert.equal(selfPromote.body.accepted, 0);
+
+  // But editing their own details, without touching the role, is fine.
+  const ownDetails = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token,
+    body: { events: [{ id: 'e_own_phone', type: 'person.upsert',
+      payload: { id: myId, name: 'Third Manager', role: 'manager', phone: '08031111111' } }] },
+  });
+  assert.equal(ownDetails.body.accepted, 1, 'people may still correct their own details');
+
+  const selfRemove = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token,
+    body: { events: [{ id: 'e_self_remove', type: 'person.deactivate', payload: { id: myId } }] },
+  });
+  assert.equal(selfRemove.body.accepted, 0, 'and nobody deletes themselves');
+});
+
+test('a record naming nobody is refused', async () => {
+  const nameless = await call(`/api/farms/${FARM}/events`, {
+    method: 'POST', token: ceoToken,
+    body: { events: [{ id: 'e_nameless', type: 'person.upsert', payload: { name: 'Ghost', role: 'hand' } }] },
+  });
+  assert.equal(nameless.body.accepted, 0);
+});
+
 test('signing a phone out stops that token dead', async () => {
   const stillWorks = await call(`/api/farms/${FARM}/me`, { token: handToken });
   assert.equal(stillWorks.status, 200);
