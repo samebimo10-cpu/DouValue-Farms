@@ -56,9 +56,40 @@
 </header>
 <main>
 
-<h1>What to paste, and where</h1>
+<h1>Connecting the farm</h1>
 <p>This gives every person on the farm their own account, so a farm hand's phone
 is never sent wages or sales. It is free and takes about five minutes.</p>
+
+<div class="note" style="background:var(--surface-2);border-left-color:var(--accent)">
+  <b>Two ways to do this</b>
+  The first involves no pasting at all. Try that one.
+</div>
+
+<div class="card">
+  <h2>Easiest: point Deno at the repository</h2>
+  <p>Deno Deploy can run a file straight out of your own GitHub repository, so
+  there is nothing to copy and nothing to keep up to date by hand.</p>
+  <ol>
+    <li>Go to <a href="https://dash.deno.com" target="_blank" rel="noopener">dash.deno.com</a>
+      and sign in with GitHub.</li>
+    <li>Create a <b>New Project</b> and choose the option to deploy from a
+      <b>GitHub repository</b> rather than a Playground.</li>
+    <li>Pick the repository <b>Stock-</b> and the branch
+      <b>claude/stock-selector-allocator-app-8lic01</b>.</li>
+    <li>When it asks for the <b>entry point</b> file, give it:
+      <pre id="entrypath">douvalue/server/deno-sync.ts</pre>
+      <button onclick="copyText(document.getElementById('entrypath').textContent.trim(), this)">Copy the file path</button>
+    </li>
+    <li>Deploy. Skip to step 3 below for what happens next.</li>
+  </ol>
+  <p><small>Done this way, the server updates itself whenever the farm app is
+  improved, because it is running the file in your repository rather than a
+  copy.</small></p>
+</div>
+
+<h2 style="margin-top:30px">Or: paste it into a Playground</h2>
+<p><small>Use this if you cannot find the GitHub option, or you would rather the
+server were a copy that never changes on its own.</small></p>
 
 <div class="card">
   <h2>1. Open Deno Deploy and start a Playground</h2>

@@ -328,9 +328,17 @@ its next exchange, within seconds. Nobody else has to change anything, because
 nobody else shared a password with them.
 
 **Setting the server up.** Free, and about five minutes. There is a page that
-walks through it and hands you the text to paste:
+walks through both routes:
 
 **https://samebimo10-cpu.github.io/Stock-/farm/server/**
+
+The easiest route involves no copying at all: in Deno Deploy, create a project
+from the **GitHub repository** rather than a Playground, pick this repo and its
+default branch, and give `douvalue/server/deno-sync.ts` as the entry point. The
+server then tracks the repository, so improvements to it reach the farm without
+anyone redeploying by hand.
+
+If the GitHub option cannot be found, the paste route still works:
 
 1. Open **dash.deno.com** and start a new Playground, which is an editor that
    runs one file. Clear the example already in it.
