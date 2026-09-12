@@ -140,6 +140,7 @@ export const dashboardView = {
     out += card(
       cardHead('Go to')
       + '<div class="grid">'
+      + button('Ask the adviser', 'go', { cls: 'btn-ghost', icon: '🧠', data: { to: '#/adviser' } })
       + button('Farm check', 'go', { cls: 'btn-ghost', icon: '🔎', data: { to: '#/audit' } })
       + button('Planting planner', 'go', { cls: 'btn-ghost', icon: '📅', data: { to: '#/plan' } })
       + button('Reports', 'go', { cls: 'btn-ghost', icon: '📄', data: { to: '#/reports' } })

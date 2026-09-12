@@ -346,6 +346,7 @@ async function readJson(req) {
  *   GET  /api/farms/:id/members     names and roles
  *   GET  /api/farms/:id/events      everything this role may see since a cursor
  *   POST /api/farms/:id/events      file records, each checked against the author
+ *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  */
 export async function handleRequest(req, store) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -389,6 +390,7 @@ export async function handleRequest(req, store) {
   if (action === 'unlock' && req.method === 'POST') return unlock(farmId, body, me, store, auth.token);
   if (action === 'events' && req.method === 'GET') return readEvents(farmId, url, me, store);
   if (action === 'events' && req.method === 'POST') return writeEvents(farmId, body, me, store);
+  if (action === 'advise' && req.method === 'POST') return advise(farmId, body, me, store);
 
   return json({ error: 'Not found' }, 404);
 }
@@ -627,4 +629,227 @@ async function writeEvents(farmId, body, me, store) {
   });
 }
 
-export { json, CORS };
+// --- The wider adviser ----------------------------------------------------
+//
+// The app already has an adviser of its own that works with the network off.
+// This adds the part that offline reasoning cannot do: read what is true this
+// week rather than what was true when the app was written — an advisory on a
+// pest moving through the region, a product deregistered, what pepper is
+// actually fetching now.
+//
+// Three things make this safe to expose:
+//
+//   1. The key never leaves the server. It is set once on the deployment by the
+//      CEO and no phone ever holds it, so a lost handset cannot spend money.
+//   2. The server redacts before it sends. Whatever the app puts in the brief,
+//      a role without manageMoney gets the money stripped here, because the app
+//      making that decision correctly is a convenience, not a guarantee.
+//   3. Every account has a daily cap. A token in the wrong hands can run up a
+//      bill; this bounds it and the bound is per person, not per farm, so one
+//      person cannot spend everyone else's share.
+
+const ADVICE_PER_DAY = 25;
+// Long enough for a few web searches and a considered answer; short enough that
+// a phone on a weak signal gives up rather than hanging with a spinner.
+const ADVICE_TIMEOUT_MS = 90_000;
+const ADVICE_MODEL = 'claude-opus-5';
+
+const ADVISER_BRIEF = `You are the farm adviser for a commercial pepper farm in Port Harcourt,
+Rivers State, Nigeria. It grows bell pepper (tatashe), chili (shombo) and habanero (ata rodo)
+in open field.
+
+You are given that farm's own records as JSON. Your job is to add what the records cannot
+contain: current outside knowledge. Search the web for anything time-sensitive that changes the
+answer — pest and disease advisories for southern Nigeria, prices in Nigerian markets, product
+registration and ban changes, weather beyond the forecast supplied.
+
+Rules, in order of importance:
+
+1. Never invent a number. If you looked it up, say where from and when it was published. If you
+   could not find it, say you could not find it. A made-up price does more harm here than silence.
+2. Safety outranks everything. Pre-harvest and re-entry intervals are not advice, and no
+   commercial pressure moves them.
+3. Be specific to what is in the records. "Monitor your crop" is worthless. "Bed 3 is 40kg behind
+   and its pH is 4.9" is worth reading.
+4. Every recommendation needs: what you saw in the records, what it costs to ignore, what to do
+   this week, and who says so.
+5. Write for a farm manager in Nigeria, not for an agronomy journal. Short sentences. Naira, kg,
+   hectares and millimetres. No jargon you do not immediately explain.
+6. Do not repeat what the built-in adviser already said unless you are correcting it or adding
+   outside evidence to it. You are told what it said.
+
+Answer in plain prose with short headed sections. No preamble about being an AI.`;
+
+/** Today's date in the farm's own timezone, which is what a daily cap should turn over on. */
+const farmDay = () => new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 10);  // WAT, UTC+1
+
+/**
+ * Live weather from Open-Meteo. Free, no key, no account — which is why it is
+ * the one outside source the adviser can always reach.
+ */
+async function liveWeather() {
+  const url = 'https://api.open-meteo.com/v1/forecast?latitude=4.82&longitude=7.04'
+    + '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,relative_humidity_2m_mean'
+    + '&past_days=14&forecast_days=7&timezone=Africa%2FLagos';
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const d = (await res.json()).daily;
+    if (!d || !Array.isArray(d.time)) return null;
+    return d.time.map((t, i) => ({
+      date: t,
+      tmax: d.temperature_2m_max[i],
+      tmin: d.temperature_2m_min[i],
+      rain: d.precipitation_sum[i],
+      rh: d.relative_humidity_2m_mean ? d.relative_humidity_2m_mean[i] : null,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** Strip anything the reader's role is not entitled to, whatever the client sent. */
+function redactBrief(brief, role) {
+  if (can(role, 'manageMoney')) return brief;
+  const { economics, ...rest } = brief || {};
+  if (rest.farm && rest.farm.askedBy) rest.farm.askedBy = { ...rest.farm.askedBy, seesMoney: false };
+  return rest;
+}
+
+/** Deno and Node keep environment variables in different places, and neither exists in the other. */
+function envVar(name) {
+  try {
+    if (typeof Deno !== 'undefined' && Deno.env) return Deno.env.get(name) || '';
+  } catch { /* not Deno */ }
+  try {
+    if (typeof process !== 'undefined' && process.env) return process.env[name] || '';
+  } catch { /* not Node */ }
+  return '';
+}
+
+/** Count one use against this person's day, and refuse once they are over. */
+async function spendAdviceBudget(farmId, me, store) {
+  const today = farmDay();
+  const used = me.adviceUsed && me.adviceUsed.day === today ? me.adviceUsed.count : 0;
+  if (used >= ADVICE_PER_DAY) return { ok: false, used };
+  await store.setMember(farmId, { ...me, adviceUsed: { day: today, count: used + 1 } });
+  return { ok: true, used: used + 1, left: ADVICE_PER_DAY - used - 1 };
+}
+
+async function advise(farmId, body, me, store) {
+  const key = envVar('ANTHROPIC_API_KEY');
+  const weather = await liveWeather();
+
+  if (!key) {
+    // Not an error: the farm simply has not turned this on. The app keeps its
+    // own adviser either way, and the live weather is still worth returning.
+    return json({
+      ok: false,
+      reason: 'no-key',
+      weather,
+      message: 'The wider adviser is not switched on for this farm. The CEO turns it on by '
+        + 'setting ANTHROPIC_API_KEY on the farm server, in the Deno dashboard under Settings, '
+        + 'Environment Variables. Until then the app advises from its own knowledge.',
+    });
+  }
+
+  const budget = await spendAdviceBudget(farmId, me, store);
+  if (!budget.ok) {
+    return json({
+      ok: false, reason: 'daily-limit', weather,
+      message: `That is ${ADVICE_PER_DAY} questions today on this account. It resets at midnight.`,
+    }, 429);
+  }
+
+  const brief = redactBrief(body.brief, me.role);
+  const question = String(body.question || '').slice(0, 2000).trim();
+  const alreadySaid = Array.isArray(body.alreadySaid)
+    ? body.alreadySaid.slice(0, 20).map((t) => String(t).slice(0, 200))
+    : [];
+
+  const prompt = [
+    'THE FARM\'S OWN RECORDS:',
+    JSON.stringify(brief),
+    '',
+    weather ? `LIVE WEATHER (Open-Meteo, 14 days back and 7 forward):\n${JSON.stringify(weather)}` : '',
+    '',
+    alreadySaid.length
+      ? `THE BUILT-IN ADVISER HAS ALREADY SAID:\n- ${alreadySaid.join('\n- ')}`
+      : '',
+    '',
+    question
+      ? `THE QUESTION, from the farm's ${me.role}:\n${question}`
+      : `No specific question. Give this farm's ${me.role} the most useful reading of these `
+        + 'records you can, with whatever current outside information changes the answer.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
+      body: JSON.stringify({
+        // Overridable, because the farm is the one paying for each question and
+        // a cheaper model is a legitimate choice for a farm making many of them.
+        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        // Thinking is on by default and is billed against this, so the ceiling
+        // has to leave room for it or a good answer gets cut off mid-sentence.
+        max_tokens: 16000,
+        output_config: { effort: 'medium' },
+        system: ADVISER_BRIEF,
+        tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }],
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      return json({
+        ok: false, reason: 'upstream', weather,
+        message: res.status === 401
+          ? 'The farm server\'s ANTHROPIC_API_KEY was refused. Check it in the Deno dashboard.'
+          : 'The wider adviser could not be reached just now. The app\'s own advice still stands.',
+        detail: detail.slice(0, 300),
+      }, 502);
+    }
+
+    const answer = await res.json();
+    if (answer.stop_reason === 'refusal') {
+      return json({
+        ok: false, reason: 'declined', weather,
+        message: 'The wider adviser would not answer that one. Ask it about the farm.',
+      });
+    }
+    const text = (answer.content || [])
+      .filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    const sources = [];
+    for (const block of answer.content || []) {
+      for (const c of block.citations || []) {
+        if (c.url && !sources.some((s) => s.url === c.url)) {
+          sources.push({ url: c.url, title: c.title || c.url });
+        }
+      }
+    }
+
+    return json({
+      ok: true,
+      text,
+      sources,
+      weather,
+      askedAt: new Date().toISOString(),
+      questionsLeftToday: budget.left,
+    });
+  } catch (err) {
+    return json({
+      ok: false, reason: 'timeout', weather,
+      message: 'The wider adviser took too long to answer. Try again when the signal is better.',
+      detail: String(err && err.message || err).slice(0, 200),
+    }, 504);
+  }
+}
+
+export { json, CORS, redactBrief };

@@ -15,6 +15,8 @@ import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './p
 
 let weather = null; // filled in by app.js when a forecast is available
 export function setWeather(w) { weather = w; }
+/** The adviser screen needs the same forecast this one is drawn from. */
+export function getWeather() { return weather; }
 
 function bedOptions(state) {
   return activeCycles(state).map((c) => ({ value: c.id, label: cycleLabel(state, c.id) }));

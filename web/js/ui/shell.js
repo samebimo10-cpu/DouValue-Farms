@@ -74,12 +74,31 @@ function loginScreen(state) {
   if (!people.length) return firstRunScreen(state);
 
   if (!pending.personId) {
+    // Whoever lands here may be nobody on this list: it can be the sample farm
+    // left over from a look around, or a phone that belongs to a farm set up
+    // somewhere else. Without a way off this screen they are stuck on it, so
+    // the ways out sit underneath the faces rather than behind them.
+    const sample = isSampleFarm(state);
     return brandMark(state)
       + `<div class="card"><h2>${esc(t('login.who'))}</h2><div class="people-grid">`
       + people.map((p) => `<div class="person-tile" data-act="pick-person" data-id="${esc(p.id)}">`
         + `<div class="av">${esc(initials(p.name))}</div><b>${esc(p.name)}</b>`
         + `<small>${esc(ROLES[p.role]?.name || p.role)}</small></div>`).join('')
-      + '</div></div>';
+      + '</div>'
+      + (sample ? '<p style="margin:14px 0 0"><small>Every PIN on the sample farm is '
+        + '<b>1234</b>.</small></p>' : '')
+      + '</div>'
+      + '<div class="card tight">'
+      + (sample
+        ? '<b>This is the sample farm</b>'
+          + '<p><small>These are made-up people and made-up records, here so you can look '
+          + 'around. Erase them when you are ready to start on your own farm.</small></p>'
+          + button('Erase this and set up my farm', 'start-real-farm', { cls: 'btn-block', icon: '🌱' })
+        : '<b>Not one of these people?</b>'
+          + '<p><small>Join a farm that already exists, or start a new one on this '
+          + 'phone.</small></p>')
+      + `<div style="margin-top:10px">${button('Join with a code', 'open-join', { cls: 'btn-ghost btn-block' })}</div>`
+      + '</div>';
   }
 
   return pinScreen(state.people[pending.personId], null);
@@ -107,6 +126,18 @@ function pinScreen(person, subtitle) {
       ? `<div style="margin-top:14px">${button('Sign this phone out of the farm', 'device-signout', { cls: 'btn-ghost btn-block btn-sm' })}</div>`
       : `<div style="margin-top:14px">${button(t('login.back'), 'pin-cancel', { cls: 'btn-ghost btn-block' })}</div>`)
     + '</div>';
+}
+
+/**
+ * Is everything on this phone the sample farm?
+ *
+ * The seeder gives every record it makes an `sp_` id and nothing else ever
+ * does, so "every person here is a sample person" is exact: one real account
+ * created alongside them and this stops being a sample farm to erase.
+ */
+function isSampleFarm(state) {
+  const people = Object.values(state.people || {});
+  return people.length > 0 && people.every((p) => String(p.id).startsWith('sp_'));
 }
 
 /** The company mark, shown on the screens people see before they are signed in. */
@@ -212,6 +243,7 @@ function joinScreen(state) {
 const PARENT_OF = {
   '#/field/cycle': '#/field',
   '#/diagnose': '#/clinic',
+  '#/adviser': '#/clinic',
   '#/guide': '#/clinic',
   '#/guide/item': '#/guide',
   '#/plan': '#/dashboard',
@@ -445,6 +477,19 @@ const shellActions = {
   },
 
   'open-join': () => { navigate('#/join'); },
+
+  // Leaving the sample farm is a wipe, so it asks first — but the warning is
+  // about pretend records, not real ones, and says so.
+  'start-real-farm': async () => {
+    const ok = await confirmSheet('Erase the sample farm?',
+      'The example people and their records go for good. Nothing of your own is on this phone '
+      + 'yet, so there is nothing real to lose.', 'Erase it and start');
+    if (!ok) return;
+    const { clearEvents } = await import('../db.js');
+    await clearEvents();
+    sessionStorage.removeItem('douvalue.user');
+    location.reload();
+  },
 
   'do-join': async (c, form) => {
     const data = readForm(form);

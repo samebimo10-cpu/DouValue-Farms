@@ -505,6 +505,30 @@ test('the same farm replays differently for a hand, and still works', async () =
   assert.equal(rebuilt.expenses.length, 0);
 });
 
+// The app already builds the brief to the asker's role. This is the second
+// fence: the server must strip money again on the way out, because an app that
+// redacts correctly is a convenience and a server that does is a guarantee.
+test('the adviser brief is redacted again on the server, whatever the app sent', () => {
+  const sent = {
+    farm: { name: 'DouValue', askedBy: { role: 'hand', seesMoney: true } },
+    growing: [{ bed: 'Bed 1', pickedKg: 40 }],
+    economics: { last90Days: { revenueNgn: 900000, costPerKgNgn: 1200 } },
+  };
+
+  for (const role of ['hand', 'supervisor', 'agronomist']) {
+    const out = core.redactBrief(structuredClone(sent), role);
+    assert.equal(out.economics, undefined, `${role} must not receive money`);
+    assert.equal(out.farm.askedBy.seesMoney, false, `${role} is told they cannot see money`);
+    assert.ok(out.growing, `${role} still gets the agronomy`);
+    assert.ok(!JSON.stringify(out).includes('900000'), `no naira reaches a ${role}`);
+  }
+
+  for (const role of ['manager', 'ceo']) {
+    const out = core.redactBrief(structuredClone(sent), role);
+    assert.ok(out.economics, `${role} keeps the money`);
+  }
+});
+
 test('the generated Deno servers have not drifted from the core', async () => {
   const { readFileSync } = await import('node:fs');
   const { execFileSync } = await import('node:child_process');

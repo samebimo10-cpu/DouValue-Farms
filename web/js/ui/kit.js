@@ -59,7 +59,8 @@ export function input(name, opts = {}) {
 }
 
 export function textarea(name, opts = {}) {
-  return `<textarea name="${esc(name)}" placeholder="${esc(opts.placeholder || '')}">${esc(opts.value || '')}</textarea>`;
+  return `<textarea name="${esc(name)}" rows="${Number(opts.rows) || 3}" `
+    + `placeholder="${esc(opts.placeholder || '')}">${esc(opts.value || '')}</textarea>`;
 }
 
 export function select(name, options, value = '', opts = {}) {

@@ -159,6 +159,27 @@ does the same job.</small></p>
 </div>
 
 <div class="card">
+  <h2>Optional: let the adviser read the internet</h2>
+  <p>The app has an adviser built in that reads your own records and says what to
+  do about them. It works with no network and it is on already — there is nothing
+  to switch on.</p>
+  <p>What it cannot do on its own is read what is <i>current</i>: an advisory on a
+  pest moving through the South-South, a product taken off the register, what
+  pepper is fetching in the market this week. For that the farm server needs a
+  key of your own.</p>
+  <ol>
+    <li>Get an API key at <b>console.anthropic.com</b> under API Keys.</li>
+    <li>In the Deno dashboard open your project, then <b>Settings</b>, then
+    <b>Environment Variables</b>.</li>
+    <li>Add <b>ANTHROPIC_API_KEY</b> with the key as its value, and save.</li>
+  </ol>
+  <p>The key stays on the server. No phone ever holds it, so a handset that goes
+  missing cannot spend your money. Each account is capped at 25 questions a day.</p>
+  <p>To use a cheaper model, add <b>ANTHROPIC_MODEL</b> as a second variable —
+  for example <b>claude-sonnet-5</b>.</p>
+</div>
+
+<div class="card">
   <h2>If something looks different</h2>
   <p>Deno Deploy changes its screens from time to time, so the buttons may not be
   worded exactly as above. What you are looking for is any way to create a

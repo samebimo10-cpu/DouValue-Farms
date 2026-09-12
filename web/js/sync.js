@@ -57,9 +57,12 @@ async function deviceLabel() {
   return label;
 }
 
-async function api(path, { method = 'GET', body = null, token = auth && auth.token, base = auth && auth.url } = {}) {
+async function api(path, opts = {}) {
+  const {
+    method = 'GET', body = null, token = auth && auth.token, base = auth && auth.url,
+  } = opts;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${base}${path}`, {
       method,
@@ -73,7 +76,10 @@ async function api(path, { method = 'GET', body = null, token = auth && auth.tok
     let payload = null;
     try { payload = await res.json(); } catch { payload = null; }
     if (!res.ok) {
-      const message = (payload && payload.error) || `Server said ${res.status}`;
+      // Some endpoints explain themselves in `message` rather than `error`;
+      // either way the server's own words beat a status code.
+      const message = (payload && (payload.error || payload.message))
+        || `Server said ${res.status}`;
       const error = new Error(message);
       error.status = res.status;
       throw error;
@@ -197,6 +203,37 @@ export async function signOutDevice() {
   await setMeta('syncCursor', 0);
   clearTimeout(timer);
   setStatus({ state: 'off', lastError: null, serverEvents: null });
+}
+
+// --- The wider adviser ----------------------------------------------------
+
+/**
+ * Ask the farm's own server for advice that needed the internet.
+ *
+ * Unlike every other call here this one never throws. The app already has a
+ * full answer from its built-in adviser by the time this is sent, so a failure
+ * means "no extra reading this time", not "the screen is broken". Every refusal
+ * the server can give — no key set, daily cap reached, timed out — comes back
+ * as a plain reason the screen can put in words.
+ */
+export async function askAdviser({ brief, question = '', alreadySaid = [] }) {
+  if (!auth) return { ok: false, reason: 'offline', message: 'This phone is not connected to a farm server.' };
+  try {
+    // Generous: the server may run several web searches before it answers.
+    return await api(`/api/farms/${encodeURIComponent(auth.farmId)}/advise`, {
+      method: 'POST', body: { brief, question, alreadySaid }, timeoutMs: 100000,
+    });
+  } catch (err) {
+    // A refusal the server explained arrives as an error here, because api()
+    // throws on any non-2xx. Its message is the useful part either way.
+    return {
+      ok: false,
+      reason: err.name === 'AbortError' ? 'timeout' : 'error',
+      message: err.name === 'AbortError'
+        ? 'The adviser took too long. Try again where the signal is better.'
+        : err.message,
+    };
+  }
 }
 
 // --- Exchanging records ---------------------------------------------------

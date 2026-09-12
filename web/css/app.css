@@ -423,6 +423,50 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .print-head { display: none; }
 
+/* --- The adviser screen -------------------------------------------------- */
+
+/* A heading between cards, so "act on these" and "worth knowing" read as two
+   piles rather than one long scroll. */
+h2.section {
+  margin: 22px 4px 8px;
+  font-size: .78rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* Each recommendation answers the same four questions in the same order, so
+   the eye learns where to look and can skip the parts it already trusts. */
+.why, .cost, .do { margin: 8px 0 0; }
+.cost { color: var(--warn); }
+.do { font-weight: 600; }
+.basis { font-style: italic; }
+
+.prose h3 { margin: 16px 0 4px; font-size: 1rem; }
+.prose h3:first-child { margin-top: 0; }
+.prose p, .prose ul { margin: 8px 0; }
+.prose ul { padding-left: 20px; }
+
+ul.sources { margin: 4px 0 0; padding-left: 20px; }
+ul.sources a { color: var(--accent); }
+
+/* The brief, shown verbatim. Scrolls on its own rather than stretching the
+   page sideways on a phone. */
+pre.working {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: .74rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow-y: auto;
+  color: var(--ink-2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

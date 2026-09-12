@@ -51,7 +51,14 @@ export const clinicView = {
       + '<div class="row wrap">'
       + button('Check a sick plant', 'go', { cls: 'btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
       + button('Browse the guide', 'go', { cls: 'btn-lg btn-ghost', icon: '📖', data: { to: '#/guide' } })
-      + '</div>',
+      + '</div>'
+      // The clinic answers "what is wrong with this plant". The adviser answers
+      // "what should the farm do this week", which is the question people ask
+      // next, so it belongs one tap from here.
+      + `<div style="margin-top:10px">${button('Ask the farm adviser', 'go',
+        { cls: 'btn-block', icon: '🧠', data: { to: '#/adviser' } })}</div>`
+      + '<p style="margin:8px 0 0"><small>Reads your own records and says what to do about '
+      + 'them — beds, water, sprays, stock and money. Works with no network.</small></p>',
       { tight: true },
     );
 
