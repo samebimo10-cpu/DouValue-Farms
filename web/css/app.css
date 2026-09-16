@@ -423,6 +423,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .print-head { display: none; }
 
+/* UX-10: a count with + and - beside it. The targets are 56px so they work
+   with wet or gloved hands (UX-03), and the field itself stays typeable for a
+   number nobody wants to tap thirty times. */
+.stepper { display: flex; gap: 8px; align-items: stretch; }
+.stepper input {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.stepper .step {
+  flex: 0 0 56px;
+  min-height: 56px;
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+
 /* One-line gate verdict: green tick plus the reading it passed on. */
 .gate-row { margin: 8px 0 0; }
 .gate-row.ok b { color: var(--ok); }

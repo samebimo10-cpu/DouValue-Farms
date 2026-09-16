@@ -153,6 +153,8 @@ const EMPTY = () => ({
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
+  alertAcks: [],
+  alertDecisions: [],
   expenses: [],
   stockMoves: [],
   attendance: [],
@@ -274,6 +276,18 @@ export function reduce(events) {
         if (o) { o.revoked = true; o.revokedBy = e.by; o.revokedAt = e.at; }
         break;
       }
+
+      // --- Alerts (requirements 6.5) ------------------------------------
+      // An alert itself is never stored: it is what the scouting records mean
+      // when read in order. These two are the only human inputs it reads —
+      // somebody saying they have picked it up, and somebody deciding, on the
+      // record, not to treat.
+      case 'alert.ack':
+        state.alertAcks.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      case 'alert.decide':
+        state.alertDecisions.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
 
       case 'plot.upsert':
         state.plots[p.id] = { ...(state.plots[p.id] || {}), ...p };

@@ -243,6 +243,8 @@ function joinScreen(state) {
 const PARENT_OF = {
   '#/field/cycle': '#/field',
   '#/gates': '#/field',
+  '#/alerts': '#/clinic',
+  '#/digest': '#/dashboard',
   '#/diagnose': '#/clinic',
   '#/adviser': '#/clinic',
   '#/guide': '#/clinic',

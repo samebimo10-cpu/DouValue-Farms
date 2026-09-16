@@ -131,6 +131,12 @@ const EVENT_POLICY = {
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
   'gate.override.revoke': { write: 'manageOwners', read: ANY },
 
+  // Alerts (requirements 6.5). Anyone in the field may say they have picked
+  // one up; deciding NOT to treat is a management call and needs a reason,
+  // because "we looked at it and left it" is what Season 1 was made of.
+  'alert.ack':         { write: 'viewOwnTasks',  read: ANY },
+  'alert.decide':      { write: 'assignTasks',   read: ANY, guard: guardNoTreat },
+
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
@@ -444,6 +450,22 @@ async function authenticate(farmId, req, store) {
   }
   await store.touchToken(rec.digest, new Date().toISOString());
   return { ok: true, member, token: rec };
+}
+
+/**
+ * FR-SCOUT-05 — deciding not to treat is a decision, not a dismissal.
+ *
+ * An alert closes on a treatment or on this. Letting it close on a bare tap
+ * would make the board clearable by whoever finds it annoying, which is the
+ * failure mode this whole section exists to prevent.
+ */
+function guardNoTreat(event) {
+  const p = event.payload || {};
+  if (!p.cycleId || !p.pestId) return { ok: false, why: 'Say which zone and which pest' };
+  if (String(p.reason || '').trim().length < 10) {
+    return { ok: false, why: 'Say why no treatment is needed — a sentence someone can check later' };
+  }
+  return { ok: true };
 }
 
 /**

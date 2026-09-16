@@ -10,10 +10,38 @@ import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../do
 import { harvestClearance, PRODUCTS, PRODUCT_BY_ID, reentryClearance, resistanceWarnings, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
 import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
+import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
+import { PROBLEM_BY_ID } from '../domain/pests.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { getLang } from '../i18n.js';
+
+/**
+ * The pests with action thresholds, for the scouting form.
+ *
+ * Deliberately only these. A list of all thirty-two problems makes the field
+ * screen a scrolling exercise, and anything without a threshold cannot raise an
+ * alert anyway — it belongs in the written observation.
+ */
+const COUNTED_PESTS = Object.keys(DEFAULT_THRESHOLDS)
+  .map((id) => ({ value: id, label: (PROBLEM_BY_ID[id] || {}).name || id }))
+  .sort((a, b) => a.label.localeCompare(b.label));
+
+/**
+ * A number entry with + and - beside it — UX-10.
+ *
+ * Small changes are a tap; a big number is still typed. Counting thrips on a
+ * trap is the former, counting aphids is the latter.
+ */
+function numberField(name, value = '') {
+  return '<div class="stepper">'
+    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="-1">−</button>`
+    + `<input type="number" inputmode="numeric" name="${esc(name)}" value="${esc(value)}" `
+    + 'min="0" step="1" placeholder="—">'
+    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="1">+</button>`
+    + '</div>';
+}
 
 function calibrationFor(state) { return calibrate(closedCycles(state).map((c) => ({ ...c, plants: c.plants }))); }
 
@@ -110,6 +138,14 @@ export const fieldView = {
     'save-plot': (ctx, form) => savePlot(ctx, form),
     'save-cycle': (ctx, form) => saveCycle(ctx, form),
     'open-scout': (ctx, el) => openScoutSheet(ctx, el.dataset.id),
+    // UX-10: + and - move the count without opening the keypad.
+    step: (ctx, el) => {
+      const box = el.closest('.stepper');
+      const field = box && box.querySelector('input');
+      if (!field) return;
+      const next = (Number(field.value) || 0) + Number(el.dataset.by || 0);
+      field.value = String(Math.max(0, next));
+    },
     'save-scout': (ctx, form) => saveScout(ctx, form),
     'open-spray': (ctx, el) => openSpraySheet(ctx, el.dataset.id),
     'save-spray': (ctx, form) => saveSpray(ctx, form),
@@ -471,6 +507,16 @@ function openScoutSheet(ctx, cycleId) {
     + 'leaves, the growing tip, the fruit, and the soil line. Ten looked at well beats fifty glanced at.</small></p>'
     + '<form data-act="save-scout">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
+    // FR-SCOUT-01. The counted pest and the number are what the thresholds
+    // read; without them nothing can ever cross a line and the whole alert
+    // ladder stays asleep. The written observation stays alongside (UX-09).
+    + field('Which pest?', select('pestId', COUNTED_PESTS, '',
+      { placeholder: 'None — the bed looked clean' }),
+      'Only the ones with action thresholds are listed. Anything else goes in the notes.')
+    + field('Count on the sticky trap', numberField('trapCount'),
+      'Since the last check. Leave blank if there is no trap in this zone.')
+    + field('Average per plant, from ten plants', numberField('perPlant'),
+      'Count on ten plants and put the average here.')
     + field('What did you find?', input('finding', { placeholder: 'e.g. aphids on young leaves, 3 plants' }),
       'Leave empty if the bed looked clean.')
     + field('How many of the ten plants were affected?', select('affected',
@@ -486,6 +532,11 @@ async function saveScout(ctx, form) {
   const data = readForm(form);
   await ctx.store.dispatch('scout.record', {
     id: uid('sc'), cycleId: data.cycleId, finding: data.finding || '',
+    pestId: data.pestId || null,
+    // Blank is not zero. A trap nobody looked at must not read as a trap
+    // holding nothing, or an empty form becomes evidence the house is clean.
+    trapCount: data.trapCount === '' || data.trapCount == null ? null : Number(data.trapCount),
+    perPlant: data.perPlant === '' || data.perPlant == null ? null : Number(data.perPlant),
     affectedPct: (Number(data.affected) || 0) * 10, note: data.note || '',
     photo: photoPayload(), date: isoDate(), enteredAt: new Date().toISOString(),
   });
