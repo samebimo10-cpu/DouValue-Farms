@@ -76,7 +76,7 @@ export const fieldView = {
       + `${esc(Object.keys(state.plots).length)} beds registered.</small></p>`
       + '<div class="row wrap">'
       + button('Start a crop cycle', 'open-new-cycle', { icon: '🌱' })
-      + button('Add a bed', 'open-new-plot', { cls: 'btn-ghost', icon: '📍' })
+      + button('Zones and cover', 'go', { cls: 'btn-ghost', icon: '🏠', data: { to: '#/zones' } })
       + '</div>',
       { tight: true },
     );

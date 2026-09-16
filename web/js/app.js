@@ -1,7 +1,7 @@
 // Boot: build the store, wire the screens, start the shell, and — only if there
 // is a network to spare — go and fetch a real forecast.
 
-import { createStore } from './store.js';
+import { can, createStore } from './store.js';
 import { registerRoute, startShell } from './ui/shell.js';
 import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
@@ -13,9 +13,12 @@ import { auditView } from './ui/audit.js';
 import { adviserView } from './ui/adviser.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
+import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
+import { missingTasks } from './domain/schedule.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
+import { isoDate } from './util.js';
 
 registerRoute('#/today', todayView);
 registerRoute('#/field', fieldView);
@@ -32,6 +35,7 @@ registerRoute('#/adviser', adviserView);
 registerRoute('#/gates', gatesView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
+registerRoute('#/zones', zonesView);
 registerRoute('#/people', peopleView);
 registerRoute('#/store', storeView);
 registerRoute('#/money', moneyView);
@@ -57,6 +61,28 @@ async function warmWeather(ctx) {
   ctx.refresh();
 }
 
+/**
+ * FR-TASK-01 — put today's work on the board.
+ *
+ * Runs on every open. Safe to run five times on five phones, because every
+ * generated task carries a deterministic id: IndexedDB keys events by id and
+ * the sync merge is a set union, so the same Tuesday lands once however many
+ * handsets produced it.
+ *
+ * Only the people who run the work generate it. A farm hand opening the app
+ * should not be quietly writing the day's plan.
+ */
+async function generateToday(ctx) {
+  if (!ctx.user || !can(ctx.user, 'assignTasks')) return;
+  const due = missingTasks(ctx.store.state, { date: isoDate() });
+  if (!due.length) return;
+
+  for (const task of due) {
+    await ctx.store.dispatch('task.create', task, { eventId: `ev_${task.id}` });
+  }
+  ctx.refresh();
+}
+
 async function main() {
   const store = await createStore();
   const ctx = await startShell(store);
@@ -65,6 +91,12 @@ async function main() {
   // Sync runs itself from here: it pushes and pulls whenever the phone has
   // signal, and quietly queues everything when it does not.
   await startSync(store);
+
+  await generateToday(ctx).catch((err) => {
+    // A farm that cannot generate its schedule still has to be usable: every
+    // screen works on what is already recorded.
+    console.error('Could not generate today\'s tasks', err);
+  });
 
   warmWeather(ctx).catch(() => { /* climatology carries the app without it */ });
 

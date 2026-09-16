@@ -245,6 +245,7 @@ const PARENT_OF = {
   '#/gates': '#/field',
   '#/alerts': '#/clinic',
   '#/digest': '#/dashboard',
+  '#/zones': '#/field',
   '#/diagnose': '#/clinic',
   '#/adviser': '#/clinic',
   '#/guide': '#/clinic',

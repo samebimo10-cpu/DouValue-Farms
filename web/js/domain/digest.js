@@ -20,6 +20,7 @@ import { isoDate } from '../util.js';
 import { alerts, kpis, risingWarnings } from './alerts.js';
 import { gateBoard } from './gates.js';
 import { sampleDataCheck } from './readiness.js';
+import { uncoveredToday } from './positions.js';
 import { stockForecast } from './predict.js';
 import { inputUsage, inputsList } from '../store.js';
 
@@ -93,6 +94,17 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
         detail: 'Test it now — the result decides what happens to the next cycle in that ground.',
       });
     }
+  }
+
+  // 3b. A house with nobody on it today. FR-ROLE-02 moves work to the backup
+  //     holder by itself; this is what the Owner sees when there is no backup
+  //     left to move it to, which is the state nobody notices until Friday.
+  for (const gap of uncoveredToday(state, { today, now: new Date(now) })) {
+    out.push({
+      severity: 'critical',
+      line: `Nobody on ${gap.zone ? gap.zone.name : gap.position.title} today`,
+      detail: gap.why || 'The holder is not in and there is no backup for that zone.',
+    });
   }
 
   // 4. Missed work. A scouting round nobody did is the gap Season 1 fell into.

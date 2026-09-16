@@ -4,7 +4,7 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-const CACHE = 'douvalue-v8';
+const CACHE = 'douvalue-v9';
 
 const SHELL = [
   './',
@@ -34,6 +34,7 @@ const SHELL = [
   './js/ui/adviser.js',
   './js/ui/gates.js',
   './js/ui/alerts.js',
+  './js/ui/zones.js',
   './js/domain/adviser.js',
   './js/domain/analysis.js',
   './js/domain/brief.js',
@@ -42,6 +43,8 @@ const SHELL = [
   './js/domain/digest.js',
   './js/domain/proof.js',
   './js/domain/readiness.js',
+  './js/domain/schedule.js',
+  './js/domain/positions.js',
   './js/domain/crops.js',
   './js/domain/climate.js',
   './js/domain/pests.js',

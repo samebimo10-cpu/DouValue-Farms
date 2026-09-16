@@ -125,6 +125,20 @@ export const EVENT_POLICY = {
   'alert.ack':         { write: 'viewOwnTasks',  read: ANY },
   'alert.decide':      { write: 'assignTasks',   read: ANY, guard: guardNoTreat },
 
+  // Zones and positions (6.1, section 4). Retiring a zone or moving somebody
+  // between jobs is management work, so it sits with managePeople and
+  // manageCycles rather than with whoever happens to be holding a phone.
+  'plot.retire':       { write: 'manageCycles',  read: ANY },
+  'plot.restore':      { write: 'manageCycles',  read: ANY },
+  'position.upsert':   { write: 'managePeople',  read: ANY },
+  'position.assign':   { write: 'managePeople',  read: ANY },
+  'position.retire':   { write: 'managePeople',  read: ANY },
+  // Anyone may say they are not coming in. Being able to report your own
+  // absence is the thing that makes the cover mechanism work at six in the
+  // morning; needing a manager to record it is how it fails.
+  'absence.record':    { write: 'viewOwnTasks',  read: ANY },
+  'absence.cancel':    { write: 'viewOwnTasks',  read: ANY },
+
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },

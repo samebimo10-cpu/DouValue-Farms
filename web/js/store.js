@@ -155,6 +155,8 @@ const EMPTY = () => ({
   gateOverrides: [],
   alertAcks: [],
   alertDecisions: [],
+  positions: {},
+  absences: [],
   expenses: [],
   stockMoves: [],
   attendance: [],
@@ -194,6 +196,8 @@ export function reduce(events) {
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
+      case 'position.upsert': return `position:${p.id}`;
+      case 'absence.record': return `absence:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
       default: return null;
@@ -213,6 +217,9 @@ export function reduce(events) {
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
+      case 'position.assign': case 'position.retire': return `position:${p.id}`;
+      case 'absence.cancel': return `absence:${p.id}`;
+      case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
       default: return null;
     }
   };
@@ -229,6 +236,9 @@ export function reduce(events) {
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
       case 'override': return state.gateOverrides.some((o) => o.id === id);
+      case 'position': return !!state.positions[id];
+      case 'absence': return state.absences.some((a) => a.id === id);
+      case 'plot': return !!state.plots[id];
       case 'report': return state.reports.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
       default: return true;
@@ -289,6 +299,50 @@ export function reduce(events) {
       case 'plot.remove':
         delete state.plots[p.id];
         break;
+      // FR-FARM-01: a zone is retired, not deleted. Deleting it would orphan
+      // every harvest, spray and soil test recorded against it, and the history
+      // of a house is exactly what you want when deciding whether to use it
+      // again.
+      case 'plot.retire':
+        if (state.plots[p.id]) {
+          state.plots[p.id].retired = true;
+          state.plots[p.id].retiredReason = p.reason || '';
+        }
+        break;
+      case 'plot.restore':
+        if (state.plots[p.id]) {
+          state.plots[p.id].retired = false;
+          delete state.plots[p.id].retiredReason;
+        }
+        break;
+
+      // --- Positions (section 4) ----------------------------------------
+      // A position is the job. Who holds it is a property of the position, so
+      // moving somebody between jobs is one record, not a rewrite of every
+      // task they were ever assigned.
+      case 'position.upsert':
+        state.positions[p.id] = { ...(state.positions[p.id] || {}), ...p };
+        break;
+      case 'position.assign':
+        if (state.positions[p.id]) {
+          state.positions[p.id].holderId = p.holderId || null;
+          state.positions[p.id].assignedAt = e.at;
+        }
+        break;
+      case 'position.retire':
+        if (state.positions[p.id]) state.positions[p.id].retired = true;
+        break;
+
+      // FR-ROLE-02: somebody saying they are not in, so the work moves before
+      // anyone stands in an unchecked house wondering.
+      case 'absence.record':
+        state.absences.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      case 'absence.cancel': {
+        const a = state.absences.find((x) => x.id === p.id);
+        if (a) a.cancelled = true;
+        break;
+      }
 
       case 'cycle.start':
         state.cycles[p.id] = { ...p, status: 'active', events: {}, startedBy: e.by, startedAt: e.at };
@@ -468,9 +522,18 @@ export async function createStore() {
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
 
     /** Record something. Returns the event so callers can reference its id. */
-    async dispatch(type, payload = {}) {
+    /**
+     * File one record.
+     *
+     * `opts.eventId` pins the event's own id instead of minting a new one.
+     * That is what makes the daily task generator idempotent: IndexedDB keys
+     * events by id and `put` overwrites, and the sync merge is a set union, so
+     * five phones generating Tuesday's scouting round for GH-01 all produce the
+     * same id and it lands exactly once.
+     */
+    async dispatch(type, payload = {}, opts = {}) {
       const event = {
-        id: uid('ev'),
+        id: opts.eventId || uid('ev'),
         type,
         at: new Date().toISOString(),
         by: currentUser ? currentUser.id : 'system',
