@@ -1,7 +1,7 @@
 // Boot: build the store, wire the screens, start the shell, and — only if there
 // is a network to spare — go and fetch a real forecast.
 
-import { can, createStore } from './store.js';
+import { can, createStore, setPractice } from './store.js';
 import { registerRoute, startShell } from './ui/shell.js';
 import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
@@ -84,15 +84,28 @@ async function generateToday(ctx) {
 }
 
 async function main() {
+  // UX-25 has to be decided before anything is loaded: a practice session must
+  // never open the real log at all.
+  let practising = false;
+  try { practising = sessionStorage.getItem('douvalue.practice') === '1'; } catch { /* off */ }
+  setPractice(practising);
+
   const store = await createStore();
+
+  if (practising) {
+    const { seedSampleFarm } = await import('./sample.js');
+    await seedSampleFarm(store);
+  }
   const ctx = await startShell(store);
   window.__douvalueCtx = ctx;              // the guide's search box reaches back for this
 
   // Sync runs itself from here: it pushes and pulls whenever the phone has
-  // signal, and quietly queues everything when it does not.
-  await startSync(store);
+  // signal, and quietly queues everything when it does not. Never in practice
+  // mode — a training session that reached the server would put an invented
+  // harvest on everybody else's phone.
+  if (!practising) await startSync(store);
 
-  await generateToday(ctx).catch((err) => {
+  if (!practising) await generateToday(ctx).catch((err) => {
     // A farm that cannot generate its schedule still has to be usable: every
     // screen works on what is already recorded.
     console.error('Could not generate today\'s tasks', err);

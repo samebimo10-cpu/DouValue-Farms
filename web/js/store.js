@@ -504,8 +504,22 @@ function hoursBetween(a, b) {
 }
 
 /** The live store: loads the log, applies new events, tells the UI to redraw. */
+/**
+ * UX-25 — practice mode.
+ *
+ * Set before the store is built. Everything downstream behaves normally except
+ * that nothing is written to disk, which is the property that makes training
+ * safe on a phone that also holds real records.
+ */
+let practice = false;
+export function setPractice(on) { practice = !!on; }
+export function isPractice() { return practice; }
+
 export async function createStore() {
-  const events = await loadEvents();
+  // In practice mode the real log is never opened. Loading it would sit the
+  // example farm on top of the farm's actual records, which is both confusing
+  // and the opposite of the point.
+  const events = practice ? [] : await loadEvents();
   const device = await deviceId();
   let state = reduce(events);
   const listeners = new Set();
@@ -540,7 +554,11 @@ export async function createStore() {
         device,
         payload,
       };
-      await appendEvents([event]);
+      // UX-25: in practice mode the event is applied to the screen and thrown
+      // away. Not persisted, so it never reaches the real log; not synced, so
+      // it never reaches anybody else's phone. A trainee's first harvest must
+      // not end up in the books.
+      if (!practice) await appendEvents([event]);
       events.push(event);
       state = reduce(events);
       notify();
@@ -557,7 +575,7 @@ export async function createStore() {
         id: uid('ev'), type, at: at || new Date().toISOString(),
         by: by || (currentUser ? currentUser.id : 'system'), device, payload: payload || {},
       }));
-      await appendEvents(batch);
+      if (!practice) await appendEvents(batch);
       events.push(...batch);
       state = reduce(events);
       notify();
@@ -565,6 +583,7 @@ export async function createStore() {
     },
 
     async reload() {
+      if (practice) { state = reduce(events); notify(); return; }
       const fresh = await loadEvents();
       events.length = 0;
       events.push(...fresh);

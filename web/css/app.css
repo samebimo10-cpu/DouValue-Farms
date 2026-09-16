@@ -38,7 +38,10 @@
   --info-bg: #e7f0fb;
 
   --radius: 14px;
-  --tap: 52px;
+  /* UX-03: 56 CSS pixels is the requirement, and it is the number that decides
+     whether a wet thumb hits the button or the one beside it. */
+  --tap: 56px;
+  --tap-gap: 10px;
   --pad: 16px;
   --shadow: 0 1px 2px rgba(16,48,92,.10), 0 4px 14px rgba(16,48,92,.07);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -99,6 +102,37 @@
   --shadow: 0 1px 2px rgba(0,0,0,.45);
 }
 
+/* --- Field conditions (section 5) -----------------------------------------
+   UX-05: high contrast, for reading a phone in direct Port Harcourt sun.
+   This is not a dark theme with the colours flipped — it is the same layout
+   with every soft grey removed, borders taken to full strength, and the
+   background pushed to white. Soft greys are the first thing sunlight eats. */
+:root[data-contrast="high"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --ink: #000000;
+  --ink-2: #1a1a1a;
+  --line: #000000;
+  --accent: #005c2a;
+  --accent-ink: #ffffff;
+  --danger: #a10000;
+  --danger-bg: #ffe8e6;
+  --warn: #6b3b00;
+  --warn-bg: #fff2d9;
+  --ok: #005c2a;
+  --ok-bg: #e2f5e8;
+  --info: #00337a;
+  --info-bg: #e5eefc;
+  --shadow: none;
+}
+:root[data-contrast="high"] .card { border: 2px solid var(--line); }
+:root[data-contrast="high"] button,
+:root[data-contrast="high"] input,
+:root[data-contrast="high"] select,
+:root[data-contrast="high"] textarea { border-width: 2px; }
+:root[data-contrast="high"] small { color: var(--ink-2); }
+
 * { box-sizing: border-box; }
 
 body {
@@ -118,7 +152,18 @@ h2 { font-size: 1.2rem; }
 h3 { font-size: 1rem; }
 p { margin: 0 0 .8em; }
 a { color: var(--accent); }
-small { font-size: .82rem; color: var(--ink-2); }
+/* UX-04: body at least 16, which `body` sets, and never below 14 for the
+   supporting line — .82rem of 16px is 13.1px and too small in a field. */
+small { font-size: .875rem; color: var(--ink-2); }
+
+/* UX-04: the number a person came to the screen to read. 28sp at a 16px root
+   is 1.75rem, and this is the class every headline figure uses. */
+.big-number {
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
 
 /* --- App frame ------------------------------------------------------------ */
 
@@ -256,6 +301,9 @@ button[disabled] { opacity: .5; }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-block { width: 100%; }
 .btn-lg { min-height: 64px; font-size: 1.05rem; }
+/* UX-03: space between targets. Two buttons touching is two buttons a wet
+   thumb presses at once. */
+.row.wrap { gap: var(--tap-gap); }
 .btn-sm { min-height: 40px; padding: 6px 12px; font-size: .85rem; font-weight: 600; }
 
 label { display: block; font-weight: 600; margin: 0 0 4px; font-size: .92rem; }
@@ -422,6 +470,90 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .print-head { display: block !important; margin-bottom: 16px; border-bottom: 2px solid #000; padding-bottom: 8px; }
 }
 .print-head { display: none; }
+
+/* --- UX-07: one fixed colour meaning, everywhere -------------------------
+   green = done/safe, yellow = check soon, red = act now, grey = not yet.
+   Every one carries an icon as well as a colour, so the screen still works for
+   a colour-blind reader and in bright sun where hue is the first thing to go. */
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.status .ic { font-size: 1.05em; line-height: 1; }
+.status-done { color: var(--ok); }
+.status-soon { color: var(--warn); }
+.status-now  { color: var(--danger); }
+.status-notyet { color: var(--ink-2); }
+
+/* The same four states as a filled chip, for a card corner. */
+.tag { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px;
+       padding: 5px 12px; font-size: .8rem; font-weight: 700; }
+.tag-done { background: var(--ok-bg); color: var(--ok); }
+.tag-soon { background: var(--warn-bg); color: var(--warn); }
+.tag-now  { background: var(--danger-bg); color: var(--danger); }
+.tag-notyet { background: var(--surface-2); color: var(--ink-2); }
+
+/* A task card on the hand's home screen — UX-23. The stripe repeats the state
+   down the left edge so a list can be read at arm's length. */
+.task-card { position: relative; padding-left: 18px; }
+.task-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--line);
+}
+.task-card.is-done::before { background: var(--ok); }
+.task-card.is-soon::before { background: var(--warn); }
+.task-card.is-now::before  { background: var(--danger); }
+
+/* UX-25: practice mode, announced loudly. Somebody who does not notice they
+   are practising will record a real morning's work into nothing. */
+.practice-bar {
+  position: sticky; top: 0; z-index: 60;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px var(--pad);
+  background: repeating-linear-gradient(45deg, #8a5100, #8a5100 14px, #6b3f00 14px, #6b3f00 28px);
+  color: #fff;
+  font-size: .9rem;
+}
+.practice-bar b { letter-spacing: .08em; }
+.practice-bar span { flex: 1; min-width: 120px; }
+.practice-bar button {
+  min-height: 40px; padding: 6px 14px;
+  background: #fff; color: #6b3f00; border: 0; font-weight: 700;
+}
+
+/* UX-19: the numbered steps on a task card. Loose enough to follow with a
+   glance between plants, which is how they are actually read. */
+ol.steps { margin: 10px 0 0; padding-left: 22px; }
+ol.steps li { margin: 6px 0; line-height: 1.45; }
+
+/* UX-24: "4 of 7 done", big enough to read without stopping. */
+.day-progress { display: flex; align-items: center; gap: 12px; margin: 4px 0 0; }
+.day-progress .count { font-size: 1.15rem; font-weight: 800; white-space: nowrap; }
+.day-progress .bar { flex: 1; }
+
+/* UX-15: a phrase you tap instead of typing with one hand. */
+.phrases { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; }
+.phrases button {
+  min-height: 44px;              /* a chip, not a primary action */
+  padding: 8px 14px;
+  font-size: .9rem;
+  border-radius: 999px;
+}
+
+/* UX-01: the faces on the sign-in screen. */
+.person-tile .face {
+  width: 72px; height: 72px; border-radius: 50%;
+  object-fit: cover; display: block; margin: 0 auto 8px;
+  background: var(--accent-soft);
+}
+
+/* UX-21: what you are about to commit to, before you commit to it. */
+.confirm-summary { margin: 0; }
+.confirm-summary div {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--line);
+}
+.confirm-summary div:last-child { border-bottom: 0; }
+.confirm-summary dt { color: var(--ink-2); font-size: .9rem; }
+.confirm-summary dd { margin: 0; font-weight: 700; text-align: right; }
 
 /* UX-10: a count with + and - beside it. The targets are 56px so they work
    with wet or gloved hands (UX-03), and the field itself stays typeable for a

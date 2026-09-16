@@ -866,7 +866,13 @@ export const settingsView = {
       + '<input type="file" accept="application/json,.json" id="import-file" style="display:none">'
       + '<div id="storage-report" style="margin-top:12px"></div>')
     + card(cardHead('Danger zone')
-      + button('Erase everything on this phone', 'wipe-data', { cls: 'btn-danger btn-block' })
+      // UX-25: training after the farm is running, without the trainee's first
+      // attempt at a harvest ending up in the books.
+      + button('Practice mode', 'practice-start', { cls: 'btn-ghost btn-block', icon: '🎓' })
+      + '<p><small>Fills the app with an example farm so somebody can be trained on it. Nothing '
+      + 'done in practice is saved or synced, and your real records are not opened at all.</small></p>'
+      + `<div style="margin-top:14px">${button('Erase everything on this phone', 'wipe-data',
+        { cls: 'btn-danger btn-block' })}</div>`
       + '<p style="margin-top:8px"><small>Export first. This cannot be undone.</small></p>');
   },
 

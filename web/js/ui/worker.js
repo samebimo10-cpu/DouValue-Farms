@@ -13,6 +13,10 @@ import { forecastHeadline, seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { canComplete, stampFor } from '../domain/proof.js';
+import { dayProgress, howTo } from '../domain/schedule.js';
+import {
+  bigNumber, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
+} from './field-kit.js';
 
 let weather = null; // filled in by app.js when a forecast is available
 export function setWeather(w) { weather = w; }
@@ -81,17 +85,24 @@ export const todayView = {
       );
     }
 
+    // UX-23/24: the day as a list of cards in order, each with its zone, its
+    // time and its colour — and the count said in words, because a bar on its
+    // own is a shape, and a shape is not an answer to "how much is left".
+    const progress = dayProgress(state, { date: today, personId: user.id });
+    const dayTasks = Object.values(state.tasks || {})
+      .filter((x) => (x.due || '').slice(0, 10) === today)
+      .sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
+    const board = dayTasks.length ? dayTasks : mine;
+
     out += card(
-      cardHead(t('today.tasks'), mine.length ? badge(`${mine.length}`, 'warn') : '')
-      + (mine.length
-        ? '<ul class="list">' + mine.map((task) => `<li>`
-          + `<div class="grow"><b>${esc(task.title)}</b>`
-          + `<small>${esc(task.cycleId ? cycleLabel(state, task.cycleId) : 'General')}`
-          + `${task.priority === 'high' ? ' — urgent' : ''}</small></div>`
-          + button(t('today.done'), 'task-done', { cls: 'btn-sm', data: { id: task.id } })
-          + '</li>').join('') + '</ul>'
-        : empty('✅', t('today.noTasks'), 'Anything you do can still be recorded below.')),
+      cardHead(t('today.tasks'))
+      + (board.length ? dayProgressBar(progress) : ''),
+      { tight: true },
     );
+
+    out += board.length
+      ? board.map((task) => taskCard(state, task)).join('')
+      : card(empty('✅', t('today.noTasks'), 'Anything you do can still be recorded below.'));
 
     out += card(
       cardHead('Record something')
@@ -112,7 +123,8 @@ export const todayView = {
           + `<small>Recorded ${esc(timeOfDay(h.at))}${h.date !== isoDate() ? ` for ${esc(h.date)}` : ''}</small>`
           + photoThumb(h.photo, { small: true, alt: 'Photo of this picking' })
           + `</div>${h.verified ? badge('checked', 'ok') : badge('waiting', 'warn')}</li>`).join('') + '</ul>'
-        + `<p style="margin:10px 0 0"><small>Total today: <b>${esc(kg(sum(myHarvest, (h) => h.kg)))}</b></small></p>`,
+        // UX-04: the figure a hand actually came to this screen to read.
+        + `<div style="margin-top:12px">${bigNumber(kg(sum(myHarvest, (h) => h.kg)), 'picked today')}</div>`,
       );
     }
     return out;
@@ -169,6 +181,39 @@ function clockInTime(state, personId) {
  * "you cannot do that" is an argument with the app, and people win arguments
  * with apps by not using them.
  */
+/**
+ * One task, one card — UX-23.
+ *
+ * Zone, time and state, in that order, because that is the order somebody
+ * standing in a field needs them: where, by when, and is it done. The colour is
+ * repeated as a stripe and as an icon (UX-07), so it survives sunlight and
+ * colour blindness alike.
+ */
+function taskCard(state, task) {
+  const state_ = taskStatus(task);
+  const zone = task.zoneId ? (state.plots || {})[task.zoneId] : null;
+  const where = zone ? zone.name : (task.cycleId ? cycleLabel(state, task.cycleId) : 'General');
+  const at = task.due ? task.due.slice(11, 16) : null;
+  const steps = howTo(task.kind);
+  const label = { done: 'Done', now: 'Late', soon: 'Due soon', notyet: 'Later' }[state_];
+
+  return card(
+    `<div class="row between"><div class="grow"><b>${esc(task.title)}</b>`
+    + `<small>${esc(where)}${at ? ` · by ${esc(at)}` : ''}</small></div>`
+    + tag(state_, label) + '</div>'
+    + (steps
+      // UX-19: the steps, numbered, matching the laminated role cards.
+      ? `<ol class="steps">${steps.how.map((line) => `<li>${esc(line)}</li>`).join('')}</ol>`
+        + `<p><small>${esc(steps.why)}</small></p>`
+      : '')
+    + (task.status === 'done'
+      ? `<p class="gate-row ok"><b>✓ Done</b> <small>${esc(task.doneNote || 'Recorded')}</small></p>`
+      : `<div style="margin-top:10px">${button(t('today.done'), 'task-done',
+        { cls: 'btn-block btn-lg', data: { id: task.id } })}</div>`),
+    { cls: `task-card is-${state_}` },
+  );
+}
+
 function openProofSheet(ctx, task, verdict) {
   const el = openSheet(`<h2>${esc(task.title || 'This check')}</h2>`
     + note('info', verdict.why, `<small>${esc(verdict.fix)}</small>`)
@@ -180,8 +225,11 @@ function openProofSheet(ctx, task, verdict) {
     + field('What did you see?', textarea('note', { rows: 2,
       placeholder: 'e.g. traps replaced, a few thrips on the GH-01 trap' }),
       'A line is enough. It goes on the record with the picture.')
+    + phraseChips(task.kind, 'note')
     + '<button class="btn-block btn-lg" type="submit">Done</button>'
-    + '</form>');
+    + '</form>'
+    // UX-22: somebody to ask, from the screen you are standing on.
+    + `<div style="margin-top:12px">${callSupervisor(ctx.state)}</div>`);
   bindPhoto(el);
 }
 

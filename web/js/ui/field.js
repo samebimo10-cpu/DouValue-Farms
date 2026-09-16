@@ -12,6 +12,7 @@ import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain
 import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
+import { confirmSummary, phraseChips } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -522,6 +523,7 @@ function openScoutSheet(ctx, cycleId) {
     + field('How many of the ten plants were affected?', select('affected',
       [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ value: n, label: `${n} of 10 (${n * 10}%)` })), 0))
     + field('Anything else', textarea('note', { placeholder: 'optional' }))
+    + phraseChips('scout', 'finding')
     + photoField('Photo of what you found', 'A picture of the leaf or the fruit is worth more than a description.')
     + '<button class="btn-block btn-lg" type="submit">Save scouting</button></form>'
     + note('info', 'Not sure what you are looking at?', 'Use the Clinic. It asks what you can see and narrows it down.'));
@@ -621,6 +623,25 @@ async function saveSpray(ctx, form) {
           { cls: 'btn-block btn-lg', icon: '🔍', data: { to: '#/diagnose' } })}</div>`));
     return;
   }
+
+  // UX-21: say what is about to happen before it happens. A spray costs money,
+  // starts a waiting period on the fruit and keeps people out of the house —
+  // three consequences worth one screen of confirmation.
+  const cycle = ctx.state.cycles[data.cycleId];
+  const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
+  const goAhead = await confirmSheet('Record this spray?',
+    confirmSummary([
+      ['Zone', zone ? zone.name : 'not named'],
+      ['Against', allowed.diagnosis
+        ? (PROBLEM_BY_ID[allowed.diagnosis.problemId] || {}).name || allowed.diagnosis.problemId
+        : data.targetProblem],
+      ['Product', product ? product.name : data.productId],
+      ['Resistance group', product ? product.group : null],
+      ['No picking until', product && product.phiDays
+        ? isoDate(addDays(new Date(data.date || isoDate()), product.phiDays)) : 'no waiting period'],
+      ['Keep people out for', product && product.reiHours ? `${product.reiHours} hours` : 'no re-entry period'],
+    ]), 'Yes, record it');
+  if (!goAhead) return;
 
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,

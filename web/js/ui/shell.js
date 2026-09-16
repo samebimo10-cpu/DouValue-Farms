@@ -12,6 +12,7 @@ import {
   statusLine, syncNow, verifyPin,
 } from '../sync.js';
 import { isoDate } from '../util.js';
+import { applyPhrase, buzz, callSupervisor } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
 
 const routes = new Map();
@@ -82,7 +83,12 @@ function loginScreen(state) {
     return brandMark(state)
       + `<div class="card"><h2>${esc(t('login.who'))}</h2><div class="people-grid">`
       + people.map((p) => `<div class="person-tile" data-act="pick-person" data-id="${esc(p.id)}">`
-        + `<div class="av">${esc(initials(p.name))}</div><b>${esc(p.name)}</b>`
+        // UX-01: the face, where there is one. A name has to be read; a face is
+        // recognised, which is faster and works for someone who reads slowly.
+        + (p.face
+          ? `<img class="face" src="${esc(p.face)}" alt="" width="72" height="72">`
+          : `<div class="av">${esc(initials(p.name))}</div>`)
+        + `<b>${esc(p.name)}</b>`
         + `<small>${esc(ROLES[p.role]?.name || p.role)}</small></div>`).join('')
       + '</div>'
       + (sample ? '<p style="margin:14px 0 0"><small>Every PIN on the sample farm is '
@@ -109,9 +115,14 @@ function pinScreen(person, subtitle) {
   const linked = getAuth();
   const dots = [0, 1, 2, 3].map((i) => `<span class="${i < pending.pin.length ? 'on' : ''}"></span>`).join('');
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'ok'];
-  return `<div class="card"><div class="row"><div class="av" style="width:44px;height:44px;border-radius:50%;`
-    + `background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:800">`
-    + `${esc(initials(person.name))}</div><div class="grow"><b>${esc(person.name)}</b><br>`
+  return `<div class="card"><div class="row">`
+    + (person.face
+      ? `<img class="face" src="${esc(person.face)}" alt="" width="44" height="44" `
+        + 'style="width:44px;height:44px;margin:0">'
+      : '<div class="av" style="width:44px;height:44px;border-radius:50%;'
+        + 'background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;'
+        + `font-weight:800">${esc(initials(person.name))}</div>`)
+    + `<div class="grow"><b>${esc(person.name)}</b><br>`
     + `<small>${esc(subtitle || ROLES[person.role]?.name || '')}</small></div></div>`
     + `<p style="margin-top:12px">${esc(t('login.pin'))}</p>`
     + `<div class="pin-dots">${dots}</div>`
@@ -138,6 +149,18 @@ function pinScreen(person, subtitle) {
 function isSampleFarm(state) {
   const people = Object.values(state.people || {});
   return people.length > 0 && people.every((p) => String(p.id).startsWith('sp_'));
+}
+
+/**
+ * UX-17 — read the app in the language this person reads.
+ *
+ * Called at every point somebody signs in. On a shared phone the setting
+ * cannot belong to the handset: two people using one phone read different
+ * languages, and making the second change it back each morning is how a
+ * feature turns into a nuisance.
+ */
+function adoptLanguage(person) {
+  if (person && person.language) setLang(person.language);
 }
 
 /** The company mark, shown on the screens people see before they are signed in. */
@@ -174,9 +197,10 @@ function firstRunScreen(state) {
     + button('Join with a code', 'open-join', { cls: 'btn-ghost btn-block' })
     + '</div>'
     + '<div class="card tight">'
-    + button('Load a sample farm to look around', 'load-sample', { cls: 'btn-quiet btn-block' })
-    + '<p style="margin:8px 0 0"><small>Fills the app with an example farm so you can see how it '
-    + 'works. Erase it from Settings before you start recording real work.</small></p>'
+    + button('Try it on an example farm', 'practice-start', { cls: 'btn-quiet btn-block' })
+    + '<p style="margin:8px 0 0"><small>Practice mode. Fills the app with an example farm so you '
+    + 'can see how everything works. Nothing you do in practice is saved, so there is nothing to '
+    + 'erase afterwards.</small></p>'
     + '</div>';
 }
 
@@ -284,7 +308,14 @@ function chrome(user, state, body) {
   const onTab = tabs.some((tab) => tab.hash === here);
   const back = onTab ? '' : parentOf(here, user);
 
-  return '<header class="topbar">'
+  const practice = isPractising();
+  return (practice
+    ? '<div class="practice-bar" role="status">'
+      + '<b>PRACTICE MODE</b><span>Nothing here is saved.</span>'
+      + '<button data-act="practice-stop">Leave practice</button>'
+      + '</div>'
+    : '')
+    + '<header class="topbar">'
     + (back
       ? `<button class="topbar-back" data-act="go" data-to="${esc(back)}" `
         + 'aria-label="Back">&#8592;</button>'
@@ -292,6 +323,7 @@ function chrome(user, state, body) {
     + `<div class="brand">${esc(state.settings.farmName)}<small>${esc(state.settings.location)}</small></div>`
     + '<div class="spacer"></div>'
     + `<button data-act="toggle-lang" title="Language">${lang === 'pcm' ? 'Pidgin' : 'English'}</button>`
+    + '<button data-act="toggle-contrast" title="Bright sunlight" aria-label="Bright sunlight">☀</button>'
     + `<button data-act="open-account" title="Account">${esc(initials(user.name))}</button>`
     + '</header>'
     + `<div class="syncbar ${esc(sync.tone)}" data-act="sync-now" role="status">`
@@ -389,6 +421,7 @@ const shellActions = {
       const person = c.store.state.people[linked.memberId]
         || { id: linked.memberId, name: linked.name, role: linked.role, active: true };
       c.store.setUser(person);
+      adoptLanguage(person);
       sessionStorage.setItem('douvalue.user', person.id);
       navigate(ROLES[person.role]?.home || '#/today');
       render();
@@ -406,6 +439,7 @@ const shellActions = {
     }
     pending = { personId: null, pin: '' };
     c.store.setUser(person);
+    adoptLanguage(person);
     sessionStorage.setItem('douvalue.user', person.id);
     navigate(ROLES[person.role]?.home || '#/today');
     render();
@@ -435,6 +469,7 @@ const shellActions = {
         id, name: String(data.name).trim(), role: 'ceo', pinHash: await hashPin(data.pin), dailyRate: 0 } },
     ]);
     c.store.setUser(c.store.state.people[id]);
+    adoptLanguage(c.store.state.people[id]);
     sessionStorage.setItem('douvalue.user', id);
     navigate('#/dashboard');
     toast('CEO account created. Next: add your farm manager under People.');
@@ -445,10 +480,57 @@ const shellActions = {
     toast('Sample farm loaded. Sign in as any of the people shown.');
     render();
   },
-  'toggle-lang': (c) => {
-    setLang(getLang() === 'en' ? 'pcm' : 'en');
-    localStorage.setItem('douvalue.lang', getLang());
+  'toggle-lang': async (c) => {
+    const next = getLang() === 'en' ? 'pcm' : 'en';
+    setLang(next);
+    localStorage.setItem('douvalue.lang', next);
+    // UX-17: on a shared phone the language belongs to the person, not the
+    // handset. Two people using one phone read different languages, and making
+    // the second change it back every morning is how a feature becomes a
+    // nuisance.
+    if (c.user) await c.store.dispatch('person.upsert', { ...c.user, language: next });
     render();
+  },
+
+  // UX-05: readable in direct sun. Not a dark theme inverted — the same layout
+  // with every soft grey removed and the borders taken to full strength,
+  // because soft grey is the first thing sunlight eats.
+  'toggle-contrast': () => {
+    const root = document.documentElement;
+    const on = root.getAttribute('data-contrast') === 'high';
+    if (on) root.removeAttribute('data-contrast');
+    else root.setAttribute('data-contrast', 'high');
+    try { localStorage.setItem('douvalue.contrast', on ? '' : 'high'); } catch { /* fine */ }
+    render();
+  },
+
+  // UX-15: a phrase tapped instead of typed.
+  phrase: (c, el) => applyPhrase(el),
+
+  /**
+   * UX-25 — practice mode.
+   *
+   * Training on the real farm means somebody's first attempt at recording a
+   * harvest is a harvest that did not happen, sitting in the books for ever.
+   * So practice runs against the sample farm in a separate store: the real
+   * event log is not opened, not written and not synced while it is on.
+   *
+   * The banner is deliberately loud. Somebody who does not notice they are in
+   * practice will record a real morning's work into nothing.
+   */
+  'practice-start': async (c) => {
+    const ok = await confirmSheet('Start practice mode?',
+      'The app fills with an example farm so people can try everything — recording a harvest, '
+      + 'scouting, closing a task — without touching your real records. Nothing done in practice '
+      + 'is saved or synced.', 'Start practice');
+    if (!ok) return;
+    try { sessionStorage.setItem('douvalue.practice', '1'); } catch { /* still works */ }
+    location.reload();
+  },
+
+  'practice-stop': () => {
+    try { sessionStorage.removeItem('douvalue.practice'); } catch { /* still works */ }
+    location.reload();
   },
   'set-lang': (c, el) => {
     setLang(el.dataset.lang);
@@ -518,6 +600,7 @@ const shellActions = {
         id: result.member.id, name: result.member.name, role: result.member.role, active: true,
       };
       c.store.setUser(person);
+      adoptLanguage(person);
       sessionStorage.setItem('douvalue.user', person.id);
       navigate(ROLES[person.role]?.home || '#/today');
       toast(sync.ok
@@ -554,8 +637,19 @@ export async function startShell(store) {
   const savedLang = localStorage.getItem('douvalue.lang');
   if (savedLang) setLang(savedLang);
 
+  try {
+    if (localStorage.getItem('douvalue.contrast') === 'high') {
+      document.documentElement.setAttribute('data-contrast', 'high');
+    }
+  } catch { /* a phone with storage blocked simply starts in normal contrast */ }
+
   const savedUser = sessionStorage.getItem('douvalue.user');
-  if (savedUser && store.state.people[savedUser]) store.setUser(store.state.people[savedUser]);
+  if (savedUser && store.state.people[savedUser]) {
+    store.setUser(store.state.people[savedUser]);
+    // UX-17: their language, not the phone's.
+    const mine = store.state.people[savedUser].language;
+    if (mine) setLang(mine);
+  }
 
   document.addEventListener('click', async (e) => {
     const hit = findAction(e.target);
@@ -600,6 +694,11 @@ export async function startShell(store) {
 
   render();
   return ctx;
+}
+
+/** UX-25 — is this a training session rather than the real farm? */
+export function isPractising() {
+  try { return sessionStorage.getItem('douvalue.practice') === '1'; } catch { return false; }
 }
 
 export function getCtx() { return ctx; }

@@ -151,7 +151,13 @@ export function toast(message, bad = false) {
   const el = document.createElement('div');
   el.className = `toast ${bad ? 'bad' : ''}`;
   el.setAttribute('role', 'status');
-  el.textContent = message;
+  // UX-20: a tick on the way through, so the answer is a shape as well as
+  // words, and a short buzz — somebody in gloves holding the phone at arm's
+  // length in bright sun often cannot read this, but they can feel it.
+  el.textContent = `${bad ? '✕' : '✓'}  ${message}`;
+  try {
+    if (navigator.vibrate) navigator.vibrate(bad ? [40, 60, 40] : 20);
+  } catch { /* a phone that will not vibrate still shows the toast */ }
   document.body.appendChild(el);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.remove(), bad ? 5200 : 2800);
