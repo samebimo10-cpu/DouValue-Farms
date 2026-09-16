@@ -19,6 +19,7 @@
 import { isoDate } from '../util.js';
 import { alerts, kpis, risingWarnings } from './alerts.js';
 import { gateBoard } from './gates.js';
+import { sampleDataCheck } from './readiness.js';
 import { stockForecast } from './predict.js';
 import { inputUsage, inputsList } from '../store.js';
 
@@ -32,6 +33,14 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
   const today = now.slice(0, 10);
   const config = settings || state.settings || {};
   const out = [];
+
+  // 0. Sample accounts beside real records — NFR-SEC-01. Above even a virus,
+  //    because every sample account opens with the PIN 1234 and this is the
+  //    state where that becomes a way into a real farm's books.
+  const sample = sampleDataCheck(state);
+  if (!sample.ok) {
+    out.push({ severity: 'critical', line: `SAMPLE ACCOUNTS STILL ACTIVE: ${sample.why}`, detail: sample.fix });
+  }
 
   // 1. Suspected virus. FR-DIAG-04 sends this straight to the Owner, and it
   //    outranks everything because by the time it is certain it is too late.

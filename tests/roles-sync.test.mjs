@@ -151,13 +151,15 @@ test('join codes avoid the characters people misread', () => {
 });
 
 test('repeated wrong tries lock an account for a while', () => {
+  // NFR-SEC-02 sets this at five tries. It was six before the requirements
+  // arrived; the number is the requirement's to set, not ours.
   let member = { failedAttempts: 0, lockedUntil: 0 };
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 4; i++) {
     member = { ...member, ...core.afterFailure(member) };
     assert.equal(core.lockoutState(member).locked, false, `try ${i + 1} should not lock yet`);
   }
   member = { ...member, ...core.afterFailure(member) };
-  assert.equal(core.lockoutState(member).locked, true, 'the sixth try locks it');
+  assert.equal(core.lockoutState(member).locked, true, 'the fifth try locks it');
   assert.ok(core.lockoutState(member).seconds > 600);
 });
 

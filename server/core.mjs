@@ -313,7 +313,8 @@ export async function codeDigest(farmId, code) {
 
 // --- Guessing defence -----------------------------------------------------
 
-const LOCKOUT_AFTER = 6;
+// NFR-SEC-02: five wrong tries, then the account is locked for a quarter of an hour.
+const LOCKOUT_AFTER = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 export function lockoutState(member, now = Date.now()) {

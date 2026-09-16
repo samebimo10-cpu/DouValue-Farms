@@ -12,6 +12,7 @@ import { harvestClearance, reentryClearance, SPRAY_RULES } from '../domain/safet
 import { forecastHeadline, seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
+import { canComplete, stampFor } from '../domain/proof.js';
 
 let weather = null; // filled in by app.js when a forecast is available
 export function setWeather(w) { weather = w; }
@@ -126,10 +127,17 @@ export const todayView = {
       await ctx.store.dispatch('attendance.out', { personId: ctx.user.id, date: isoDate() });
       toast(getLang() === 'pcm' ? 'Safe journey' : 'Clocked out');
     },
+    // FR-PROOF-01. A scouting round or a trap check is not done because
+    // somebody tapped a button — it is done when there is a picture of it.
+    // Every other kind of task closes on the tap, as before.
     'task-done': async (ctx, el) => {
+      const task = ctx.state.tasks[el.dataset.id];
+      const verdict = canComplete(task, null);
+      if (!verdict.ok) { openProofSheet(ctx, task, verdict); return; }
       await ctx.store.dispatch('task.complete', { id: el.dataset.id });
       toast(getLang() === 'pcm' ? 'Well done' : 'Marked done');
     },
+    'save-proof': saveProof,
     'open-harvest': (ctx) => openHarvestSheet(ctx),
     'open-report': (ctx) => openReportSheet(ctx),
     'open-work': (ctx) => openWorkSheet(ctx),
@@ -153,6 +161,56 @@ function clockInTime(state, personId) {
 }
 
 // --- Harvest --------------------------------------------------------------
+
+/**
+ * The camera, opened because a task cannot close without it.
+ *
+ * Phrased as the next step rather than as a refusal. "Take the photo" is a job;
+ * "you cannot do that" is an argument with the app, and people win arguments
+ * with apps by not using them.
+ */
+function openProofSheet(ctx, task, verdict) {
+  const el = openSheet(`<h2>${esc(task.title || 'This check')}</h2>`
+    + note('info', verdict.why, `<small>${esc(verdict.fix)}</small>`)
+    + '<form data-act="save-proof">'
+    + `<input type="hidden" name="taskId" value="${esc(task.id)}">`
+    + photoField('Photograph what you checked',
+      'The trap, or the plants you looked at. Taken now, in the app — a picture from the gallery '
+      + 'proves the bed was fine earlier, not that it is fine now.')
+    + field('What did you see?', textarea('note', { rows: 2,
+      placeholder: 'e.g. traps replaced, a few thrips on the GH-01 trap' }),
+      'A line is enough. It goes on the record with the picture.')
+    + '<button class="btn-block btn-lg" type="submit">Done</button>'
+    + '</form>');
+  bindPhoto(el);
+}
+
+async function saveProof(ctx, form) {
+  const data = readForm(form);
+  const task = ctx.state.tasks[data.taskId];
+  const photo = photoPayload();
+  const verdict = canComplete(task, photo);
+  if (!verdict.ok) { toast(verdict.why, true); return; }
+
+  const cycle = task.cycleId ? ctx.state.cycles[task.cycleId] : null;
+  const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
+  await ctx.store.dispatch('task.complete', {
+    id: task.id,
+    photo,
+    note: data.note || '',
+    // FR-PROOF-02: date, time, zone and person, in one shape everywhere.
+    stamp: stampFor(photo, {
+      zoneName: zone ? zone.name : null,
+      personName: ctx.user.name,
+      taskKind: task.kind,
+    }),
+  });
+  resetPhoto();
+  closeSheet();
+  toast(verdict.unverifiedTime
+    ? 'Done. This phone did not stamp the picture with a time.'
+    : (getLang() === 'pcm' ? 'Well done' : 'Marked done'));
+}
 
 function openHarvestSheet(ctx) {
   const beds = bedOptions(ctx.store.state);

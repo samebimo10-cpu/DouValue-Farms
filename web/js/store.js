@@ -189,12 +189,6 @@ export function reduce(events) {
       case 'cycle.start': return `cycle:${p.id}`;
       case 'task.create': return `task:${p.id}`;
       case 'harvest.record': return `harvest:${p.id}`;
-      case 'diagnosis.confirm': {
-        const d = state.diagnoses.find((x) => x.id === p.id);
-        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
-        break;
-      }
-
       case 'report.record': return `report:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
@@ -319,6 +313,10 @@ export function reduce(events) {
         state.tasks[p.id].doneBy = e.by;
         state.tasks[p.id].doneAt = e.at;
         state.tasks[p.id].doneNote = p.note || '';
+        // FR-PROOF-01/02: the picture and its stamp are the evidence the task
+        // happened, so they belong on the task rather than in a side list.
+        if (p.photo) state.tasks[p.id].photo = p.photo;
+        if (p.stamp) state.tasks[p.id].stamp = p.stamp;
         break;
       case 'task.cancel':
         state.tasks[p.id].status = 'cancelled';
