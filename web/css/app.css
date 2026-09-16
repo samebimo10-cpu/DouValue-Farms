@@ -423,6 +423,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .print-head { display: none; }
 
+/* One-line gate verdict: green tick plus the reading it passed on. */
+.gate-row { margin: 8px 0 0; }
+.gate-row.ok b { color: var(--ok); }
+
 /* --- The adviser screen -------------------------------------------------- */
 
 /* A heading between cards, so "act on these" and "worth knowing" read as two

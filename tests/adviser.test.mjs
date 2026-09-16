@@ -50,6 +50,11 @@ function farm(overrides = {}) {
     diagnoses: [],
     expenses: [],
     stockMoves: [],
+    // A farm run to the requirements has passed its gates before planting, so
+    // the baseline fixture carries the tests that let it.
+    soilTests: [{ id: 'st1', zoneId: 'b1', date: day(-130), ph: 6.2, nematode: 'clean' }],
+    topsoilBatches: {},
+    gateOverrides: [],
     attendance: [],
     workLogs: [],
     weather: [],

@@ -11,6 +11,7 @@ import {
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
 import { adviserView } from './ui/adviser.js';
+import { gatesView } from './ui/gates.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
@@ -27,6 +28,7 @@ registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);
 registerRoute('#/audit', auditView);
 registerRoute('#/adviser', adviserView);
+registerRoute('#/gates', gatesView);
 registerRoute('#/people', peopleView);
 registerRoute('#/store', storeView);
 registerRoute('#/money', moneyView);

@@ -114,6 +114,23 @@ const EVENT_POLICY = {
   'input.issue':       { write: 'logInputs',     read: ANY },
   'weather.record':    { write: 'logWork',       read: ANY },
 
+  // Gates (requirements 6.2). These decide whether planting and spraying are
+  // allowed at all, so who may write them matters more than most.
+  //
+  // A soil test is evidence, and evidence is recorded by whoever took the
+  // sample — but only somebody who runs cycles may say a batch of bought-in
+  // topsoil is now filling a particular house.
+  'soiltest.record':   { write: 'scout',         read: ANY },
+  'topsoil.receive':   { write: 'logInputs',     read: ANY },
+  'topsoil.assign':    { write: 'manageCycles',  read: ANY },
+  // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
+  // and a confirmed diagnosis is what unlocks a treatment.
+  'diagnosis.confirm': { write: 'verifyHarvest', read: ANY },
+  // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
+  // the record. `manageOwners` is held by the CEO and nobody else.
+  'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
+  'gate.override.revoke': { write: 'manageOwners', read: ANY },
+
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
@@ -427,6 +444,24 @@ async function authenticate(farmId, req, store) {
   }
   await store.touchToken(rec.digest, new Date().toISOString());
   return { ok: true, member, token: rec };
+}
+
+/**
+ * FR-GATE-07 — an override is a decision on the record, not a switch.
+ *
+ * The permission table already limits this to the Owner. This adds the part
+ * that makes the record worth having: it must name which gate, which zone, and
+ * why. An override with an empty reason is refused, because a year later
+ * "someone turned it off" is not an answer anybody can act on.
+ */
+function guardOverride(event, author) {
+  const p = event.payload || {};
+  if (!p.gate || !p.zoneId) return { ok: false, why: 'An override must name the gate and the zone' };
+  const reason = String(p.reason || '').trim();
+  if (reason.length < 10) {
+    return { ok: false, why: 'An override needs a reason saying why it is safe to go ahead' };
+  }
+  return { ok: true };
 }
 
 /** Create the farm and its first account. Works exactly once per farm. */

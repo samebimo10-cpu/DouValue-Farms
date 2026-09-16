@@ -150,6 +150,9 @@ const EMPTY = () => ({
   sprays: [],
   scouts: [],
   diagnoses: [],
+  soilTests: [],
+  topsoilBatches: {},
+  gateOverrides: [],
   expenses: [],
   stockMoves: [],
   attendance: [],
@@ -184,8 +187,17 @@ export function reduce(events) {
       case 'cycle.start': return `cycle:${p.id}`;
       case 'task.create': return `task:${p.id}`;
       case 'harvest.record': return `harvest:${p.id}`;
+      case 'diagnosis.confirm': {
+        const d = state.diagnoses.find((x) => x.id === p.id);
+        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        break;
+      }
+
       case 'report.record': return `report:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
+      case 'diagnosis.record': return `diagnosis:${p.id}`;
+      case 'topsoil.receive': return `topsoil:${p.id}`;
+      case 'gate.override': return `override:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
       default: return null;
@@ -202,6 +214,9 @@ export function reduce(events) {
       case 'input.receive': case 'input.issue': return `input:${p.itemId}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
+      case 'diagnosis.confirm': return `diagnosis:${p.id}`;
+      case 'topsoil.assign': return `topsoil:${p.batchId}`;
+      case 'gate.override.revoke': return `override:${p.id}`;
       default: return null;
     }
   };
@@ -215,6 +230,9 @@ export function reduce(events) {
       case 'input': return !!state.inputs[id];
       case 'person': return !!state.people[id];
       case 'harvest': return state.harvests.some((h) => h.id === id);
+      case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
+      case 'topsoil': return !!state.topsoilBatches[id];
+      case 'override': return state.gateOverrides.some((o) => o.id === id);
       case 'report': return state.reports.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
       default: return true;
@@ -234,6 +252,28 @@ export function reduce(events) {
       case 'person.deactivate':
         if (state.people[p.id]) state.people[p.id].active = false;
         break;
+
+      // --- Gates (requirements 6.2) ------------------------------------
+      // Soil tests, topsoil batches and overrides are what the gates read.
+      // They are plain appends: a test is a fact about a day, and a later test
+      // does not erase an earlier one, it supersedes it.
+      case 'soiltest.record':
+        state.soilTests.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      case 'topsoil.receive':
+        state.topsoilBatches[p.id] = { ...p, by: e.by, at: e.at };
+        break;
+      case 'topsoil.assign':
+        if (state.plots[p.zoneId]) state.plots[p.zoneId].topsoilBatchId = p.batchId;
+        break;
+      case 'gate.override':
+        state.gateOverrides.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      case 'gate.override.revoke': {
+        const o = state.gateOverrides.find((x) => x.id === p.id);
+        if (o) { o.revoked = true; o.revokedBy = e.by; o.revokedAt = e.at; }
+        break;
+      }
 
       case 'plot.upsert':
         state.plots[p.id] = { ...(state.plots[p.id] || {}), ...p };
@@ -306,6 +346,12 @@ export function reduce(events) {
       case 'diagnosis.record':
         state.diagnoses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
+
+      case 'diagnosis.confirm': {
+        const d = state.diagnoses.find((x) => x.id === p.id);
+        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        break;
+      }
 
       case 'report.record':
         state.reports.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: 'open' });

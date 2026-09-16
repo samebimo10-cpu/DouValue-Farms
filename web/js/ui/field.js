@@ -9,6 +9,7 @@ import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, 
 import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../domain/predict.js';
 import { harvestClearance, PRODUCTS, PRODUCT_BY_ID, reentryClearance, resistanceWarnings, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
+import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -51,6 +52,11 @@ export const fieldView = {
       + '</div>',
       { tight: true },
     );
+
+    // The gates belong here rather than behind a menu: this is the screen
+    // someone is on when they are about to plant, which is the moment the
+    // checks either happen or do not.
+    out += gateSummary(state, today);
 
     if (!cycles.length) {
       out += card(empty('🌱', 'Nothing planted yet',
@@ -376,6 +382,17 @@ async function saveCycle(ctx, form) {
   const data = readForm(form);
   const plot = ctx.state.plots[data.plotId];
   if (!plot) { toast('Pick a bed', true); return; }
+
+  // FR-GATE-01/02/03. This is the block, not a warning: planting into untested
+  // ground is one of the four things that cost Season 1, and the save simply
+  // does not happen. Only the Owner can clear the way, and only on the record.
+  const verdict = canPlant(ctx.state, plot.id, { today: isoDate() });
+  if (!verdict.ok) {
+    closeSheet();
+    openGateBlock(ctx, plot, verdict);
+    return;
+  }
+
   const plants = Number(data.plants) || plantsForArea(data.cropId, plot.areaM2);
   await ctx.store.dispatch('cycle.start', {
     id: uid('cyc'), plotId: data.plotId, cropId: data.cropId, variety: data.variety,
@@ -383,6 +400,69 @@ async function saveCycle(ctx, form) {
   });
   closeSheet();
   toast(`${getCrop(data.cropId).name} started on ${plot.name}`);
+}
+
+/**
+ * What a blocked planting looks like.
+ *
+ * Deliberately not a toast. A refusal that flashes past teaches people the app
+ * is unreliable; a refusal that names the gate, says what it found and says
+ * what would clear it teaches them the order of work.
+ */
+function openGateBlock(ctx, plot, verdict) {
+  const owner = can(ctx.user, 'manageOwners');
+  openSheet(`<h2>Cannot plant ${esc(plot.name)} yet</h2>`
+    + `<p><small>${esc(verdict.why)}. These checks exist because Season 1 went into ground `
+    + 'nobody had tested.</small></p>'
+    + verdict.blocking.map((g) => note('danger', `${GATE_STATE[g.state].icon} ${g.name}`,
+      `<small><b>${esc(g.why)}</b><br>${esc(g.fix || '')}</small>`)).join('')
+    // Recording a test and overriding both live on the Gates screen, which owns
+    // those handlers. Sending people there beats duplicating the forms.
+    + `<div style="margin-top:12px">${button('Go to the gates', 'go',
+      { cls: 'btn-block btn-lg', icon: '🚧', data: { to: '#/gates' } })}</div>`
+    + (owner
+      ? '<p><small>You can record the test there, or override the gate — an override is kept with '
+        + 'your name and your reason, and it shows in the daily digest.</small></p>'
+      : '<p><small>Record the test there. Only the Owner can override a gate, so ask before '
+        + 'planting.</small></p>'));
+}
+
+/**
+ * The standing of every zone's gates, in one line when all is well.
+ *
+ * A blocked zone is worth interrupting for. A clear farm is worth one quiet
+ * line, so the screen does not train people to scroll past it.
+ */
+function gateSummary(state, today) {
+  const board = gateBoard(state, { today });
+  if (!board.length) return '';
+  const blocked = board.filter((r) => !r.ok);
+  const overridden = board.filter((r) => r.ok && r.overridden.length);
+
+  if (!blocked.length && !overridden.length) {
+    return card(
+      `<p class="gate-row ok"><b>✓ Gates clear</b> <small>All ${board.length} `
+      + `${board.length === 1 ? 'zone has' : 'zones have'} passed soil and topsoil checks. </small>`
+      + button('See the gates', 'go', { cls: 'btn-ghost btn-sm', data: { to: '#/gates' } })
+      + '</p>',
+      { tight: true },
+    );
+  }
+
+  return card(
+    cardHead('Gates', badge(blocked.length ? `${blocked.length} blocked` : 'on an override',
+      blocked.length ? 'danger' : 'warn'))
+    + '<ul class="list">'
+    + [...blocked, ...overridden].slice(0, 5).map((r) => '<li><div class="grow">'
+      + `<b>${esc(r.zone.name)}</b><small>${esc(r.blocking.length
+        ? r.blocking.map((g) => g.name).join(', ')
+        : `open on an override: ${r.overridden.map((g) => g.name).join(', ')}`)}</small></div>`
+      + badge(r.blocking.length ? 'blocked' : 'override', r.blocking.length ? 'danger' : 'warn')
+      + '</li>').join('')
+    + '</ul>'
+    + `<div style="margin-top:10px">${button('Open the gates screen', 'go',
+      { cls: 'btn-block', icon: '🚧', data: { to: '#/gates' } })}</div>`,
+  );
 }
 
 function openScoutSheet(ctx, cycleId) {
@@ -474,7 +554,25 @@ function updateSprayHints(ctx, el) {
 async function saveSpray(ctx, form) {
   const data = readForm(form);
   const product = PRODUCT_BY_ID[data.productId];
+
+  // FR-GATE-04 and FR-GATE-05. "Treatment by guesswork" is a named cause of
+  // Season 1, so a spray needs a confirmed diagnosis behind it, and it must not
+  // be the third from one resistance group.
+  const allowed = canTreat(ctx.state, data.cycleId, { today: isoDate(), productId: data.productId });
+  if (!allowed.ok) {
+    closeSheet();
+    openSheet(`<h2>${allowed.reason === 'rotation' ? 'Not this product' : 'Diagnose it first'}</h2>`
+      + note('danger', allowed.why, `<small>${esc(allowed.fix)}</small>`)
+      + (allowed.reason === 'rotation'
+        ? '<p><small>Resistance does not wear off. A group used past its limit stops working on this '
+          + 'farm for good, usually in the season that needs it most.</small></p>'
+        : `<div style="margin-top:12px">${button('Check the plant now', 'go',
+          { cls: 'btn-block btn-lg', icon: '🔍', data: { to: '#/diagnose' } })}</div>`));
+    return;
+  }
+
   await ctx.store.dispatch('spray.record', {
+    diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
     id: uid('sp'), cycleId: data.cycleId, productId: data.productId,
     productName: product ? product.name : '', phiDays: product ? product.phiDays : 0,
     reiHours: product ? product.reiHours : 24, targetProblem: data.targetProblem || '',

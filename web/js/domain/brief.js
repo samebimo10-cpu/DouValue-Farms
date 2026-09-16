@@ -23,6 +23,7 @@ import {
 } from './climate.js';
 import { bedPerformance, gradeMix, harvestTrend, labourProductivity, unitEconomics } from './analysis.js';
 import { audit } from './integrity.js';
+import { gateBoard } from './gates.js';
 import { harvestClearance, reentryClearance, resistanceWarnings } from './safety.js';
 import { forecastAccuracy, stockForecast } from './predict.js';
 import { PROBLEM_BY_ID } from './pests.js';
@@ -330,6 +331,18 @@ export function buildBrief(state, user, opts = {}) {
       kgPerHour: r.kgPerHour,
     })), 8),
     economics: money ? economics(state, today) : null,
+    // FR-ADV-04. The adviser must never suggest planting into a blocked zone or
+    // spraying without a diagnosis, so it is told the gates rather than left to
+    // infer them from the records.
+    gates: gateBoard(state, { today })
+      .filter((r) => !r.ok || r.overridden.length)
+      .slice(0, 8)
+      .map((r) => compact({
+        zone: r.zone.name,
+        planted: r.planted,
+        blocked: r.blocking.map((g) => g.name),
+        openOnOverride: r.overridden.map((g) => g.name),
+      })),
     dataTrust: trust(state, today),
     forecastTrack: forecastTrack(state),
   });

@@ -98,6 +98,56 @@ function safety(brief) {
   return out;
 }
 
+/**
+ * FR-GATE-01/02 reaching the adviser — a zone that cannot legally be planted.
+ *
+ * This sits with safety rather than planning on purpose. A blocked gate is not
+ * a scheduling inconvenience; it is the app refusing to repeat Season 1.
+ */
+function gates(brief) {
+  const out = [];
+  for (const g of brief.gates || []) {
+    if (g.planted && (g.blocked || []).length) {
+      out.push(rec({
+        id: `gate-planted:${g.zone}`,
+        urgency: 'week',
+        area: 'safety',
+        title: `${g.zone} was planted with its checks not passed`,
+        because: `Still outstanding: ${g.blocked.join(', ')}.`,
+        cost: 'If it is nematodes, the crop in there is already lost and the ground stays infected '
+          + 'for the next one.',
+        action: 'Test it now, even though the plants are in. A result this cycle decides whether the '
+          + 'next cycle can go in the same ground.',
+        basis: 'Untested soil is the first of the four causes named in the season review.',
+      }));
+    } else if ((g.blocked || []).length) {
+      out.push(rec({
+        id: `gate:${g.zone}`,
+        urgency: 'week',
+        area: 'planning',
+        title: `${g.zone} cannot be planted yet`,
+        because: `Not cleared: ${g.blocked.join(', ')}.`,
+        action: 'Get the test done and recorded before transplanting is scheduled. A lab turnaround '
+          + 'is days, so booking it late is what makes people want to skip it.',
+        basis: 'The gate is the control. Planning around it rather than through it is the failure.',
+      }));
+    }
+    for (const name of g.openOnOverride || []) {
+      out.push(rec({
+        id: `override:${g.zone}:${name}`,
+        urgency: 'week',
+        area: 'safety',
+        title: `${g.zone} is open on an override — ${name}`,
+        because: 'The Owner cleared the way while the check itself is still outstanding.',
+        action: 'Close the loop: get the real result recorded and put the gate back. An override is '
+          + 'meant to be temporary, and the ones that are forgotten are the dangerous ones.',
+        basis: 'An override is a decision under time pressure, not a finding that the ground is safe.',
+      }));
+    }
+  }
+  return out;
+}
+
 // --- Water and weather ----------------------------------------------------
 
 function water(brief) {
@@ -442,6 +492,7 @@ function planting(brief) {
 export function advise(brief) {
   const all = [
     ...safety(brief),
+    ...gates(brief),
     ...water(brief),
     ...beds(brief),
     ...quality(brief),
