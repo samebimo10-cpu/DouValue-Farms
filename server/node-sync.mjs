@@ -2,7 +2,7 @@
 /**
  * DouValue farm server, self-hosted edition.
  *
- *   node douvalue/server/node-sync.mjs --port 8787 --data ./farm-data
+ *   node server/node-sync.mjs --port 8787 --data ./farm-data
  *
  * All the rules live in core.mjs. This file is only storage and plumbing: it
  * keeps each farm in a folder, with its records in one append-only JSON-lines

@@ -15,7 +15,7 @@ const core = readFileSync(join(here, 'server/core.mjs'), 'utf8')
 const header = `// DouValue farm server, for Deno Deploy.
 //
 // GENERATED FILE. Do not edit here: change server/core.mjs and run
-//   node douvalue/scripts-build-deno.mjs
+//   node scripts-build-deno.mjs
 //
 // To run it, with no command line and no card:
 //   1. Open https://dash.deno.com and create a new Playground.
@@ -114,7 +114,7 @@ writeFileSync(join(here, 'server/deploy/README.md'), `# DouValue farm sync serve
 
 GENERATED. Do not edit \`main.ts\` here: change \`../core.mjs\` and run
 
-    node douvalue/scripts-build-deno.mjs
+    node scripts-build-deno.mjs
 
 This folder exists so it can be deployed on its own. It holds one file, which is
 the whole server, so pointing Deno Deploy at this directory needs no entry point

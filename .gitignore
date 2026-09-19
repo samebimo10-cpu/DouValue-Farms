@@ -1,0 +1,6 @@
+# Assembled by scripts/assemble_site.sh; GitHub Pages builds it on every deploy.
+_site/
+node_modules/
+# The node sync server's local store, when run with --data ./farm-data
+farm-data/
+.DS_Store

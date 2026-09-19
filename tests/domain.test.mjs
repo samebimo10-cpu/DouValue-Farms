@@ -1,6 +1,6 @@
 // Tests for the parts of the app that decide things: what is wrong with a plant,
 // when fruit is safe to pick, what a bed will yield, and what the log adds up to.
-// Run with:  node --test douvalue/tests/
+// Run with:  node --test tests/
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

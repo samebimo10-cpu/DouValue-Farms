@@ -1,7 +1,7 @@
 // DouValue farm server, for Deno Deploy.
 //
 // GENERATED FILE. Do not edit here: change server/core.mjs and run
-//   node douvalue/scripts-build-deno.mjs
+//   node scripts-build-deno.mjs
 //
 // To run it, with no command line and no card:
 //   1. Open https://dash.deno.com and create a new Playground.

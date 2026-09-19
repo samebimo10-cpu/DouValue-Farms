@@ -542,7 +542,7 @@ test('the generated Deno servers have not drifted from the core', async () => {
   execFileSync(process.execPath, [new URL('../scripts-build-deno.mjs', import.meta.url).pathname], { stdio: 'ignore' });
   generated.forEach((path, i) => {
     assert.equal(readFileSync(path, 'utf8'), before[i],
-      `${path} is generated: run node douvalue/scripts-build-deno.mjs and commit the result`);
+      `${path} is generated: run node scripts-build-deno.mjs and commit the result`);
   });
   assert.equal(before[0], before[1], 'both copies of the server must be the same file');
 });

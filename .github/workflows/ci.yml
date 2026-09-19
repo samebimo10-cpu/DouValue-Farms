@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    name: DouValue farm app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Domain, gate and event-log tests
+        run: npm test
+
+      # The Deno server files are generated from server/core.mjs. The suite
+      # already fails if they have drifted; this rebuilds them so a drift shows
+      # up as a diff rather than only as a message.
+      - name: The generated server is in step with its source
+        run: |
+          node scripts-build-deno.mjs
+          git diff --exit-code -- server/deno-sync.ts server/deploy/
+
+      - name: The site assembles
+        run: ./scripts/assemble_site.sh _site

@@ -65,13 +65,13 @@ is never sent wages or sales. It is free and takes about five minutes.</p>
   <p>This opens Deno Deploy with everything already filled in: your repository,
   the right folder, and the server file inside it.</p>
   <p><a id="oneTap"
-     href="https://console.deno.com/new?clone=https://github.com/samebimo10-cpu/Stock-&amp;path=douvalue/server/deploy"
+     href="https://console.deno.com/new?clone=https://github.com/samebimo10-cpu/douvalue-farm&amp;path=server/deploy"
      target="_blank" rel="noopener">
      <button type="button">Open Deno Deploy, ready to go</button></a></p>
   <p>Sign in with GitHub if it asks. Check that it says:</p>
   <ul>
-    <li><b>Repository URL</b> &mdash; <code>https://github.com/samebimo10-cpu/Stock-</code></li>
-    <li><b>Subdirectory</b> &mdash; <code>/douvalue/server/deploy</code></li>
+    <li><b>Repository URL</b> &mdash; <code>https://github.com/samebimo10-cpu/douvalue-farm</code></li>
+    <li><b>Subdirectory</b> &mdash; <code>/server/deploy</code></li>
   </ul>
   <p>Leave the repository name as it suggests, then deploy. The folder holds one
   file and that file is the whole server, so there is nothing else to set.</p>
@@ -91,10 +91,10 @@ does the same job.</small></p>
   with nothing after the address, and look for an option to deploy an
   <b>existing</b> GitHub repository rather than cloning an example.</p>
   <ol>
-    <li>Repository: <b>Stock-</b></li>
-    <li>Branch: <pre id="branchname">claude/stock-selector-allocator-app-8lic01</pre>
+    <li>Repository: <b>douvalue-farm</b></li>
+    <li>Branch: <pre id="branchname">main</pre>
       <button onclick="copyText(document.getElementById('branchname').textContent.trim(), this)">Copy the branch name</button></li>
-    <li>Entry point: <pre id="entrypath">douvalue/server/deploy/main.ts</pre>
+    <li>Entry point: <pre id="entrypath">server/deploy/main.ts</pre>
       <button onclick="copyText(document.getElementById('entrypath').textContent.trim(), this)">Copy the file path</button></li>
   </ol>
   <p><small>Set up this way the server follows the repository, so improvements
@@ -121,7 +121,7 @@ does the same job.</small></p>
 <div class="card">
   <h2>2. Paste this one line</h2>
   <p>That is the whole thing. It loads the farm server from your own site.</p>
-  <pre id="oneliner">import "https://samebimo10-cpu.github.io/Stock-/farm/server/deno-entry.js";</pre>
+  <pre id="oneliner">import "https://samebimo10-cpu.github.io/douvalue-farm/server/deno-entry.js";</pre>
   <button onclick="copyText(document.getElementById('oneliner').textContent, this)">Copy the line</button>
   <details>
     <summary>Rather paste the whole thing?</summary>
