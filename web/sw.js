@@ -4,7 +4,10 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-const CACHE = 'douvalue-v10';
+// Bumped when the app moves: the app used to be served from /Stock-/farm/ and
+// now has its own site at /douvalue-farm/. A phone that still holds the old
+// cache must discard it rather than keep serving the app from the old address.
+const CACHE = 'douvalue-v11';
 
 const SHELL = [
   './',
