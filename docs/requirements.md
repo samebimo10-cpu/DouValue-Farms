@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.4 (draft for restructuring) |
+| Version | 1.5 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -136,7 +136,7 @@ Field staff are trained to use the app, including writing notes and reports. The
 Gates stop wrong actions. They are the most important part of the app.
 
 - **FR-GATE-00 (MUST):** There is no site agronomist. Gate 0 and Gate 4 are cleared by Farm Manager confirmation plus Owner approval, after the Farm Doctor check. The nematode assay still comes from a lab.
-- **FR-GATE-01 (MUST):** **Soil pH gate.** Planting cannot be logged unless a pH reading between **5.5 and 7.0** has been recorded for that zone, from a three-point test, after any lime correction (rules C-5, C-14).
+- **FR-GATE-01 (MUST):** **Soil pH gate.** Planting cannot be logged unless a pH reading between **5.5 and 7.0** has been recorded for that zone, from a three-point test, after any lime correction (rules C-5, C-14). The soil and pH results must be sampled after the previous cycle in that zone ended and no more than 90 days before transplant; older results must be re-taken.
 - **FR-GATE-02 (MUST):** **Nematode gate.** Planting cannot be logged unless a soil or topsoil test marked clean has been recorded for that zone or that topsoil batch.
 - **FR-GATE-03 (MUST):** **Purchased topsoil.** Each topsoil delivery is logged as a batch with supplier, date and test result. Untested batches are marked red and cannot be assigned to a zone.
 - **FR-GATE-04 (MUST):** **Diagnose before treat.** A treatment cannot be logged without a linked diagnosis (see 6.5).
@@ -173,7 +173,7 @@ Fixes late thrips control.
 ### 6.6 Diagnosis
 Fixes treatment by guesswork.
 
-- **FR-DIAG-01 (MUST):** The 22 triage entries and 20 diagnosis cards from Rev 5 are built in as guided questions with reference photos ("Leaves curled? Yes / No").
+- **FR-DIAG-01 (MUST):** The 23 triage rows and 22 diagnosis cards in the rules JSON (Rev 5 plus the acid-soil and bacterial-spot additions) are built in as guided questions with reference photos ("Leaves curled? Yes / No").
 - **FR-DIAG-02 (MUST):** A diagnosis records the card used, answers given, photos, written reasoning, and who confirmed it.
 - **FR-DIAG-03 (MUST):** A Greenhouse Hand can start a diagnosis, but only the Field Supervisor or Farm Manager can confirm it.
 - **FR-DIAG-04 (MUST):** Suspected virus (e.g. tospovirus) triggers a red alert straight to the Owner, with isolation and removal steps.
@@ -196,7 +196,7 @@ Fixes treatment by guesswork.
 - **FR-STOCK-06 (MUST):** The Farm Manager can add a brand label by selecting one or more active ingredients from the catalogue, then entering brand name, formulation, concentration, label rate, PHI, REI and a label photo. The group fills in automatically.
 - **FR-STOCK-07 (MUST):** Blank PHI or REI on a label uses the defaults (24 h REI; 14-day PHI for synthetics). An entered value is used only if longer.
 - **FR-STOCK-08 (MUST):** An active with no schedule rate and no entered label rate cannot be used.
-- **FR-STOCK-09 (MUST):** Only the Owner can add a new active ingredient to the catalogue, with its group. Banned actives (carbofuran / Furadan) can never be added.
+- **FR-STOCK-09 (MUST):** Only the Owner can add a new active ingredient to the catalogue, with its group. Banned actives (carbofuran / Furadan) can never be added, and must not ship in the catalogue at all — not even flagged as 'avoid'.
 
 ### 6.9 Harvest and sales
 - **FR-HARV-01 (MUST):** Harvest records zone, date, crates or weight, grade, person, and notes.
@@ -264,16 +264,16 @@ Fixes treatment by guesswork.
 
 ### 7.4 Security and privacy
 - **NFR-SEC-01 (MUST):** The sample farm and its shared PIN must be erased before real use. The app warns if real data exists alongside sample data.
-- **NFR-SEC-02 (MUST):** Real PINs are unique per person. The phone locks after 5 wrong tries for **[X]** minutes.
+- **NFR-SEC-02 (MUST):** Real PINs are unique per person. The phone locks after 5 wrong tries for 15 minutes.
 - **NFR-SEC-03 (MUST):** API keys live only on the server, never in the app or the code repository.
 - **NFR-SEC-04 (MUST):** All user text (notes, voice transcripts, scouting comments) is treated as untrusted and escaped before display. Tests cover script injection through notes and adviser links.
 - **NFR-SEC-05 (MUST):** Every change records who made it and when. Records are corrected, never silently deleted.
-- **NFR-SEC-06 (SHOULD):** The app auto-signs out after **[X]** minutes idle on shared phones.
+- **NFR-SEC-06 (SHOULD):** The app auto-signs out after 10 minutes idle on shared phones.
 
 ### 7.5 Data safety
 - **NFR-DATA-01 (MUST):** Daily automatic server backup; the Owner can download a full export.
 - **NFR-DATA-02 (MUST):** A lost phone loses nothing that has synced.
-- **NFR-DATA-03 (SHOULD):** Records are kept for at least **[5]** seasons for trend analysis.
+- **NFR-DATA-03 (SHOULD):** Records are kept for at least 5 seasons for trend analysis.
 
 ---
 
@@ -340,6 +340,7 @@ Fixes treatment by guesswork.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
 | 1.4 | 16 Sep 2026 | Field usability trial moved to after build, with a fix round (UX-26, UX-27, §9a) |
 | 1.3 | 16 Sep 2026 | OF-02 is the nursery; Farm Doctor replaces site agronomist; active-ingredient catalogue with manager-added labels |
 | 1.2 | 16 Sep 2026 | Rev 5/5.1 rules linked; thresholds and escalation filled in; D-2 and D-4 closed |
