@@ -15,11 +15,11 @@ other later. There is no server to pay for and no account to create.
 
 ## Open it
 
-**https://samebimo10-cpu.github.io/Stock-/farm/**
+**https://samebimo10-cpu.github.io/douvalue-farm/**
 
 That is the permanent address. Open it on a phone and use **Add to home screen**; it
 then launches like any other app and keeps working with the data switched off. A workflow
-in this repository republishes it whenever anything under `douvalue/web/` changes.
+in this repository republishes it whenever anything under `web/` changes.
 
 The page is public, because GitHub Pages on a public repository is. **The farm's records
 are not**: everything anyone enters is stored in their own browser on their own phone and
@@ -28,8 +28,8 @@ never leaves it. A stranger who opens the link gets an empty app, not your farm.
 To run it locally instead:
 
 ```bash
-cd douvalue/web
-python3 -m http.server 8000     # or, from douvalue/:  npm start
+cd web
+python3 -m http.server 8000     # or, from the repository root:  npm start
 ```
 
 Then open `http://localhost:8000` and press **Load a sample farm** to look around.
@@ -330,11 +330,11 @@ nobody else shared a password with them.
 **Setting the server up.** Free, and about five minutes. There is a page that
 walks through both routes:
 
-**https://samebimo10-cpu.github.io/Stock-/farm/server/**
+**https://samebimo10-cpu.github.io/douvalue-farm/server/**
 
 The easiest route involves no copying at all: in Deno Deploy, create a project
 from the **GitHub repository** rather than a Playground, pick this repo and its
-default branch, and give `douvalue/server/deno-sync.ts` as the entry point. The
+default branch, and give `server/deno-sync.ts` as the entry point. The
 server then tracks the repository, so improvements to it reach the farm without
 anyone redeploying by hand.
 
@@ -343,7 +343,7 @@ If the GitHub option cannot be found, the paste route still works:
 1. Open **dash.deno.com** and start a new Playground, which is an editor that
    runs one file. Clear the example already in it.
 2. Paste this single line, which loads the server from your own site:
-   `import "https://samebimo10-cpu.github.io/Stock-/farm/server/deno-entry.js";`
+   `import "https://samebimo10-cpu.github.io/douvalue-farm/server/deno-entry.js";`
    The setup page has a copy button, and a second button for the whole file if
    you would rather the server had no link back here.
 3. Press Save & Deploy and copy the address it gives you. Opening it should say
@@ -354,14 +354,14 @@ The one-line version works because the site serves that file as JavaScript,
 which is what Deno needs to import it. Deno fetches it once at deploy time and
 caches it, so the running server does not depend on this site staying up.
 
-Prefer your own machine? `douvalue/server/node-sync.mjs` serves the same contract
+Prefer your own machine? `server/node-sync.mjs` serves the same contract
 and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
 Put either behind HTTPS: tokens and PINs travel in the request, and plain HTTP
 puts them on the wire in clear.
 
 `server/core.mjs` holds all the rules; the two servers are only storage and
 plumbing. `server/deno-sync.ts` is generated from it by
-`node douvalue/scripts-build-deno.mjs`, and a test fails if the two drift apart.
+`node scripts-build-deno.mjs`, and a test fails if the two drift apart.
 
 ### Why not Google Drive or Gmail?
 
@@ -439,7 +439,7 @@ Two numbers deserve particular suspicion and are labelled as such in the app:
 ## Layout
 
 ```
-douvalue/
+douvalue-farm/
 ├─ web/
 │  ├─ index.html, manifest.webmanifest, sw.js, icon.svg
 │  ├─ css/app.css
@@ -464,7 +464,13 @@ douvalue/
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
-│  └─ node-sync.mjs     the same core, self-hosted, storing to files
+│  ├─ node-sync.mjs     the same core, self-hosted, storing to files
+│  ├─ deploy/           the generated server on its own, for a one-folder deploy
+│  └─ page/             the setup page published at /server/
+├─ rules/               douvalue_rules_rev5_1.json, the source of truth
+├─ docs/                requirements.md, build-rules.md, source/ (the PDFs)
+├─ brand/               the original logo
+├─ scripts/             assemble_site.sh, which builds what Pages publishes
 └─ tests/               domain, roles and sync
 ```
 
@@ -474,8 +480,8 @@ why it fits in a service-worker cache and opens on a cheap phone with no signal.
 ## Tests
 
 ```bash
-node --test "douvalue/tests/**/*.test.mjs"
-# or, from the douvalue directory:  npm test
+npm test
+# or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
 123 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
