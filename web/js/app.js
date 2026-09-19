@@ -17,6 +17,8 @@ import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { missingTasks } from './domain/schedule.js';
 import { startSync } from './sync.js';
+import { loadRules } from './rules.js';
+import { migrationEvents } from './domain/actives.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
 
@@ -83,7 +85,35 @@ async function generateToday(ctx) {
   ctx.refresh();
 }
 
+/**
+ * FR-STOCK-05 — put the store's own items onto the active-ingredient catalogue.
+ *
+ * The farm was buying chemicals before any of this existed, and that history is
+ * not re-typed or thrown away: each item is linked to the active it always was,
+ * and every movement, cost and spray goes on pointing at the same item. Only
+ * items that resolve to exactly one active are linked; anything ambiguous is
+ * left for the Farm Manager to name on the Store screen, because a guess here
+ * is a guess about which resistance group went on the crop.
+ *
+ * The link ids are derived from the item, so five phones doing this produce one
+ * event, and a second run after a sync does nothing.
+ */
+async function linkStockToActives(ctx) {
+  if (!ctx.user || !can(ctx.user, 'logInputs')) return;
+  const events = migrationEvents(ctx.store.state);
+  if (!events.length) return;
+  for (const event of events) {
+    await ctx.store.dispatch(event.type, event.payload, { eventId: event.eventId });
+  }
+  ctx.refresh();
+}
+
 async function main() {
+  // The rules are the source of truth for the catalogue, the rotation and every
+  // waiting period, so nothing opens until they are in hand. A screen that
+  // cannot read the rules must not decide whether somebody may spray.
+  await loadRules();
+
   // UX-25 has to be decided before anything is loaded: a practice session must
   // never open the real log at all.
   let practising = false;
@@ -104,6 +134,10 @@ async function main() {
   // mode — a training session that reached the server would put an invented
   // harvest on everybody else's phone.
   if (!practising) await startSync(store);
+
+  if (!practising) await linkStockToActives(ctx).catch((err) => {
+    console.error('Could not link the store to the catalogue', err);
+  });
 
   if (!practising) await generateToday(ctx).catch((err) => {
     // A farm that cannot generate its schedule still has to be usable: every

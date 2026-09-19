@@ -449,6 +449,7 @@ DouValue-Farms/
 │     ├─ store.js        event log → farm state, roles, selectors
 │     ├─ db.js           IndexedDB log, merge, export/import, photo compression
 │     ├─ util.js         dates, naira, HTML escaping
+│     ├─ rules.js        loads rules/douvalue_rules_rev5_1.json, the one copy
 │     ├─ i18n.js         English and Pidgin
 │     ├─ sample.js       the worked example farm
 │     ├─ domain/
@@ -458,6 +459,7 @@ DouValue-Farms/
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
 │     │  ├─ pests.js     32 problems, 67 symptoms, management for each
 │     │  ├─ diagnose.js  symptom scoring, next checks, risk board
+│     │  ├─ actives.js   the 20 active ingredients, their IRAC/FRAC groups, brand labels
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
 │     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo

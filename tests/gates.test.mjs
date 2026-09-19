@@ -12,8 +12,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const base = new URL('../web/js/', import.meta.url);
+// FR-GATE-05 reads the rotation out of rules/douvalue_rules_rev5_1.json, so the
+// rules have to be in hand before a gate can be asked anything.
+const { loadRules } = await import(new URL('rules.js', base).href);
+await loadRules();
 const {
-  canPlant, canTreat, gatesForZone, gateBoard, rotationCheck, GATE_RULES,
+  canPlant, canTreat, cropWeek, gatesForZone, gateBoard, rotationCheck, GATE_RULES,
 } = await import(new URL('domain/gates.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
@@ -34,6 +38,7 @@ function farm(overrides = {}) {
     },
     plots: { gh1: { id: 'gh1', name: 'GH-01', areaM2: 300, type: 'greenhouse' } },
     cycles: {},
+    actives: {}, labels: {},
     tasks: {},
     inputs: {},
     harvests: [], sales: [], sprays: [], scouts: [], diagnoses: [], expenses: [],
@@ -244,41 +249,197 @@ test('a diagnosis from last month does not authorise a spray today', () => {
   assert.equal(canTreat(state, 'c1', { today: TODAY }).reason, 'no-diagnosis');
 });
 
-// --- FR-GATE-05: spray rotation ------------------------------------------
+// --- FR-GATE-05: spray rotation by resistance group ----------------------
+//
+// The rules file does not say "three sprays in sixty days". It says "never the
+// same IRAC group twice in a row" and "never the same FRAC group twice in a
+// row", and it names the two sequences the farm rotates through. That is what
+// these assert, because a rotation gate that reads brand names is not a
+// rotation gate — it is a spelling check.
 
-test('a third spray from one resistance group is blocked, with alternatives named', () => {
-  const sprays = [day(-30), day(-15)].map((date, i) => ({
-    id: `s${i}`, cycleId: 'c1', productId: 'mancozeb', date,
-  }));
-  const verdict = rotationCheck(farm({ sprays }), 'c1', 'mancozeb', { today: TODAY });
+/** A zone with a crop in it, so the week-10 rules have a transplant date to count from. */
+const planted = (transplantDate = day(-30), extra = {}) => farm({
+  cycles: { c1: { id: 'c1', plotId: 'gh1', crop: 'bell', status: 'active', transplantDate } },
+  ...extra,
+});
+
+const sprayed = (rows) => rows.map((r, i) => ({
+  id: `s${i}`, cycleId: 'c1', activeId: r.activeId, date: r.date,
+  targetProblem: r.target || '', purpose: r.purpose || null,
+}));
+
+test('the same FRAC group twice in a row is blocked, however long the gap', () => {
+  const state = planted(day(-30), { sprays: sprayed([{ activeId: 'mancozeb', date: day(-20) }]) });
+  const verdict = rotationCheck(state, 'c1', 'mancozeb', { today: TODAY });
 
   assert.equal(verdict.ok, false);
   assert.equal(verdict.reason, 'rotation');
+  assert.ok(/never the same frac group twice in a row/i.test(verdict.why), verdict.why);
   assert.ok(verdict.alternatives.length, 'a block that names no alternative just gets overridden');
 });
 
-test('two from one group is still allowed, because two is the limit', () => {
-  const sprays = [{ id: 's0', cycleId: 'c1', productId: 'mancozeb', date: day(-20) }];
-  assert.equal(rotationCheck(farm({ sprays }), 'c1', 'mancozeb', { today: TODAY }).ok, true);
+test('the named FRAC sequence runs clean: M3, then M1, then the Metalaxyl mixture', () => {
+  const after = (rows, activeId) => rotationCheck(
+    planted(day(-60), { sprays: sprayed(rows) }), 'c1', activeId, { today: TODAY },
+  );
+
+  assert.equal(after([], 'mancozeb').ok, true);
+  assert.equal(after([{ activeId: 'mancozeb', date: day(-24) }], 'copper-oxychloride').ok, true);
+  assert.equal(after([
+    { activeId: 'mancozeb', date: day(-24) },
+    { activeId: 'copper-oxychloride', date: day(-12) },
+  ], 'metalaxyl-m-mancozeb').ok, true);
+  // "then: restart at M3" — the mixture rotates as FRAC 4, so Mancozeb follows it.
+  assert.equal(after([
+    { activeId: 'mancozeb', date: day(-36) },
+    { activeId: 'copper-oxychloride', date: day(-24) },
+    { activeId: 'metalaxyl-m-mancozeb', date: day(-12) },
+  ], 'mancozeb').ok, true);
+});
+
+test('a second brand from the same IRAC group is not a rotation', () => {
+  // Cypermethrin and lambda-cyhalothrin are both IRAC 3A. Two bottles, two
+  // prices, one mode of action, and the thrips cannot tell them apart.
+  const state = planted(day(-30), { sprays: sprayed([{ activeId: 'cypermethrin', date: day(-9) }]) });
+  const verdict = rotationCheck(state, 'c1', 'lambda-cyhalothrin', { today: TODAY });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'rotation');
+  assert.equal(verdict.group, 'IRAC 3A');
+  assert.ok(/Thiamethoxam/i.test(verdict.fix), verdict.fix);
+});
+
+test('the sequence itself is the fix a refusal offers', () => {
+  const state = planted(day(-30), { sprays: sprayed([{ activeId: 'cypermethrin', date: day(-9) }]) });
+  const verdict = rotationCheck(state, 'c1', 'cypermethrin', { today: TODAY });
+
+  assert.equal(verdict.next.group, 'IRAC 4A', 'after 3A the programme goes to 4A');
+  assert.equal(verdict.next.rate, '0.2 g/L', 'and it carries the rate, so nobody guesses one');
 });
 
 test('rotation is judged per zone, not across the whole farm', () => {
-  // Two houses each sprayed twice is not four applications on one population.
-  const sprays = [day(-30), day(-15)].map((date, i) => ({
-    id: `s${i}`, cycleId: 'c2', productId: 'mancozeb', date,
-  }));
-  assert.equal(rotationCheck(farm({ sprays }), 'c1', 'mancozeb', { today: TODAY }).ok, true);
+  // Two houses each sprayed once is not two applications on one population.
+  const state = farm({
+    cycles: {
+      c1: { id: 'c1', plotId: 'gh1', status: 'active', transplantDate: day(-30) },
+      c2: { id: 'c2', plotId: 'gh2', status: 'active', transplantDate: day(-30) },
+    },
+    sprays: [{ id: 's0', cycleId: 'c2', activeId: 'mancozeb', date: day(-10) }],
+  });
+  assert.equal(rotationCheck(state, 'c1', 'mancozeb', { today: TODAY }).ok, true);
+});
+
+test('copper sprayed on pruning wounds does not count against the FRAC rotation', () => {
+  // Rev 5.1: wound care is logged as wound care and excluded from the rotation
+  // check and the interval count.
+  const state = planted(day(-30), {
+    sprays: sprayed([{ activeId: 'copper-hydroxide', date: day(-3), purpose: 'wound-care' }]),
+  });
+  assert.equal(rotationCheck(state, 'c1', 'copper-oxychloride', { today: TODAY }).ok, true);
+});
+
+test('Metalaxyl-M is refused until two other fungicides have been through', () => {
+  const state = planted(day(-40), {
+    sprays: sprayed([
+      { activeId: 'metalaxyl-m-mancozeb', date: day(-24) },
+      { activeId: 'mancozeb', date: day(-12) },
+    ]),
+  });
+  const verdict = rotationCheck(state, 'c1', 'metalaxyl-m-mancozeb', { today: TODAY });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'metalaxyl', 'max every third fungicide spray');
+});
+
+test('an active with no rate on file cannot be sprayed at all', () => {
+  // FR-STOCK-08. Abamectin is in the catalogue with no schedule rate, so until
+  // somebody enters the label it is a bottle with no dose.
+  const verdict = rotationCheck(planted(), 'c1', 'abamectin', { today: TODAY });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'no-rate');
+  assert.ok(/label/i.test(verdict.fix), verdict.fix);
 });
 
 test('the rotation block reaches the treatment gate, not just the warning screen', () => {
-  const state = farm({
+  const state = planted(day(-30), {
     diagnoses: [{ id: 'd1', cycleId: 'c1', problemId: 'anthracnose', date: day(-1), confirmedBy: 'u_mgr' }],
-    sprays: [day(-30), day(-15)].map((date, i) => ({ id: `s${i}`, cycleId: 'c1', productId: 'mancozeb', date })),
+    sprays: sprayed([{ activeId: 'mancozeb', date: day(-12) }]),
   });
-  const verdict = canTreat(state, 'c1', { today: TODAY, productId: 'mancozeb' });
+  const verdict = canTreat(state, 'c1', { today: TODAY, activeId: 'mancozeb' });
 
   assert.equal(verdict.ok, false, 'a confirmed diagnosis does not excuse breaking rotation');
   assert.equal(verdict.reason, 'rotation');
+});
+
+// --- FR-GATE-05: the thrips programme ------------------------------------
+
+test('thrips rotation is its own series, so an unrelated spray does not reset it', () => {
+  const state = planted(day(-30), {
+    sprays: sprayed([
+      { activeId: 'spinosad', date: day(-14), target: 'thrips' },
+      { activeId: 'cypermethrin', date: day(-7), target: 'general insects' },
+    ]),
+  });
+  const verdict = rotationCheck(state, 'c1', 'spinosad', { today: TODAY, target: 'thrips' });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'rotation');
+  assert.ok(verdict.alternatives.some((a) => /IRAC 28/.test(a)),
+    `the other thrips groups are offered: ${verdict.alternatives.join('; ')}`);
+});
+
+test('the next group in the thrips programme is allowed', () => {
+  const state = planted(day(-30), {
+    sprays: sprayed([{ activeId: 'spinosad', date: day(-14), target: 'thrips' }]),
+  });
+  assert.equal(
+    rotationCheck(state, 'c1', 'chlorantraniliprole', { today: TODAY, target: 'thrips' }).ok, true,
+  );
+});
+
+// --- FR-GATE-05: the Week 10 rule (SR-08) --------------------------------
+
+test('week 10 is counted from transplant, not from the calendar', () => {
+  // Build Rules §11a: T is Day 1 of Week 0, so Week 10 opens 70 days later.
+  const state = planted(day(-69));
+  assert.equal(cropWeek(state, 'c1', TODAY), 9);
+  assert.equal(cropWeek(planted(day(-70)), 'c1', TODAY), 10);
+});
+
+test('from Week 10 a synthetic cannot be selected at all', () => {
+  const verdict = rotationCheck(planted(day(-80)), 'c1', 'mancozeb', { today: TODAY });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'week-10');
+  assert.ok(verdict.alternatives.includes('copper hydroxide'), verdict.alternatives.join(', '));
+});
+
+test('from Week 10 Copper Hydroxide may repeat, and it is the only thing that may', () => {
+  const state = planted(day(-80), {
+    sprays: sprayed([{ activeId: 'copper-hydroxide', date: day(-12) }]),
+  });
+  assert.equal(rotationCheck(state, 'c1', 'copper-hydroxide', { today: TODAY }).ok, true,
+    'the one exception to "never the same FRAC group twice"');
+
+  const oxychloride = rotationCheck(state, 'c1', 'copper-oxychloride', { today: TODAY });
+  assert.equal(oxychloride.ok, false, 'the other M1 copper is still a synthetic with a 14-day PHI');
+  assert.equal(oxychloride.reason, 'week-10');
+});
+
+test('Metalaxyl-M stops at Week 10 even when the rotation would allow it', () => {
+  const verdict = rotationCheck(planted(day(-80)), 'c1', 'metalaxyl-m-mancozeb', { today: TODAY });
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.reason === 'week-10' || verdict.reason === 'metalaxyl', verdict.reason);
+});
+
+test('neem and garlic-chilli keep working from Week 10, and may repeat', () => {
+  const state = planted(day(-80), {
+    sprays: sprayed([{ activeId: 'azadirachtin-neem-oil', date: day(-6) }]),
+  });
+  assert.equal(rotationCheck(state, 'c1', 'azadirachtin-neem-oil', { today: TODAY }).ok, true,
+    'SR-08 requires the organics repeatedly; they carry no rotatable resistance group');
+  assert.equal(rotationCheck(state, 'c1', 'garlic-chilli-extract-farm-made', { today: TODAY }).ok, true);
 });
 
 // --- FR-GATE-07: overrides ------------------------------------------------

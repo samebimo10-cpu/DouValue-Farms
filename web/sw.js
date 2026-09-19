@@ -7,7 +7,7 @@
 // Bumped when the app moves: the app used to be served from /Stock-/farm/ and
 // now has its own site at /DouValue-Farms/. A phone that still holds the old
 // cache must discard it rather than keep serving the app from the old address.
-const CACHE = 'douvalue-v11';
+const CACHE = 'douvalue-v12';
 
 const SHELL = [
   './',
@@ -24,6 +24,7 @@ const SHELL = [
   './js/store.js',
   './js/db.js',
   './js/util.js',
+  './js/rules.js',
   './js/i18n.js',
   './js/sample.js',
   './js/ui/shell.js',
@@ -54,14 +55,25 @@ const SHELL = [
   './js/domain/pests.js',
   './js/domain/diagnose.js',
   './js/domain/safety.js',
+  './js/domain/actives.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',
 ];
 
+// The rules file is the one copy in the repository, published beside the app,
+// and every gate reads it — so it has to be on the phone before the signal goes
+// (NFR-OFF-01). It is cached apart from the shell because it sits outside the
+// app folder: served straight out of web/ during development it is not there at
+// all, and one missing file must not cost the whole offline cache.
+const RULES = './rules/douvalue_rules_rev5_1.json';
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
+      .then(async (cache) => {
+        await cache.addAll(SHELL);
+        await cache.add(RULES).catch(() => { /* not published here; the app fetches it live */ });
+      })
       .then(() => self.skipWaiting()),
   );
 });

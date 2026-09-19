@@ -22,6 +22,10 @@
 
 import { daysBetween, isoDate } from '../util.js';
 import { PRODUCT_BY_ID } from './safety.js';
+import {
+  activeById, activeForSpray, allowedInWeek10, canUse, carriesCode, catalogue, findActive,
+  nextInSequence, parseGroup, sameGroup, thripsOptions, week10Names,
+} from './actives.js';
 
 /**
  * Gate thresholds.
@@ -281,8 +285,15 @@ export function canPlant(state, zoneId, opts = {}) {
  * spray needs a diagnosis that names the problem, was recorded for this zone,
  * is recent enough to still describe it, and — FR-DIAG-03 — was confirmed by
  * somebody senior to the person who started it.
+ *
+ * `productId` may be an active ingredient from the catalogue, which is how
+ * FR-STOCK-05 says a treatment is chosen, or a legacy product id from a spray
+ * logged before the catalogue existed.
  */
-export function canTreat(state, cycleId, { today = isoDate(), productId = null, maxAgeDays = 14 } = {}) {
+export function canTreat(state, cycleId, {
+  today = isoDate(), productId = null, activeId = null, labelId = null,
+  target = null, purpose = null, maxAgeDays = 14,
+} = {}) {
   const recent = (state.diagnoses || [])
     .filter((d) => d.cycleId === cycleId)
     .filter((d) => d.date && d.date <= today && daysBetween(d.date, today) <= maxAgeDays)
@@ -312,26 +323,216 @@ export function canTreat(state, cycleId, { today = isoDate(), productId = null, 
   }
 
   const diagnosis = confirmed[0];
-  const rotation = rotationCheck(state, cycleId, productId, { today, diagnosis });
+  const rotation = rotationCheck(state, cycleId, activeId || productId, {
+    today, labelId, purpose, target: target || diagnosis.problemId,
+  });
   if (!rotation.ok) return rotation;
 
-  return { ok: true, diagnosis };
+  return { ok: true, diagnosis, active: rotation.active || null, rate: rotation.rate || null };
 }
 
 /**
- * FR-GATE-05 — spray rotation.
+ * Which week of the cycle a zone is in — Build Rules §11a.
  *
- * This is the one gate that protects a future season rather than this one.
- * Two consecutive applications from one resistance group is the limit both
- * FRAC and IRAC publish; the third is what breeds a population the product no
- * longer touches.
+ * Transplant day is T, Day 1 of Week 0, and week n runs from day 7n+1 to 7n+7.
+ * Week 10 is the one the spray rules care about: from there on the crop is in
+ * continuous harvest and a 14-day synthetic simply does not fit between picks.
  */
-export function rotationCheck(state, cycleId, productId, { today = isoDate(), windowDays = 60 } = {}) {
-  if (!productId) return { ok: true };
+export function cropWeek(state, cycleId, today = isoDate()) {
+  const cycle = (state.cycles || {})[cycleId];
+  if (!cycle || !cycle.transplantDate) return null;
+  const dayNumber = daysBetween(cycle.transplantDate, today) + 1;
+  if (dayNumber < 1) return null;
+  return Math.floor((dayNumber - 1) / 7);
+}
+
+/** Sprays on one zone, newest first, resolved to the active that went on. */
+function sprayHistory(state, cycleId, { today = isoDate() } = {}) {
+  return (state.sprays || [])
+    .filter((s) => s.cycleId === cycleId)
+    .filter((s) => s.date && s.date <= today)
+    // Copper as a wound spray after pruning is logged as wound care and is
+    // excluded from the FRAC rotation check and the interval count (Rev 5.1).
+    .filter((s) => s.purpose !== 'wound-care')
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .map((s) => ({ spray: s, active: activeForSpray(state, s) }));
+}
+
+/**
+ * FR-GATE-05 — spray rotation, by resistance group.
+ *
+ * The rules are blunt and they are not this app's invention: "never the same
+ * IRAC group twice in a row", "never the same FRAC group twice in a row". A
+ * brand name has nothing to do with it. Swapping cypermethrin for
+ * lambda-cyhalothrin is buying a second bottle of the same thing, and the
+ * thrips do not care what is written on it.
+ *
+ * So the gate reads groups, off the catalogue, and it reads them out of the
+ * spray history rather than out of what somebody typed. Four things stop a
+ * spray here:
+ *
+ *   no rate      FR-STOCK-08: nothing with a guessed dose goes on the crop
+ *   same group   the group that went on last cannot go on again
+ *   metalaxyl    FRAC 4 is "only in rotation, max every 3rd"
+ *   Week 10      SR-08: organics only, and no Metalaxyl-M at all
+ *
+ * The one exception in the rules is Copper Hydroxide from Week 10: it is the
+ * only PHI-0 fungicide left, M-groups carry low resistance risk, and repeated
+ * M1 is allowed at 10-14 day intervals.
+ */
+export function rotationCheck(state, cycleId, product, {
+  today = isoDate(), windowDays = 60, labelId = null, target = null, week = null, purpose = null,
+} = {}) {
+  if (!product) return { ok: true };
+
+  const active = activeById(product, state) || findActive(product, state);
+  if (!active) return legacyRotationCheck(state, cycleId, product, { today, windowDays });
+
+  // FR-STOCK-08 and the product rule: no rate on file, no spray. A dose nobody
+  // can name is the definition of treating by guesswork.
+  const usable = canUse(state, active.id, { labelId });
+  if (!usable.ok) return { ...usable, active };
+
+  const group = parseGroup(active.group);
+  const stage = week == null ? cropWeek(state, cycleId, today) : week;
+  const atWeek10 = stage != null && stage >= 10;
+  const history = sprayHistory(state, cycleId, { today });
+
+  // SR-08 — from Week 10 both crops are in continuous harvest and only the
+  // named organics may be used. A 14-day synthetic has nowhere to fit.
+  if (atWeek10 && !allowedInWeek10(active, state)) {
+    return {
+      ok: false,
+      reason: 'week-10',
+      active,
+      week: stage,
+      why: `${active.name} is a synthetic and this zone is in Week ${stage}. `
+        + 'From Week 10 the crop is picked continuously, so nothing with a waiting period can go on it.',
+      fix: `Organics only from Week 10: ${week10Names().join(', ')}. `
+        + 'No synthetic insecticide within 14 days of harvest, and keep a 21-day buffer for export.',
+      alternatives: week10Names(),
+    };
+  }
+
+  // "Metalaxyl-M only in rotation, max every 3rd", and stopped outright from
+  // Week 10. Phytophthora is the one disease that can take a house in a week,
+  // and this is the only systemic the farm has against it.
+  if (carriesCode(active, '4') && group.system === 'FRAC') {
+    if (atWeek10) {
+      return {
+        ok: false,
+        reason: 'metalaxyl',
+        active,
+        week: stage,
+        why: `Metalaxyl-M is stopped from Week 10 (SR-08), and this zone is in Week ${stage}.`,
+        fix: 'Copper Hydroxide is the Week 10 fungicide: PHI 0, and repeated M1 is allowed at 10-14 day intervals.',
+      };
+    }
+    const lastTwo = history.filter((h) => h.active && parseGroup(h.active.group).system === 'FRAC').slice(0, 2);
+    const recentMetalaxyl = lastTwo.find((h) => carriesCode(h.active, '4'));
+    if (recentMetalaxyl) {
+      return {
+        ok: false,
+        reason: 'metalaxyl',
+        active,
+        why: `Metalaxyl-M went on this zone on ${recentMetalaxyl.spray.date}. It is allowed at most every third `
+          + 'fungicide spray, and this would be sooner.',
+        fix: 'Put two other fungicides through first — Mancozeb, then Copper Oxychloride — and keep Metalaxyl-M '
+          + 'for the Phytophthora it is being saved for.',
+        group: active.group,
+      };
+    }
+  }
+
+  if (!group.rotates) return { ok: true, active, week: stage, ...usable };
+
+  // Copper on pruning wounds is wound care, not a fungicide programme spray:
+  // the rules exclude it from the FRAC rotation check and the interval count
+  // both ways round. It is still a chemical with a rate and a waiting period,
+  // which is why it gets here at all.
+  if (purpose === 'wound-care') return { ok: true, active, week: stage, woundCare: true, ...usable };
+
+  // The rotation itself: what went on last in this system, and was it this group?
+  const sameSystem = history.filter((h) => h.active && parseGroup(h.active.group).system === group.system);
+  const last = sameSystem[0];
+
+  if (last && sameGroup(last.active, active)) {
+    // The one exception in the rules: Copper Hydroxide from Week 10.
+    const m1Exception = atWeek10 && group.system === 'FRAC' && group.rotationCodes.includes('M1');
+    if (!m1Exception) {
+      return rotationBlock(state, active, last, group, { target, week: stage, windowDays });
+    }
+  }
+
+  // The thrips programme is its own series — "rotate thrips treatments by
+  // group, never the same group twice running" — so an unrelated insecticide in
+  // between does not reset it. Thrips carry the tospovirus that took Season 1;
+  // this is the rotation the farm cannot afford to lose.
+  if (isThrips(target)) {
+    const lastThrips = history.find((h) => h.active && isThrips(h.spray.targetProblem || h.spray.target));
+    if (lastThrips && sameGroup(lastThrips.active, active)) {
+      return rotationBlock(state, active, lastThrips, group, { target, week: stage, windowDays, thrips: true });
+    }
+  }
+
+  return { ok: true, active, week: stage, ...usable };
+}
+
+function isThrips(problem) {
+  return /thrips/i.test(String(problem || ''));
+}
+
+/** A refusal that says what to use instead, because one that does not gets overridden. */
+function rotationBlock(state, active, last, group, { target, week, windowDays, thrips = false } = {}) {
+  const next = nextInSequence(group.system, last.active.group);
+  const options = thrips || isThrips(target)
+    ? thripsOptions(state, last.active.group)
+      .filter((row) => row.usable.length)
+      .map((row) => `${row.group}: ${row.usable.map((a) => a.name).join(' or ')}`)
+    : [];
+  const alternatives = options.length
+    ? options
+    : [next && next.product, ...activesOutsideGroup(state, active, group)].filter(Boolean).slice(0, 3);
+
+  return {
+    ok: false,
+    reason: 'rotation',
+    active,
+    week,
+    group: active.group,
+    lastSpray: last.spray,
+    next: next || null,
+    alternatives,
+    why: `${active.name} is ${active.group}, and ${last.active.name} — the same group — went on this zone `
+      + `on ${last.spray.date}. ${group.system === 'FRAC' ? 'Never the same FRAC group twice in a row.' : 'Never the same IRAC group twice in a row.'}`,
+    fix: thrips || isThrips(target)
+      ? `Rotate the thrips programme by group. Next: ${alternatives.join('; ')}.`
+      : (next
+        ? `Next in the programme is ${next.product} (${next.group}) at ${next.rate || 'the label rate'}.`
+        : 'Use an active from a different resistance group this time.'),
+    windowDays,
+  };
+}
+
+/** Usable catalogue actives in the same system but a different group. */
+function activesOutsideGroup(state, active, group) {
+  return catalogue(state)
+    .filter((a) => parseGroup(a.group).system === group.system)
+    .filter((a) => !sameGroup(a, active))
+    .filter((a) => canUse(state, a.id).ok)
+    .map((a) => `${a.name} (${a.group})`);
+}
+
+/**
+ * The pre-catalogue rotation check, kept for sprays logged against products
+ * that never made it into the catalogue. Three applications of one group inside
+ * sixty days is where it stops.
+ */
+function legacyRotationCheck(state, cycleId, productId, { today = isoDate(), windowDays = 60 } = {}) {
   const product = PRODUCT_BY_ID[productId];
   if (!product || product.group === '-') return { ok: true };
 
-  const sameGroup = (state.sprays || [])
+  const sameGroupSprays = (state.sprays || [])
     .filter((s) => s.cycleId === cycleId)
     .filter((s) => s.date && daysBetween(s.date, today) <= windowDays)
     .filter((s) => {
@@ -341,7 +542,7 @@ export function rotationCheck(state, cycleId, productId, { today = isoDate(), wi
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   // Two in a row is the limit, so this one — the third — is the one to stop.
-  if (sameGroup.length >= 2) {
+  if (sameGroupSprays.length >= 2) {
     const alternatives = Object.values(PRODUCT_BY_ID)
       .filter((p) => p.kind === product.kind && p.group !== product.group && p.hazard !== 'avoid')
       .slice(0, 3).map((p) => p.name);
@@ -349,7 +550,7 @@ export function rotationCheck(state, cycleId, productId, { today = isoDate(), wi
       ok: false,
       reason: 'rotation',
       why: `${product.name} is resistance group ${product.group}, and that group has already gone on `
-        + `this zone ${sameGroup.length} times in ${windowDays} days.`,
+        + `this zone ${sameGroupSprays.length} times in ${windowDays} days.`,
       fix: alternatives.length
         ? `Use a different group this time — ${alternatives.join(' or ')}.`
         : 'Use a product from a different resistance group this time.',

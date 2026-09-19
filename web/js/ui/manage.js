@@ -20,7 +20,12 @@ import {
 } from '../domain/predict.js';
 import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
-import { harvestClearance, PRODUCTS } from '../domain/safety.js';
+import { harvestClearance } from '../domain/safety.js';
+import {
+  activeForItem, addActive, addLabel, bannedActives, canUse, catalogue, intervalsFor,
+  labelGroups, migrationPlan, rateFor,
+} from '../domain/actives.js';
+import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
 import { spraysForCycle } from '../store.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
@@ -617,13 +622,26 @@ export const storeView = {
     const items = inputsList(state);
     const usage = inputUsage(state);
 
-    return card(
+    return catalogueCard(ctx)
+    + labelsCard(ctx)
+    + card(
       cardHead('Store', button('Add item', 'open-input', { cls: 'btn-sm' }))
       + (items.length
         ? '<ul class="list">' + items.map((item) => {
           const f = stockForecast(item, usage);
+          const active = activeForItem(state, item);
+          const chemical = !item.kind || item.kind === 'chemical';
           return `<li><div class="grow"><b>${esc(item.name)}</b>`
-            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}</small></div>`
+            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}</small>`
+            + (chemical
+              ? `<small>${active
+                ? `${esc(active.name)} · ${esc(active.group)}`
+                : 'Not linked to an active ingredient — treatments cannot use it'}</small>`
+              : '')
+            + '</div>'
+            + (chemical && !active
+              ? button('Link', 'open-link', { cls: 'btn-sm btn-ghost', data: { id: item.id } })
+              : '')
             + badge(f.status === 'critical' ? 'order now' : f.status === 'low' ? 'low' : 'ok',
               f.status === 'critical' ? 'danger' : f.status === 'low' ? 'warn' : 'ok')
             + button('Move', 'open-move', { cls: 'btn-sm btn-ghost', data: { id: item.id } })
@@ -647,14 +665,180 @@ export const storeView = {
     'save-input': (ctx, form) => saveInput(ctx, form),
     'open-move': (ctx, el) => openMoveSheet(ctx, el.dataset.id),
     'save-move': (ctx, form) => saveMove(ctx, form),
+    'open-active': (ctx) => openActiveSheet(ctx),
+    'save-active': (ctx, form) => saveActive(ctx, form),
+    'open-label': (ctx) => openLabelSheet(ctx),
+    'save-label': (ctx, form) => saveLabel(ctx, form),
+    'open-link': (ctx, el) => openLinkSheet(ctx, el.dataset.id),
+    'save-link': (ctx, form) => saveLink(ctx, form),
   },
 };
+
+// --- The active-ingredient catalogue (FR-STOCK-05 to FR-STOCK-09) ---------
+//
+// Treatments are chosen by active ingredient, not by brand. The catalogue is
+// the rules file's twenty actives with their IRAC and FRAC groups; a brand is a
+// label hanging off one or more of them. That is the whole point: the rotation
+// gate reads groups, and a group cannot be restarted by buying the same
+// chemical under a new name.
+
+function catalogueCard(ctx) {
+  const { state } = ctx;
+  const list = catalogue(state);
+  const owner = can(ctx.user, 'manageOwners');
+  const plan = migrationPlan(state);
+
+  const rows = list.map((active) => {
+    const usable = canUse(state, active.id);
+    const rate = rateFor(state, active.id);
+    return `<li><div class="grow"><b>${esc(active.name)}</b>`
+      + `<small>${esc(active.group)}${active.type ? ` · ${esc(active.type)}` : ''}</small>`
+      + `<small>${usable.ok
+        ? `${esc(rate.rate)} (${rate.source === 'schedule' ? 'schedule rate' : 'from the label'})`
+        : 'No rate on file — a label must be entered before it can be used'}</small></div>`
+      + badge(usable.ok ? 'usable' : 'no rate', usable.ok ? 'ok' : 'warn')
+      + '</li>';
+  }).join('');
+
+  return card(cardHead('Active ingredients',
+    owner ? button('Add active', 'open-active', { cls: 'btn-sm' }) : '')
+    + `<p><small>Treatments are chosen by active ingredient (FR-STOCK-05). `
+    + `${list.length} in the catalogue.</small></p>`
+    + `<ul class="list">${rows}</ul>`
+    + (plan.unmatched.length
+      ? note('warn', `${plan.unmatched.length} store item${plan.unmatched.length === 1 ? '' : 's'} not linked`,
+        `<small>${esc(plan.unmatched.map((r) => r.name).join(', '))} — link each one to its active `
+        + 'ingredient below, or it cannot be used in a treatment.</small>')
+      : '')
+    + (owner ? '' : note('info', 'Only the Owner adds an active',
+      '<small>New actives come with their IRAC or FRAC group, off the label. Ask the Owner.</small>')));
+}
+
+function labelsCard(ctx) {
+  const { state } = ctx;
+  const labels = Object.values(state.labels || {});
+
+  return card(cardHead('Brand labels', button('Add label', 'open-label', { cls: 'btn-sm' }))
+    + (labels.length
+      ? '<ul class="list">' + labels.map((label) => {
+        const shown = (label.activeIds || [])
+          .map((id) => intervalsFor(state, id, { label }))
+          .filter(Boolean)
+          .sort((a, b) => b.phiDays - a.phiDays)[0];
+        return `<li><div class="grow"><b>${esc(label.brand)}${label.formulation ? ` ${esc(label.formulation)}` : ''}</b>`
+          + `<small>${esc(labelGroups(state, label).join(', ') || 'no group')} · `
+          + `${esc((label.activeIds || []).join(', '))}</small>`
+          + `<small>${esc(label.labelRate || 'no rate entered')}`
+          + (shown ? ` · PHI ${shown.phiDays} d (${esc(shown.phiNote)}) · REI ${shown.reiHours} h` : '')
+          + '</small></div>'
+          + (label.photo ? badge('label photo', 'ok') : badge('no photo', 'warn'))
+          + '</li>';
+      }).join('') + '</ul>'
+      : empty('🏷️', 'No brand labels yet',
+        'A label is a container you have in hand: brand, formulation, concentration, the rate printed '
+        + 'on it, its waiting periods and a photo. The resistance group fills in from the active.')));
+}
+
+function openActiveSheet(ctx) {
+  if (!can(ctx.user, 'manageOwners')) { toast('Only the Owner can add an active', true); return; }
+  openSheet('<h2>Add an active ingredient</h2>'
+    + note('warn', `${bannedActives().join(', ')} will never be added`,
+      '<small>Banned on this farm and in most of the world. For root-knot nematode, rotate to maize or '
+      + 'marigold and solarise.</small>')
+    + '<form data-act="save-active">'
+    + field('Active ingredient', input('name', { required: true, placeholder: 'as the label spells it' }))
+    + field('What it is', input('type', { placeholder: 'e.g. insecticide, fungicide' }))
+    + field('Resistance group', input('group', { required: true, placeholder: 'e.g. IRAC 9B or FRAC 7' }),
+      'IRAC for insecticides, FRAC for fungicides. Read it off the label. Without it the app cannot '
+      + 'rotate, and a product it cannot rotate it will not let anyone spray.')
+    + field('Schedule rate, if the farm has one', input('scheduleRate', { placeholder: 'e.g. 0.5 g/L' }))
+    + '<button class="btn-block btn-lg" type="submit">Add to the catalogue</button></form>');
+}
+
+async function saveActive(ctx, form) {
+  const data = readForm(form);
+  const verdict = addActive(ctx.state, ctx.user, data);
+  if (!verdict.ok) {
+    closeSheet();
+    openSheet(`<h2>Not added</h2>${note('danger', verdict.why, `<small>${esc(verdict.fix)}</small>`)}`);
+    return;
+  }
+  await ctx.store.dispatch(verdict.event.type, verdict.event.payload);
+  closeSheet();
+  toast('Added to the catalogue');
+}
+
+function openLabelSheet(ctx) {
+  const list = catalogue(ctx.state);
+  const el = openSheet('<h2>Add a brand label</h2>'
+    + '<p><small>What is on the container in front of you. The resistance group is not typed — it comes '
+    + 'from the active ingredient.</small></p>'
+    + '<form data-act="save-label">'
+    + field('Brand name', input('brand', { required: true, placeholder: 'e.g. Punch' }))
+    + field('Active ingredients on the label',
+      `<select name="activeIds" multiple size="8">`
+      + list.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.group)}</option>`).join('')
+      + '</select>',
+      'Pick every active the label names. Hold to select more than one.')
+    + field('Formulation', input('formulation', { placeholder: 'e.g. 45SC, 80WP' }))
+    + field('Concentration', input('concentration', { placeholder: 'e.g. 45 g/L' }))
+    + field('Label rate', input('labelRate', { placeholder: 'e.g. 0.35 ml/L' }))
+    + field('Label PHI, in days', input('phiDays', { type: 'number', min: 0, step: '1', placeholder: 'blank = farm default' }))
+    + field('Label REI, in hours', input('reiHours', { type: 'number', min: 0, step: '1', placeholder: 'blank = farm default' }),
+      'Blank is fine: the farm defaults are 14 days before picking and 24 hours before re-entry. '
+      + 'A label figure is used only if it is longer.')
+    + photoField('Photo of the label',
+      'The label carries the real rate and the real waiting period. A picture of it settles any argument.')
+    + '<button class="btn-block btn-lg" type="submit">Save label</button></form>');
+  bindPhoto(el);
+}
+
+async function saveLabel(ctx, form) {
+  const data = readForm(form);
+  const activeIds = [...form.querySelectorAll('select[name=activeIds] option:checked')].map((o) => o.value);
+  const verdict = addLabel(ctx.state, ctx.user, { ...data, activeIds, photo: photoPayload() });
+  if (!verdict.ok) {
+    closeSheet();
+    openSheet(`<h2>Not saved</h2>${note('danger', verdict.why, `<small>${esc(verdict.fix)}</small>`)}`);
+    return;
+  }
+  await ctx.store.dispatch(verdict.event.type, verdict.event.payload);
+  resetPhoto();
+  closeSheet();
+  toast('Label saved');
+}
+
+function openLinkSheet(ctx, itemId) {
+  const item = ctx.state.inputs[itemId];
+  if (!item) return;
+  const list = catalogue(ctx.state);
+  openSheet(`<h2>${esc(item.name)}</h2>`
+    + '<p><small>Which active ingredient is in this container? Everything already recorded against this '
+    + 'item stays exactly as it is — this only names what it is made of.</small></p>'
+    + '<form data-act="save-link">'
+    + `<input type="hidden" name="itemId" value="${esc(itemId)}">`
+    + field('Active ingredient', select('activeId',
+      list.map((a) => ({ value: a.id, label: `${a.name} — ${a.group}` })), '', { placeholder: 'Choose one' }))
+    + '<button class="btn-block btn-lg" type="submit">Link it</button></form>');
+}
+
+async function saveLink(ctx, form) {
+  const data = readForm(form);
+  if (!data.activeId) { toast('Choose the active ingredient', true); return; }
+  await ctx.store.dispatch('stock.link', { itemId: data.itemId, activeId: data.activeId });
+  closeSheet();
+  toast('Linked to the catalogue');
+}
 
 function openInputSheet(ctx) {
   openSheet('<h2>Add a store item</h2>'
     + '<form data-act="save-input">'
     + field('Name', `<input name="name" list="product-list" required placeholder="e.g. Mancozeb 80% WP">`
-      + `<datalist id="product-list">${PRODUCTS.map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>`)
+      + `<datalist id="product-list">${catalogue(ctx.state).map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>`)
+    + field('Active ingredient, if it is a chemical', select('activeId',
+      catalogue(ctx.state).map((a) => ({ value: a.id, label: `${a.name} — ${a.group}` })), '',
+      { placeholder: 'Not a chemical' }),
+      'A treatment is chosen by active ingredient, so a chemical with none named cannot be sprayed.')
     + field('Kind', select('kind', [
       { value: 'chemical', label: 'Pesticide or fungicide' },
       { value: 'fertiliser', label: 'Fertiliser or lime' },
@@ -672,6 +856,7 @@ async function saveInput(ctx, form) {
   if (!data.name) { toast('Name is needed', true); return; }
   await ctx.store.dispatch('input.upsert', {
     id: uid('item'), name: data.name, kind: data.kind, unit: data.unit,
+    activeId: data.activeId || null,
     qty: Number(data.qty) || 0, unitCost: Number(data.unitCost) || 0,
   });
   closeSheet();

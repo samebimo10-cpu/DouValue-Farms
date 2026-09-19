@@ -153,6 +153,12 @@ const EMPTY = () => ({
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
+  // FR-STOCK-05/06/09. The catalogue itself lives in the rules file and is not
+  // replayed from events; these hold what people have added on top of it —
+  // actives the Owner has admitted, and the brand labels the Farm Manager has
+  // entered against them.
+  actives: {},
+  labels: {},
   alertAcks: [],
   alertDecisions: [],
   positions: {},
@@ -195,6 +201,8 @@ export function reduce(events) {
       case 'input.upsert': return `input:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
+      case 'active.add': return `active:${p.id}`;
+      case 'label.add': return `label:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
@@ -216,6 +224,7 @@ export function reduce(events) {
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
+      case 'stock.link': return `input:${p.itemId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
@@ -235,6 +244,8 @@ export function reduce(events) {
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
+      case 'active': return !!state.actives[id];
+      case 'label': return !!state.labels[id];
       case 'override': return state.gateOverrides.some((o) => o.id === id);
       case 'position': return !!state.positions[id];
       case 'absence': return state.absences.some((a) => a.id === id);
@@ -432,8 +443,31 @@ export function reduce(events) {
         state.expenses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
 
+      // --- The catalogue and its labels (requirements 6.8) ---------------
+      // Neither of these can weaken a rule by being replayed: domain/actives.js
+      // filters banned actives on the way out as well as refusing them on the
+      // way in, and a label never carries a resistance group of its own — the
+      // group is read from the active it is attached to (FR-STOCK-06).
+      case 'active.add':
+        state.actives[p.id] = { ...p, addedBy: p.addedBy || e.by, addedAt: p.addedAt || e.at };
+        break;
+      case 'label.add':
+        state.labels[p.id] = { ...p, addedBy: p.addedBy || e.by, addedAt: p.addedAt || e.at };
+        break;
+
       case 'input.upsert':
         state.inputs[p.id] = { ...(state.inputs[p.id] || { qty: 0 }), ...p };
+        break;
+      // A store item the farm already had, linked to the active it always was.
+      // Nothing about the item's history changes: every movement, cost and
+      // spray still points at the same item id.
+      case 'stock.link':
+        if (state.inputs[p.itemId]) {
+          state.inputs[p.itemId].activeId = p.activeId || null;
+          if (p.labelId) state.inputs[p.itemId].labelId = p.labelId;
+          state.inputs[p.itemId].linkedBy = e.by;
+          state.inputs[p.itemId].linkedAt = e.at;
+        }
         break;
       case 'input.receive':
         state.inputs[p.itemId].qty = (Number(state.inputs[p.itemId].qty) || 0) + Number(p.qty || 0);

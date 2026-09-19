@@ -112,6 +112,21 @@ const EVENT_POLICY = {
   'input.upsert':      { write: 'logInputs',     read: ANY },
   'input.receive':     { write: 'logInputs',     read: ANY },
   'input.issue':       { write: 'logInputs',     read: ANY },
+
+  // The active-ingredient catalogue (requirements 6.8).
+  //
+  // FR-STOCK-09 puts adding an active with the Owner and nobody else, and
+  // `manageOwners` is the permission only the CEO holds. FR-STOCK-06 puts brand
+  // labels with the Farm Manager, which is what `settings` marks out — an
+  // agronomist may prescribe, but the label on the container in the store is
+  // the manager's record.
+  //
+  // The phone refuses all of this too. It is here as well because the phone is
+  // the thing an attacker controls, and because five handsets merging a log is
+  // exactly how a bad record would otherwise arrive.
+  'active.add':        { write: 'manageOwners',  read: ANY, guard: guardActiveAdd },
+  'label.add':         { write: 'settings',      read: ANY, guard: guardLabelAdd },
+  'stock.link':        { write: 'logInputs',     read: ANY, guard: guardStockLink },
   'weather.record':    { write: 'logWork',       read: ANY },
 
   // Gates (requirements 6.2). These decide whether planting and spraying are
@@ -498,6 +513,83 @@ function guardOverride(event, author) {
   if (reason.length < 10) {
     return { ok: false, why: 'An override needs a reason saying why it is safe to go ahead' };
   }
+  return { ok: true };
+}
+
+/**
+ * The actives this farm will not hold, whatever anybody types.
+ *
+ * rules/douvalue_rules_rev5_1.json → labels.banned is the source of truth, and
+ * the app reads it from there. This server is pasted into Deno Deploy as one
+ * file with no rules beside it, so it carries the names themselves; the test
+ * suite fails if the two ever drift apart, the same way it does for the
+ * generated Deno build.
+ *
+ * FR-STOCK-09: banned actives can never be added and must not ship in the
+ * catalogue at all. Carbofuran has killed farm workers and poisoned whole
+ * flocks of birds, and residues in pepper fail any buyer's test.
+ */
+const BANNED_ACTIVES = ['Carbofuran (Furadan)'];
+
+const BANNED_WORDS = new Set(
+  BANNED_ACTIVES.flatMap((entry) => String(entry).toLowerCase().split(/[^a-z0-9-]+/).filter(Boolean)),
+);
+
+/** Does this name reach a banned active by any spelling on the label? */
+function namesBannedActive(name) {
+  return String(name || '').toLowerCase().split(/[^a-z0-9-]+/).filter(Boolean)
+    .some((word) => BANNED_WORDS.has(word));
+}
+
+/**
+ * FR-STOCK-09 — a new active arrives with its resistance group, or not at all.
+ *
+ * "Any product without an IRAC or FRAC group on file cannot be selected for a
+ * treatment", so an active without one is a row that could never be used and a
+ * rotation the gate could never check.
+ */
+function guardActiveAdd(event) {
+  const p = event.payload || {};
+  const name = String(p.name || '').trim();
+  if (!name) return { ok: false, why: 'An active ingredient needs a name' };
+  if (namesBannedActive(name)) {
+    return { ok: false, why: `${name} is banned and cannot be added to the catalogue` };
+  }
+  const group = String(p.group || '').trim();
+  if (!group || /^none$/i.test(group)) {
+    return { ok: false, why: 'An active needs its IRAC or FRAC group, read off the label' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-STOCK-06 — a label hangs off actives that are already in the catalogue.
+ * The group is never on the label record, so a new brand name cannot restart a
+ * rotation by claiming a group of its own.
+ */
+function guardLabelAdd(event) {
+  const p = event.payload || {};
+  const brand = String(p.brand || '').trim();
+  if (!brand) return { ok: false, why: 'A label needs the brand name on the container' };
+  if (namesBannedActive(brand)) {
+    return { ok: false, why: `${brand} is a banned product` };
+  }
+  if (!Array.isArray(p.activeIds) || !p.activeIds.length) {
+    return { ok: false, why: 'A label must name at least one active ingredient from the catalogue' };
+  }
+  if (p.activeIds.some((id) => namesBannedActive(id))) {
+    return { ok: false, why: 'That label names a banned active ingredient' };
+  }
+  if (p.group) return { ok: false, why: 'A label does not carry its own group — the group comes from the active' };
+  return { ok: true };
+}
+
+/** Naming what a store item is made of. The item's history is not touched. */
+function guardStockLink(event) {
+  const p = event.payload || {};
+  if (!p.itemId) return { ok: false, why: 'Say which store item' };
+  if (!p.activeId) return { ok: false, why: 'Say which active ingredient it is' };
+  if (namesBannedActive(p.activeId)) return { ok: false, why: 'That is a banned active ingredient' };
   return { ok: true };
 }
 
