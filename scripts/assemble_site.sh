@@ -5,9 +5,9 @@
 # The farm app now has a repository to itself, so it is served at the root of
 # its own site rather than from a /farm/ sub-path alongside another app:
 #
-#   _site/          DouValue Farm Manager   -> /douvalue-farm/
-#   _site/server/   the sync server         -> /douvalue-farm/server/
-#   _site/rules/    the rules JSON          -> /douvalue-farm/rules/
+#   _site/          DouValue Farm Manager   -> /DouValue-Farms/
+#   _site/server/   the sync server         -> /DouValue-Farms/server/
+#   _site/rules/    the rules JSON          -> /DouValue-Farms/rules/
 #
 # The app references its assets with relative paths, so it does not care which
 # of those two addresses it is at; the base path is not written down anywhere

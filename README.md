@@ -15,7 +15,7 @@ other later. There is no server to pay for and no account to create.
 
 ## Open it
 
-**https://samebimo10-cpu.github.io/douvalue-farm/**
+**https://samebimo10-cpu.github.io/DouValue-Farms/**
 
 That is the permanent address. Open it on a phone and use **Add to home screen**; it
 then launches like any other app and keeps working with the data switched off. A workflow
@@ -330,7 +330,7 @@ nobody else shared a password with them.
 **Setting the server up.** Free, and about five minutes. There is a page that
 walks through both routes:
 
-**https://samebimo10-cpu.github.io/douvalue-farm/server/**
+**https://samebimo10-cpu.github.io/DouValue-Farms/server/**
 
 The easiest route involves no copying at all: in Deno Deploy, create a project
 from the **GitHub repository** rather than a Playground, pick this repo and its
@@ -343,7 +343,7 @@ If the GitHub option cannot be found, the paste route still works:
 1. Open **dash.deno.com** and start a new Playground, which is an editor that
    runs one file. Clear the example already in it.
 2. Paste this single line, which loads the server from your own site:
-   `import "https://samebimo10-cpu.github.io/douvalue-farm/server/deno-entry.js";`
+   `import "https://samebimo10-cpu.github.io/DouValue-Farms/server/deno-entry.js";`
    The setup page has a copy button, and a second button for the whole file if
    you would rather the server had no link back here.
 3. Press Save & Deploy and copy the address it gives you. Opening it should say
@@ -439,7 +439,7 @@ Two numbers deserve particular suspicion and are labelled as such in the app:
 ## Layout
 
 ```
-douvalue-farm/
+DouValue-Farms/
 ├─ web/
 │  ├─ index.html, manifest.webmanifest, sw.js, icon.svg
 │  ├─ css/app.css

@@ -1,5 +1,5 @@
 name: Publish the farm app to GitHub Pages
-# Publishes DouValue Farm Manager to https://samebimo10-cpu.github.io/douvalue-farm/
+# Publishes DouValue Farm Manager to https://samebimo10-cpu.github.io/DouValue-Farms/
 # whenever the app, the sync server or the rules change.
 
 on:

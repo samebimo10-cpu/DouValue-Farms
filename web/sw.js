@@ -5,7 +5,7 @@
 // first. Network is only ever used to look for a newer copy in the background.
 
 // Bumped when the app moves: the app used to be served from /Stock-/farm/ and
-// now has its own site at /douvalue-farm/. A phone that still holds the old
+// now has its own site at /DouValue-Farms/. A phone that still holds the old
 // cache must discard it rather than keep serving the app from the old address.
 const CACHE = 'douvalue-v11';
 
