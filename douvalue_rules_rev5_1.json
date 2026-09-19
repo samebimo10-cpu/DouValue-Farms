@@ -1,0 +1,1176 @@
+{
+  "meta": {
+    "source": [
+      "Farm Operations Schedule Revision 5 (July 2026)",
+      "Revision 5.1 Acid Soil Correction, Main Farm"
+    ],
+    "precedence": "Where Rev 5.1 and Rev 5 disagree, Rev 5.1 wins.",
+    "version": "rules-1.2",
+    "decisions": "C-1 to C-18 applied"
+  },
+  "zones": [
+    {
+      "id": "GH-01",
+      "type": "greenhouse",
+      "crop": "bell pepper",
+      "spacing_cm": 30
+    },
+    {
+      "id": "GH-02",
+      "type": "greenhouse",
+      "crop": "bell pepper",
+      "spacing_cm": 30
+    },
+    {
+      "id": "GH-03",
+      "type": "greenhouse",
+      "crop": "bell pepper",
+      "spacing_cm": 30
+    },
+    {
+      "id": "GH-04",
+      "type": "greenhouse",
+      "crop": "bell pepper",
+      "spacing_cm": 30,
+      "protocol": "clean-restart"
+    },
+    {
+      "id": "GH-05",
+      "type": "greenhouse",
+      "crop": "bell pepper",
+      "spacing_cm": 30,
+      "protocol": "clean-restart"
+    },
+    {
+      "id": "OF-01",
+      "type": "open_field",
+      "crop": "habanero",
+      "spacing_cm": 30
+    },
+    {
+      "id": "OF-02",
+      "type": "nursery",
+      "crop": "seedlings (bell pepper, habanero)",
+      "spacing_cm": null,
+      "note": "former open field, now the nursery; not a cropping block"
+    },
+    {
+      "id": "OF-03",
+      "type": "open_field",
+      "crop": "habanero",
+      "spacing_cm": 30
+    },
+    {
+      "id": "RUK-01",
+      "type": "open_field_ridge",
+      "crop": "habanero",
+      "spacing_cm": 40,
+      "note": "Rukpokwu extension; 40 cm single row on ridges"
+    }
+  ],
+  "gates": [
+    {
+      "id": "G0",
+      "name": "Ground Clearance",
+      "when": "before planting",
+      "blocks": [
+        "RC1"
+      ],
+      "pass_all": [
+        "soil + nematode lab report returned CLEAR",
+        "soil pH 5.5-7.0 from a three-point test on file (with meter photo)",
+        "Farm Doctor check passed, confirmed by Farm Manager and approved by Owner"
+      ],
+      "on_fail": "remediate (solarise / biofumigant / re-site / lime) and re-test",
+      "blocks_action": "transplant",
+      "source": "Rev 5.1 p5 (replaces Rev 5 p3)"
+    },
+    {
+      "id": "G1",
+      "name": "Establishment Readiness",
+      "when": "before transplant",
+      "blocks": [
+        "RC2"
+      ],
+      "pass_all": [
+        "full input list on-site incl. thrips controls",
+        "drip pressure-tested",
+        "spacing pegged and photographed",
+        "yellow sticky traps installed (1 per 6 m2)",
+        "SOPs live",
+        "scout roster set (covers all zones)",
+        "Route B blocks: 14+ days since hydrated lime",
+        "seedling batch passed the nursery release check (OF-02)"
+      ],
+      "evidence": "signed Establishment Checklist",
+      "blocks_action": "transplant",
+      "source": "Rev 5 p3, p17, p20; Rev 5.1 p3"
+    },
+    {
+      "id": "G2",
+      "name": "Standing Controls",
+      "when": "continuous from Week 1",
+      "blocks": [
+        "RC2",
+        "RC3"
+      ],
+      "pass_all": [
+        "scouting logged against trap thresholds",
+        "escalation triggers live",
+        "owner verifying daily/weekly"
+      ],
+      "evidence": "daily logs, dashboard, escalation register",
+      "source": "Rev 5 p3"
+    },
+    {
+      "id": "G3",
+      "name": "Diagnosis before Treatment",
+      "when": "any symptom",
+      "blocks": [
+        "RC4"
+      ],
+      "pass_all": [
+        "a diagnosis entry exists and precedes any spray entry"
+      ],
+      "flow": "symptom -> diagnostic protocol -> confirmed cause -> matched remedy",
+      "unconfirmed": "route to Farm Doctor photo review; if still unconfirmed or a lab-only cause is suspected, send a lab sample and notify Owner",
+      "blocks_action": "treatment",
+      "source": "Rev 5 p3, p24"
+    },
+    {
+      "id": "G4",
+      "name": "Cycle Close & Learn",
+      "when": "end of cycle",
+      "blocks": [
+        "drift"
+      ],
+      "pass_all": [
+        "root inspection of sample plants",
+        "control audit",
+        "SOPs updated"
+      ],
+      "evidence": "Cycle Review document",
+      "source": "Rev 5 p3"
+    }
+  ],
+  "kpis": [
+    {
+      "cause": "RC1",
+      "proof": "cleared lab report (and pH, per 5.1) on file before any transplant",
+      "red_flag": "planting started with no soil report"
+    },
+    {
+      "cause": "RC2",
+      "proof": "daily trap counts logged; threshold-cross to spray under 24 h",
+      "red_flag": "trap counts gapped >2 days, or thrips reach 'heavy' with no prior alert"
+    },
+    {
+      "cause": "RC3",
+      "proof": "scouting compliance >95%; dashboard fresh daily",
+      "red_flag": "owner learns of a problem from a dead plant, not an alert"
+    },
+    {
+      "cause": "RC4",
+      "proof": "every treatment has a diagnosis recorded before it",
+      "red_flag": "a spray logged with no preceding diagnosis"
+    }
+  ],
+  "thresholds": [
+    {
+      "pest": "whitefly",
+      "trigger": ">5 per trap OR >2 per leaf",
+      "action": "Thiamethoxam (IRAC 4A) or next group in rotation at the next spray window (max 24 h)",
+      "scope": "greenhouse + field"
+    },
+    {
+      "pest": "thrips",
+      "trigger": ">10 per trap OR >3 per growing tip",
+      "action": "same-day rotation spray, Spinosad (IRAC 5) preferred, after 4 PM; re-count to confirm knockdown",
+      "scope": "greenhouse + field"
+    },
+    {
+      "pest": "aphids",
+      "trigger": "colonies on >5% of plants",
+      "action": "spray + rotate IRAC; neem/soap for light pressure; cut infested tips",
+      "scope": "greenhouse + field"
+    },
+    {
+      "pest": "helicoverpa pod borer",
+      "trigger": "any 3 plants with active entry",
+      "action": "Chlorantraniliprole (IRAC 28) 0.5 ml/L, 4-7 PM; log 'IRAC 28 - pod-borer threshold'",
+      "escalate": ">10 plants with entry holes -> spray whole field today",
+      "scope": "open field, perimeter plants, from Week 3"
+    },
+    {
+      "pest": "trend rule",
+      "trigger": "trap counts rising week-on-week",
+      "action": "advance the scheduled spray; do not wait for the threshold",
+      "scope": "all"
+    },
+    {
+      "pest": "broad mite",
+      "trigger": "any presence confirmed with a 10x loupe",
+      "action": "red alert; Abamectin (IRAC 6) or wettable sulphur on tips within 24 h; bag worst tips",
+      "scope": "all"
+    },
+    {
+      "pest": "spider mite",
+      "trigger": "webbing seen, OR mites confirmed on >5% of plants",
+      "action": "alert; rotate miticide within 24 h; fix drought/dust stress",
+      "watch": "isolated specks -> yellow watch, re-check in 3 days",
+      "scope": "all"
+    }
+  ],
+  "scouting": {
+    "sample": "10 plants per house (leaf undersides, growing tips, stem base)",
+    "record": [
+      "pest",
+      "count",
+      "location",
+      "sticky trap count per trap"
+    ],
+    "traps": "yellow sticky, 1 per 6 m2 at plant height, installed before transplant",
+    "field_extra": "perimeter and windward edge first; pod-borer check weekly from Week 3; crown check for Phytophthora",
+    "frequency": {
+      "trap_count": "daily, every zone, every trap",
+      "full_round": "weekly on Day 2 (10 plants per house; field perimeter first)",
+      "extra_watch": "GH-04 and GH-05: full round twice weekly (Day 2 and Day 5) for the first 3 weeks after replant",
+      "missed_trap_count": "not logged by end of day -> yellow to Field Supervisor; 2 consecutive days missed -> red to Owner"
+    }
+  },
+  "insecticide_rotation": {
+    "rule": "never the same IRAC group twice in a row; check last group before mixing",
+    "sequence": [
+      {
+        "order": 1,
+        "product": "Cypermethrin 10EC",
+        "irac": "3A",
+        "rate": "1 ml/L",
+        "time": "4-7 PM",
+        "targets": "general insects"
+      },
+      {
+        "order": 2,
+        "product": "Thiamethoxam 25WG",
+        "irac": "4A",
+        "rate": "0.2 g/L",
+        "time": "4-7 PM",
+        "targets": "whitefly, aphids"
+      },
+      {
+        "order": 3,
+        "product": "Spinosad 45SC",
+        "irac": "5",
+        "rate": "0.3 ml/L",
+        "time": "after 4 PM only (UV degrades)",
+        "targets": "thrips"
+      },
+      {
+        "order": 4,
+        "product": "Chlorantraniliprole 200SC",
+        "irac": "28",
+        "rate": "0.5 ml/L",
+        "time": "4-7 PM",
+        "targets": "caterpillars, pod borer, thrips"
+      }
+    ],
+    "then": "restart at 3A",
+    "other_products_named": [
+      {
+        "product": "Lambda-cyhalothrin",
+        "irac": "3A",
+        "rate": "0.5 ml/L"
+      },
+      {
+        "product": "Abamectin",
+        "irac": "6",
+        "use": "broad mite, tips"
+      },
+      {
+        "product": "Wettable sulphur",
+        "irac": "UN (miticide use)",
+        "use": "broad mite, powdery mildew",
+        "frac": "M2"
+      },
+      {
+        "product": "Bt",
+        "irac": "11A",
+        "use": "young caterpillars"
+      }
+    ]
+  },
+  "fungicide_rotation": {
+    "rule": "never the same FRAC group twice in a row; Metalaxyl-M only in rotation, max every 3rd",
+    "sequence": [
+      {
+        "order": 1,
+        "product": "Mancozeb 80WP",
+        "frac": "M3",
+        "rate": "2.5 g/L",
+        "interval_days": "10-14",
+        "controls": "broad-spectrum fungal",
+        "note": "dry leaves; needs 2 dry hours to bind"
+      },
+      {
+        "order": 2,
+        "product": "Copper Oxychloride 50WP",
+        "frac": "M1",
+        "rate": "3 g/L",
+        "interval_days": "10-14",
+        "controls": "Phytophthora, bacterial"
+      },
+      {
+        "order": 3,
+        "product": "Metalaxyl-M + Mancozeb",
+        "frac": "4+M3",
+        "rate": "2.5 g/L",
+        "interval_days": "10-14",
+        "controls": "Phytophthora (systemic); foliage + soil drench"
+      }
+    ],
+    "then": "restart at M3",
+    "rainy_season": "Jun-Sep: use 10-day interval (from Week 7)",
+    "other_products_named": [
+      {
+        "product": "Copper Hydroxide 50WP",
+        "frac": "M1",
+        "rate": "2 g/L",
+        "phi_days": 0
+      },
+      {
+        "product": "Copper (wound spray)",
+        "rate": "2 g/L",
+        "note": "after pruning",
+        "rotation": "logged as 'wound care'; excluded from the FRAC rotation check and interval count"
+      }
+    ],
+    "week_10_exception": "From Week 10, Copper Hydroxide (M1) is the only PHI-0 fungicide, so repeated M1 is allowed at 10-14 day intervals. Multi-site M groups carry low resistance risk. This is the only exception to 'never the same FRAC twice'."
+  },
+  "spray_rules": [
+    {
+      "id": "SR-01",
+      "rule": "Spray window 4-7 PM (fungicide pre-plant 4-6 PM)."
+    },
+    {
+      "id": "SR-02",
+      "rule": "Flowering onward: spray only after 5 PM; never onto open flowers; never in wind through the nets."
+    },
+    {
+      "id": "SR-03",
+      "rule": "Postpone if leaves are wet; Mancozeb needs 2 dry hours to bind."
+    },
+    {
+      "id": "SR-04",
+      "rule": "Open field: if more than 15 mm of rain falls within 4 h after a spray, create a re-spray task for the next dry window."
+    },
+    {
+      "id": "SR-05",
+      "rule": "Microbial inoculant (Trichoderma etc.) never within 48 h of any fungicide; never in the same tank."
+    },
+    {
+      "id": "SR-06",
+      "rule": "PPE: mask + gloves for sprays; hydrated lime requires goggles, gloves, dust mask, long sleeves, and a logged team briefing."
+    },
+    {
+      "id": "SR-07",
+      "rule": "Rinse knapsack 3x after insecticide."
+    },
+    {
+      "id": "SR-08",
+      "rule": "From Week 10 (both crops): organics only - neem oil, garlic-chilli, Copper Hydroxide. No synthetic insecticide within 14 days of harvest; keep a 21-day buffer for export. Stop Metalaxyl-M."
+    }
+  ],
+  "phi": [
+    {
+      "product": "Garlic-chilli, Neem oil, Trichoderma",
+      "phi_days": 0,
+      "rei_default": "until spray has dried, minimum 4 h (garlic-chilli: eye/skin irritant)"
+    },
+    {
+      "product": "Copper Hydroxide",
+      "phi_days": 0,
+      "rei_default": "24 h until label value entered"
+    },
+    {
+      "product": "Cypermethrin, Thiamethoxam, Chlorantraniliprole",
+      "phi_days": 14,
+      "export_buffer_days": 21,
+      "rei_default": "24 h until label value entered"
+    },
+    {
+      "product": "Any other synthetic (Mancozeb, Copper Oxychloride, Metalaxyl-M, Spinosad, Abamectin, sulphur, etc.)",
+      "phi_days": "14 (default until label value entered)",
+      "export_buffer_days": 21,
+      "rei_default": "24 h until label value entered"
+    }
+  ],
+  "rei": {
+    "rule": "Label value, once entered, is used only if it is longer than the default. The spray screen shows every PHI/REI; a missing label value shows the default marked 'default — check label'.",
+    "harvest_block": "harvest tasks in a zone are blocked until the longest PHI of any product applied there has passed",
+    "week_10_rule": "from Week 10, synthetics cannot be selected at all (Rev 5)"
+  },
+  "mixing_rules": [
+    {
+      "never": "Ca Nitrate + K Nitrate in the same tank",
+      "do": "separate passes; flush between (white precipitate blocks emitters)"
+    },
+    {
+      "never": "Ca Nitrate + Mg Sulphate",
+      "do": "different days / separate passes"
+    },
+    {
+      "never": "Ca Nitrate + Phosphate",
+      "do": "separate passes; flush between"
+    },
+    {
+      "never": "Neem oil without soap",
+      "do": "premix 150 ml oil + 30 ml soap; use within 8 h"
+    },
+    {
+      "never": "Borax above 1.5 g/L",
+      "do": "exactly 1 g/L, weighed; tips only"
+    },
+    {
+      "never": "Metalaxyl-M consecutively",
+      "do": "rotation only, max every 3rd"
+    },
+    {
+      "never": "Foliar Ca after first open flower",
+      "do": "drench-only Ca"
+    },
+    {
+      "never": "Boron within 4 h of Ca",
+      "do": "keep 4 h apart"
+    },
+    {
+      "never": "Zinc above 2 g/L if grey sheen appears",
+      "do": "drop to 1.5 g/L"
+    }
+  ],
+  "soil_and_water": {
+    "soil_ph_gate": {
+      "min": 5.5,
+      "max": 7.0,
+      "test": "three points per block; meter calibrated that morning at pH 4.0 and 7.0; 1:1 soil to distilled water, stirred, 10 min; photo of meter",
+      "below_5_2": "apply half the original rate again, add 10 days; never stack a full dose",
+      "treat_area": "greenhouse: bed area only; open field: full cropped area",
+      "5_2_to_5_49": "block HELD; re-test after 10 days (Route A lime may still be reacting). Still below 5.5 -> apply one-quarter of the original rate, wait 10 days, re-test. Farm Doctor checks the plan; Owner approves."
+    },
+    "irrigation_water_ph": {
+      "min": 5.8,
+      "max": 6.5,
+      "if_above_7": "add citric acid 5 g / 10 L"
+    },
+    "ec_mS_cm": {
+      "plain_water": "0.3-0.8",
+      "fertigation_veg": "1.8-2.8",
+      "fertigation_fruit": "2.0-3.0",
+      "stop_above": 3.5,
+      "action": "flush 60 min before fertigating"
+    },
+    "lime": {
+      "route_A": {
+        "when": "block not yet under solarisation plastic",
+        "product": "dolomitic agricultural lime, finest grade",
+        "timing": "with compost at start of solarisation; incorporate 15-20 cm; irrigate",
+        "rates_per_100m2_kg": {
+          "loamy sand": "10-13.5",
+          "sandy loam": "16.5-23.5",
+          "loam / clay loam": "26.5-33.5"
+        },
+        "note": "two-thirds of full requirement; re-test at end of solarisation; balance after harvest"
+      },
+      "route_B": {
+        "when": "already solarised and transplant <3 weeks away",
+        "product": "hydrated lime Ca(OH)2",
+        "rates_per_100m2_kg": {
+          "loamy sand": "8-10",
+          "sandy loam": "12-15",
+          "loam / clay loam": "18-22"
+        },
+        "target_ph": 5.8,
+        "transplant_wait_days": 14,
+        "nitrogen_blackout_days": 21,
+        "substitute": "replace Wk1 Day6 NPK 20-10-10 and Wk2 Day6 NPK 15-15-15 with Calcium Nitrate 2-3 g/L; resume NPK Week 3"
+      },
+      "neem_cake_gap_days": 10,
+      "urea_after_lime_min_days": 21,
+      "do_not_buy": [
+        "gypsum (no pH effect)",
+        "charcoal",
+        "compost alone",
+        "liquid pH 'soil conditioners'"
+      ],
+      "fallback": "hardwood ash only, max 150 g/m2, counted as ~1/3 strength of hydrated lime",
+      "field_note": "open field re-limes a season sooner than houses",
+      "neem_cake_rule": "Neem cake goes in when the solarisation plastic is lifted (T-7), not mid-solarisation. Route A lime at T-35 to T-28 gives a 21-28 day gap. Route B: at least 10 days after the hydrated lime."
+    },
+    "nitrogen_at_planting": "urea in the planting hole is DELETED (Rev 5.1); starter P placed near root zone; Calcium Nitrate 2-3 g/L weekly from Day 10-14 after transplant"
+  },
+  "irrigation": [
+    {
+      "crop": "GH bell",
+      "session": "6:30 AM 20 min",
+      "skip_if": "never"
+    },
+    {
+      "crop": "GH bell",
+      "session": "1 PM 15 min",
+      "skip_if": "net-wall condensation AND soil moist 5 cm deep"
+    },
+    {
+      "crop": "GH bell",
+      "session": "5 PM 20 min",
+      "skip_if": "never"
+    },
+    {
+      "crop": "Field habanero",
+      "session": "6:30 AM 30 min dry / 20 min rainy",
+      "skip_if": ">25 mm rain previous day"
+    },
+    {
+      "crop": "Field habanero",
+      "session": "5 PM 20 min",
+      "skip_if": ">15 mm rain today"
+    },
+    {
+      "crop": "All",
+      "session": "water 7 days a week",
+      "skip_if": "never skip Day 7"
+    }
+  ],
+  "grading": [
+    {
+      "grade": "A",
+      "criteria": "uniform, full colour, firm, no marks; bell 70-90 mm, habanero 35-50 mm",
+      "market": "export / hotels"
+    },
+    {
+      "grade": "B",
+      "criteria": "minor cosmetic marks; full size and colour",
+      "market": "local retail"
+    },
+    {
+      "grade": "C",
+      "criteria": "undersized / irregular, no rot",
+      "market": "processors - always sell"
+    },
+    {
+      "grade": "Reject",
+      "criteria": "rot, disease, insect through flesh, soft",
+      "market": "remove far from crop"
+    }
+  ],
+  "triage": [
+    {
+      "n": 1,
+      "see": "Silvery flecks/streaks on leaves and tips; tiny slivers that jump",
+      "likely": "thrips",
+      "confirm": "Tap a tip over white paper; check trap count",
+      "first_action": "Rotate thrips spray (Spinosad IRAC 5) if over threshold; log and re-count"
+    },
+    {
+      "n": 2,
+      "see": "Leaves curl down, tips distort, bronze/greasy sheen, no insect visible",
+      "likely": "broad_mite",
+      "confirm": "10x loupe on youngest tips: glassy oval mites/eggs",
+      "first_action": "Abamectin or wettable sulphur on tips; remove worst tips"
+    },
+    {
+      "n": 3,
+      "see": "Fine webbing under leaves; pale stippling; leaves dry out",
+      "likely": "spider_mite",
+      "confirm": "Webbing + moving dots under leaves",
+      "first_action": "Miticide (rotate); raise humidity slightly; remove worst leaves"
+    },
+    {
+      "n": 4,
+      "see": "Sticky honeydew + sooty mould; tiny white flies rise when disturbed",
+      "likely": "whitefly",
+      "confirm": "Trap >5 or >2/leaf",
+      "first_action": "Thiamethoxam (IRAC 4A) / rotate; traps; sanitation"
+    },
+    {
+      "n": 5,
+      "see": "Curled new leaves; soft green/black insect clusters on shoots",
+      "likely": "aphids",
+      "confirm": "Colonies on >5% of plants",
+      "first_action": "Spray + rotate; remove infested tips"
+    },
+    {
+      "n": 6,
+      "see": "Ring/line patterns, mottling, bronzing; stunted one-sided growth",
+      "likely": "tospovirus",
+      "confirm": "Pattern + thrips history; lab if unsure",
+      "first_action": "No cure: rogue and bag; control thrips hard"
+    },
+    {
+      "n": 7,
+      "see": "Yellow-green mosaic; puckered distorted growth",
+      "likely": "mosaic_virus",
+      "confirm": "Spreads along a row after pruning",
+      "first_action": "Rogue and bag; sanitise blade between every plant; wash hands; control aphids"
+    },
+    {
+      "n": 8,
+      "see": "Sudden whole-plant wilt; dark lesion at soil-line crown; roots rot",
+      "likely": "phytophthora",
+      "confirm": "Cut crown: brown streak; wet soil history",
+      "first_action": "Improve drainage; Metalaxyl-M drench plant + 4 neighbours; remove dead"
+    },
+    {
+      "n": 9,
+      "see": "Wilts by day, recovers at night, then dies; one-sided yellowing",
+      "likely": "fusarium_wilt",
+      "confirm": "Cut lower stem: brown vascular ring",
+      "first_action": "No cure: remove; rotate; solarise"
+    },
+    {
+      "n": 10,
+      "see": "Rapid wilt, leaves still green, stem base oozes",
+      "likely": "bacterial_wilt",
+      "confirm": "Cut stem in clear water: milky ooze streams",
+      "first_action": "No cure: remove and bag; stop water spread; no peppers there again"
+    },
+    {
+      "n": 11,
+      "see": "Dark water-soaked scabby spots on leaves and fruit",
+      "likely": "bacterial_spot",
+      "confirm": "Yellow halo; worse after rain",
+      "first_action": "Copper sprays; remove worst leaves; don't work wet plants"
+    },
+    {
+      "n": 12,
+      "see": "Sunken dark concentric spots on fruit; salmon spore ooze",
+      "likely": "anthracnose",
+      "confirm": "Spots enlarge with rings",
+      "first_action": "Remove fruit; rotate fungicide; tighten harvest interval"
+    },
+    {
+      "n": 13,
+      "see": "Grey fuzzy mould on stems/fruit in humid corners",
+      "likely": "botrytis",
+      "confirm": "Grey spores on dead/wounded tissue",
+      "first_action": "Airflow (prune); remove affected parts; rotate fungicide"
+    },
+    {
+      "n": 14,
+      "see": "White powdery patches under leaves; yellow blotches on top",
+      "likely": "powdery_mildew",
+      "confirm": "Powder wipes off",
+      "first_action": "Sulphur / rotate fungicide; airflow"
+    },
+    {
+      "n": 15,
+      "see": "Seedlings topple at soil line; thin water-soaked stem",
+      "likely": "damping_off",
+      "confirm": "Stem pinched and brown at base",
+      "first_action": "Reduce water; Trichoderma; clean media; discard collapsed"
+    },
+    {
+      "n": 16,
+      "see": "Dark sunken leathery patch at fruit bottom",
+      "likely": "blossom_end_rot",
+      "confirm": "Position + Ca-drench history",
+      "first_action": "Ca drench 1.8 kg/1,000 L; regular irrigation"
+    },
+    {
+      "n": 17,
+      "see": "Hollow light misshapen pods; poor set; flower drop",
+      "likely": "boron_deficiency",
+      "confirm": "Check boron programme",
+      "first_action": "Borax 1 g/L weekly on tips (max 1.5)"
+    },
+    {
+      "n": 18,
+      "see": "Pale sunken papery patch on sun-facing side of fruit",
+      "likely": "sunscald",
+      "confirm": "Fruit exposed after heavy leaf strip",
+      "first_action": "Keep fruit-shading canopy"
+    },
+    {
+      "n": 19,
+      "see": "Ring or radial cracks on ripening fruit",
+      "likely": "fruit_cracking",
+      "confirm": "Dry spell then heavy water",
+      "first_action": "Regular irrigation; steady Ca; harvest promptly in wet spells"
+    },
+    {
+      "n": 20,
+      "see": "Chewed pods, entry holes with dark frass; caterpillar inside",
+      "likely": "helicoverpa",
+      "confirm": "Cut a suspect pod: larva + frass",
+      "first_action": "IRAC 28 at threshold (3 plants); scout perimeter weekly"
+    },
+    {
+      "n": 21,
+      "see": "Roots knotted with galls; stunted, wilting, starved",
+      "likely": "root_knot_nematode",
+      "confirm": "Pull a plant: beaded galls",
+      "first_action": "No rescue: Gate 0 next cycle; rogue severe plants"
+    },
+    {
+      "n": 22,
+      "see": "Seedlings cut off at soil line overnight",
+      "likely": "cutworm",
+      "confirm": "Grey curled larva in soil nearby",
+      "first_action": "Neem cake; hand-collect at dusk; collars"
+    },
+    {
+      "n": 23,
+      "see": "Stunted pale starved plants; stubby thickened roots with dead tips, NO galls; purpling older leaves",
+      "likely": "acid_soil",
+      "confirm": "Three-point pH test (below 5.5)",
+      "first_action": "Hold with nitrate nutrition + Ca Nitrate; place P; lime post-harvest (Rev 5.1)"
+    }
+  ],
+  "diagnosis_cards": [
+    {
+      "id": "thrips",
+      "category": "pest",
+      "cause": "Slender insects rasping leaf/flower; key threat is carrying tospovirus (RC2).",
+      "prevention": "Traps from day one; IPM; thrips inputs pre-stocked (G1); remove weeds/volunteers.",
+      "detection": "Trap counts vs threshold (>10/trap or >3/tip); tap tips over white paper; rising trend.",
+      "treatment": "Same-day rotation spray after threshold, rotating by group (see thrips programme; Spinosad IRAC 5 preferred), after 4 PM; re-count."
+    },
+    {
+      "id": "broad_mite",
+      "category": "pest",
+      "cause": "Microscopic mites on youngest tips; damage looks like virus/herbicide injury.",
+      "prevention": "Loupe scouting of tips; don't carry mites between plants; reduce stress.",
+      "detection": "Down-curled bronzed tips with no visible insect; loupe shows glassy mites/eggs.",
+      "treatment": "Abamectin or wettable sulphur on tips (rotate, observe PHI); bag worst tips; treat early."
+    },
+    {
+      "id": "whitefly",
+      "category": "pest",
+      "cause": "Sap-sucking flies; honeydew -> sooty mould; transmit begomoviruses.",
+      "prevention": "Yellow traps; net-wall vigilance; remove infested lower leaves; weeds.",
+      "detection": "Clouds when disturbed; >5/trap or >2/leaf; honeydew + mould.",
+      "treatment": "Thiamethoxam (4A) or next group; undersides 4-7 PM; never repeat a group."
+    },
+    {
+      "id": "aphids",
+      "category": "pest",
+      "cause": "Soft insects on shoots/undersides; efficient virus vectors.",
+      "prevention": "Scouting; keep natural enemies; remove infested tips; control ants.",
+      "detection": "Curled new growth, honeydew, colonies; threshold >5% of plants.",
+      "treatment": "Spray + rotate IRAC; neem/soap if light; cut infested tips."
+    },
+    {
+      "id": "spider_mite",
+      "category": "pest",
+      "cause": "Tiny mites in hot dry dusty conditions.",
+      "prevention": "Avoid dust/drought stress; scout undersides in dry spells.",
+      "detection": "Fine webbing, moving specks; stippled then bronzed upper surface.",
+      "treatment": "Miticide (rotate actives); remove worst leaves; fix the stress."
+    },
+    {
+      "id": "helicoverpa",
+      "category": "pest",
+      "cause": "Helicoverpa armigera bores buds/pods; can take 40-60% of habanero.",
+      "prevention": "Weekly perimeter scouting from Week 3; pheromone/light monitoring; Bt for young larvae.",
+      "detection": "Cream/brown caterpillars; entry holes with frass; pod damage hidden.",
+      "treatment": "At 3 plants: IRAC 28 0.5 ml/L 4-7 PM; whole field if >10 plants."
+    },
+    {
+      "id": "cutworm",
+      "category": "pest",
+      "cause": "Night-feeding caterpillars severing seedlings at soil line.",
+      "prevention": "Neem cake in holes; clean beds; collars.",
+      "detection": "Seedlings cut overnight; grey curled larva nearby.",
+      "treatment": "Hand-collect at dusk; neem cake; bait only if severe."
+    },
+    {
+      "id": "root_knot_nematode",
+      "category": "soil",
+      "cause": "Roundworms gall roots; plant can't take up water/nutrients (RC1).",
+      "prevention": "Gate 0 soil + nematode assay; solarisation 3-4 wks; neem cake; rotation; never replant untested beds.",
+      "detection": "Stunting, mid-day wilt no spray fixes; beaded galls on pulled roots.",
+      "treatment": "No rescue: isolate sub-zone; nematode protocol within PHI (Farm Doctor plan, Owner approval); if severe terminate + solarise; fix at Gate 0."
+    },
+    {
+      "id": "phytophthora",
+      "category": "disease",
+      "cause": "P. capsici in wet, poorly drained soil; crown/root rot, sudden collapse.",
+      "prevention": "Drainage and ridging; 12 cm mulch; avoid waterlogging; Trichoderma; copper in rotation.",
+      "detection": "Sudden wilt; dark crown lesion; brown streak in cut crown; deaths in wettest spots.",
+      "treatment": "Fix drainage now; Metalaxyl-M drench plant + 4 neighbours (rotation only); remove dead plants."
+    },
+    {
+      "id": "fusarium_wilt",
+      "category": "disease",
+      "cause": "Soil fungus blocking water vessels; persists for years.",
+      "prevention": "Clean/tested soil; solarisation; rotation; resistant varieties.",
+      "detection": "Day wilt, night recovery, then death; brown vascular ring.",
+      "treatment": "No cure: remove; no peppers there without solarisation/rotation."
+    },
+    {
+      "id": "bacterial_wilt",
+      "category": "disease",
+      "cause": "Ralstonia; rapid wilt with green leaves; spreads in water/soil.",
+      "prevention": "Clean soil; drainage; rotation; tool sanitation; stop water movement.",
+      "detection": "Fast wilt, green leaves; cut stem in water shows milky threads.",
+      "treatment": "No cure: remove and bag; stop water spread; solarise; no solanaceous crops there."
+    },
+    {
+      "id": "anthracnose",
+      "category": "disease",
+      "cause": "Colletotrichum; sunken rotting fruit spots; major market loss.",
+      "prevention": "Airflow; fungicide rotation; remove infected fruit; avoid overhead wetting.",
+      "detection": "Sunken dark concentric spots; salmon spore ooze.",
+      "treatment": "Destroy infected fruit; rotate to effective fungicide; tighten interval; harvest promptly."
+    },
+    {
+      "id": "botrytis",
+      "category": "disease",
+      "cause": "Grey mould on wounded/senescing tissue in humid still air.",
+      "prevention": "5 cm gap + door ventilation; remove debris; don't leave wounds wet.",
+      "detection": "Grey fuzz on stems/flowers/fruit, esp. under large fruit.",
+      "treatment": "Improve airflow; remove affected parts; rotate fungicide."
+    },
+    {
+      "id": "powdery_mildew",
+      "category": "disease",
+      "cause": "White powder fungus reducing photosynthesis.",
+      "prevention": "Airflow; avoid dense canopy; sulphur in programme.",
+      "detection": "White patches (undersides first), yellow blotches on top; wipes off.",
+      "treatment": "Sulphur or rotate fungicide; remove worst leaves; open canopy."
+    },
+    {
+      "id": "damping_off",
+      "category": "disease",
+      "cause": "Soil fungi collapsing seedlings in wet crowded nurseries.",
+      "prevention": "Clean media/trays; don't over-water; airflow; Trichoderma media.",
+      "detection": "Seedlings topple; pinched brown stem base.",
+      "treatment": "Cut watering; airflow; discard collapsed; Trichoderma drench."
+    },
+    {
+      "id": "tospovirus",
+      "category": "virus",
+      "cause": "Thrips-borne TSWV (RC2); incurable once systemic.",
+      "prevention": "Control thrips from day one (G1/G2); remove weed hosts; rogue early.",
+      "detection": "Ring/line patterns, bronzing, one-sided stunting; match thrips history; lab if unsure.",
+      "treatment": "No cure: rogue and bag; hit thrips hard (same-day)."
+    },
+    {
+      "id": "mosaic_virus",
+      "category": "virus",
+      "cause": "Sap-transmitted on blades and hands during pruning.",
+      "prevention": "Sanitise blade between every plant; wash hands; rogue; control aphids; avoid tobacco.",
+      "detection": "Mosaic/mottle, puckered leaves; affected line follows pruning direction.",
+      "treatment": "No cure: rogue and bag; reinforce sanitation; remove source plants."
+    },
+    {
+      "id": "blossom_end_rot",
+      "category": "disorder",
+      "cause": "Calcium gap or irregular water during fruit fill.",
+      "prevention": "Never miss Ca drench; regular irrigation; split Ca Day 1/Day 4.",
+      "detection": "Dark sunken leathery patch at blossom end.",
+      "treatment": "Ca Nitrate drench 1.8 kg/1,000 L; regularise water."
+    },
+    {
+      "id": "boron_deficiency",
+      "category": "disorder",
+      "cause": "Endemic Niger Delta deficiency.",
+      "prevention": "Borax 1 g/L weekly on tips through set; 4 h from Ca.",
+      "detection": "Hollow deformed pods; poor set; flower drop despite good pest control.",
+      "treatment": "Borax exactly 1 g/L weekly; never >1.5 g/L."
+    },
+    {
+      "id": "sunscald_cracking",
+      "category": "disorder",
+      "cause": "Sunscald: exposed fruit burns. Cracking: dry spell then flood.",
+      "prevention": "Keep fruit-shading canopy; steady irrigation; steady Ca.",
+      "detection": "Pale papery sun-side patch; ring/radial splits.",
+      "treatment": "Restore canopy; regular irrigation; harvest promptly in wet spells."
+    },
+    {
+      "id": "acid_soil",
+      "category": "soil",
+      "cause": "pH <5.5: Al/Mn toxic to root tips; P locked; Ca/Mg leached (Rev 5.1).",
+      "prevention": "Gate 0 pH test; lime in solarisation window; re-test every cycle.",
+      "detection": "Stunted, pale; stubby thickened roots, dead tips, NO galls; purpling older leaves; pH test.",
+      "treatment": "No mid-cycle fix: nitrate nutrition + Ca Nitrate; place P; lime post-harvest."
+    },
+    {
+      "id": "bacterial_spot",
+      "category": "disease",
+      "cause": "Bacteria (Xanthomonas) spread by rain splash, wet handling, tools and infected transplants; worst in warm wet weather.",
+      "prevention": "Clean seedlings; copper in the fungicide rotation; drip not overhead water; don't work plants when wet; sanitise tools; remove crop debris.",
+      "detection": "Small water-soaked leaf spots turning dark and scabby with a yellow halo; raised scabby spots on fruit; spreads after rain.",
+      "treatment": "Copper sprays (M1) in rotation; remove worst leaves; stop handling wet plants. Infected tissue does not recover.",
+      "status": "drafted from Rev 5 triage + standard agronomy; review at the Gate 4 cycle review"
+    }
+  ],
+  "root_read": {
+    "white firm": "water only",
+    "brown slimy": "rot",
+    "red/brown galls": "nematode",
+    "stubby, thickened, dead-tipped, no galls": "acid soil",
+    "when": "any plant still collapsed by 6 PM from Day 3 after transplant"
+  },
+  "week_counting": {
+    "rule": "Transplant day = T = Day 1 of Week 0. Week n covers days 7n+1 to 7n+7 (Week 0 = days 1-7, Week 1 = days 8-14). week = floor((date - T) / 7).",
+    "pre_transplant": "Pre-plant tasks are scheduled as days before transplant (T-n), not as week days.",
+    "greenhouse_week0_offsets": {
+      "lime + compost + clear plastic (Route A)": "T-35 to T-28",
+      "lift plastic, air 2 days": "T-7",
+      "neem cake": "T-7 (at plastic lift)",
+      "soil final prep + pH gate": "T-5",
+      "pre-plant fungicide": "T-3",
+      "pre-plant insecticide": "T-1",
+      "transplant": "T",
+      "water + day-1 check": "T+1"
+    },
+    "field_h0_offsets": {
+      "lime + compost + clear plastic (Route A)": "T-35 to T-28",
+      "lift plastic": "T-7",
+      "neem cake": "T-7",
+      "land prep + pH gate + mulch": "T-4 to T-2",
+      "transplant": "T",
+      "watering + day-1 care": "T+1 to T+2"
+    },
+    "note": "Rev 5 p2 'Week 1 = days 2-8' is an error and is superseded."
+  },
+  "alert_deadlines": {
+    "thrips": "treat at the same day's spray window (4-7 PM); if the breach is logged after 7 PM, the next day's window",
+    "all_other_thresholds": "next spray window, never later than 24 h",
+    "kpi": "threshold-to-treatment under 24 h"
+  },
+  "product_rule": "Any product without an IRAC or FRAC group on file cannot be selected for a treatment. Groups are entered once, from the label, when the product is added to stock.",
+  "zones_note": "IDs follow the Rev 5.1 block register. OF-02 is now the nursery.",
+  "escalation": {
+    "threshold_alert": [
+      {
+        "at": "0 h",
+        "to": "Farm Manager"
+      },
+      {
+        "at": "4 h not acknowledged",
+        "to": "Field Supervisor"
+      },
+      {
+        "at": "12 h not closed",
+        "to": "Owner"
+      },
+      {
+        "at": "24 h not closed",
+        "to": "Owner, marked KPI breach"
+      }
+    ],
+    "immediate_to_owner": [
+      "suspected virus (tospovirus, mosaic)",
+      "bacterial wilt",
+      "gate override",
+      "pod borer >10 plants",
+      "any synthetic logged from Week 10"
+    ],
+    "missed_trap_count": "see scouting.frequency"
+  },
+  "nursery": {
+    "why": "Seedlings carry thrips, tospovirus and damping-off into every block; the nursery is the first green bridge.",
+    "rules": [
+      "Nursery media must be clean: sterilised, solarised or bought-in; never raw soil from a cropping block.",
+      "Daily trap count and a twice-weekly seedling check (thrips, damping-off, virus symptoms).",
+      "No old crop debris, culls or volunteer peppers within 5 m of the nursery; crop waste is burned or buried far from it (Rev 5).",
+      "Staff move nursery first, cropping blocks after; never from a block back into the nursery the same day without washing hands and changing over-clothes.",
+      "Damping-off, virus or thrips above threshold in the nursery opens an alert like any other zone."
+    ],
+    "seedling_release_check": [
+      "hardened 7+ days",
+      "no virus symptoms (ring/line patterns, mottling)",
+      "no thrips on a tap test",
+      "no damping-off in the batch",
+      "batch ID recorded against the block it goes to"
+    ],
+    "gate_link": "Seedling release check is added to Gate 1; a block cannot log transplant without a released seedling batch."
+  },
+  "farm_doctor": {
+    "role": "In-app diagnostic and planning assistant that takes the place of the site agronomist for day-to-day decisions. It advises; people decide.",
+    "does": [
+      "Guided diagnosis: symptom -> triage row -> card -> confirm test, asking for photos and the confirm step before naming a cause.",
+      "Differentials: names look-alikes and the test that separates them (e.g. nematode galls vs acid-soil stubby roots; Fusarium vs bacterial wilt water test).",
+      "Photo review when online, with a stated confidence (high / medium / low).",
+      "Treatment plan that already passes every rule: Gate 3, IRAC/FRAC rotation, PHI, REI, mixing rules, spray timing, Week 10 organics-only, product in stock.",
+      "Dose calculator: label or schedule rate -> amount per 16 L knapsack and per 500 L / 1,000 L tank.",
+      "Lime calculator: pH readings + texture + bed area -> route, product and kg.",
+      "Gate reviews: checks the evidence for Gates 0, 1 and 4 against the rules and lists anything missing.",
+      "Follow-up: schedules a check 3 days after each treatment and records whether it worked.",
+      "Cycle review draft for Gate 4 from the season's records."
+    ],
+    "never": [
+      "Clears a gate, confirms its own diagnosis, or approves its own plan.",
+      "Recommends a product that is not in the active-ingredient catalogue, not in stock, or blocked by rotation/PHI.",
+      "Recommends banned products (e.g. carbofuran / Furadan).",
+      "Invents a dose where neither the schedule nor an entered label gives one.",
+      "Names a virus or bacterial disease as confirmed on a photo alone."
+    ],
+    "confirmation": {
+      "diagnosis": "Field Supervisor or Farm Manager performs the confirm test and confirms",
+      "treatment_plan": "Farm Manager approves",
+      "gate_0_and_gate_4": "Farm Manager confirms; Owner approves",
+      "virus, bacterial wilt, nematode, or confidence low": "Owner notified; lab sample recommended"
+    },
+    "lab_required_for": [
+      "Gate 0 soil + nematode assay (cannot be replaced by the app)",
+      "suspected tospovirus or other virus when the pattern is unclear",
+      "bacterial wilt if the water test is inconclusive",
+      "any diagnosis the Farm Doctor rates low confidence twice"
+    ],
+    "offline": "Rules-based guided diagnosis, calculators and plan checks work with no signal; photo review needs a connection.",
+    "record": "Every Farm Doctor output is saved with what it read, its confidence, and who confirmed it."
+  },
+  "active_ingredients": [
+    {
+      "ai": "Cypermethrin",
+      "type": "insecticide",
+      "group": "IRAC 3A",
+      "schedule_rate": "1 ml/L (10EC)"
+    },
+    {
+      "ai": "Lambda-cyhalothrin",
+      "type": "insecticide",
+      "group": "IRAC 3A",
+      "schedule_rate": "0.5 ml/L"
+    },
+    {
+      "ai": "Thiamethoxam",
+      "type": "insecticide",
+      "group": "IRAC 4A",
+      "schedule_rate": "0.2 g/L (25WG)"
+    },
+    {
+      "ai": "Imidacloprid",
+      "type": "insecticide",
+      "group": "IRAC 4A",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Acetamiprid",
+      "type": "insecticide",
+      "group": "IRAC 4A",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Spinosad",
+      "type": "insecticide",
+      "group": "IRAC 5",
+      "schedule_rate": "0.3 ml/L (45SC), after 4 PM"
+    },
+    {
+      "ai": "Spinetoram",
+      "type": "insecticide",
+      "group": "IRAC 5",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Abamectin",
+      "type": "insecticide/miticide",
+      "group": "IRAC 6",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Emamectin benzoate",
+      "type": "insecticide",
+      "group": "IRAC 6",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Bacillus thuringiensis (Bt)",
+      "type": "biological insecticide",
+      "group": "IRAC 11A",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Chlorantraniliprole",
+      "type": "insecticide",
+      "group": "IRAC 28",
+      "schedule_rate": "0.5 ml/L (200SC)"
+    },
+    {
+      "ai": "Azadirachtin / neem oil",
+      "type": "botanical",
+      "group": "IRAC UN",
+      "schedule_rate": "150 ml cold-pressed oil + 30 ml soap / 16 L",
+      "phi_days": 0
+    },
+    {
+      "ai": "Garlic-chilli extract (farm-made)",
+      "type": "botanical",
+      "group": "none",
+      "schedule_rate": "see prep table",
+      "phi_days": 0
+    },
+    {
+      "ai": "Sulphur (wettable)",
+      "type": "fungicide/miticide",
+      "group": "FRAC M2",
+      "schedule_rate": null
+    },
+    {
+      "ai": "Copper oxychloride",
+      "type": "fungicide/bactericide",
+      "group": "FRAC M1",
+      "schedule_rate": "3 g/L (50WP)"
+    },
+    {
+      "ai": "Copper hydroxide",
+      "type": "fungicide/bactericide",
+      "group": "FRAC M1",
+      "schedule_rate": "2 g/L (50WP)",
+      "phi_days": 0
+    },
+    {
+      "ai": "Mancozeb",
+      "type": "fungicide",
+      "group": "FRAC M3",
+      "schedule_rate": "2.5 g/L (80WP)"
+    },
+    {
+      "ai": "Metalaxyl-M + Mancozeb",
+      "type": "fungicide",
+      "group": "FRAC 4 + M3",
+      "schedule_rate": "2.5 g/L"
+    },
+    {
+      "ai": "Trichoderma harzianum",
+      "type": "biological",
+      "group": "BM02",
+      "schedule_rate": "5 g/L GH; 2.5 g/L field",
+      "phi_days": 0
+    },
+    {
+      "ai": "Bacillus subtilis",
+      "type": "biological",
+      "group": "BM02",
+      "schedule_rate": "per label"
+    }
+  ],
+  "labels": {
+    "rule": "Treatments are chosen by active ingredient. Brand products are optional labels attached to an active ingredient.",
+    "manager_adds_label": [
+      "select one or more active ingredients from the catalogue (group fills in automatically)",
+      "brand name and formulation (e.g. 45SC, 80WP) and concentration",
+      "label rate",
+      "label PHI and REI (blank allowed: defaults apply)",
+      "photo of the label"
+    ],
+    "rate_rule": "Dose comes from the schedule rate for that active and formulation, or from an entered label. If neither exists, the product cannot be used until a label rate is entered.",
+    "unknown_brands": "Punch, Vanguish and Lion Seal are removed until a manager enters them as labels against their active ingredients.",
+    "new_active": "An active ingredient not in the catalogue can only be added by the Owner, with its IRAC/FRAC group.",
+    "banned": [
+      "Carbofuran (Furadan)"
+    ]
+  },
+  "thrips_program": {
+    "rule": "Rotate thrips treatments by group, never the same group twice running.",
+    "options_by_group": {
+      "IRAC 5": "spinosad (preferred) or spinetoram",
+      "IRAC 6": "abamectin or emamectin benzoate",
+      "IRAC 28": "chlorantraniliprole",
+      "IRAC 4A": "thiamethoxam"
+    },
+    "note": "Actives without a schedule rate need a label entered before use."
+  }
+}
