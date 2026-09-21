@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs';
 
 const web = new URL('../web/js/', import.meta.url);
-const { loadRules, RULES_FILE } = await import(new URL('domain/rules.js', web).href);
+const { loadRules, RULES_FILE } = await import(new URL('rules.js', web).href);
 const { reduce } = await import(new URL('store.js', web).href);
 const {
   buildCatalogue, canUseActive, planStockMigration, migrationEvents, rateFor,

@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const base = new URL('../web/js/', import.meta.url);
-const { loadRules, ref, RULES_FILE } = await import(new URL('domain/rules.js', base).href);
+const { loadRules, ref, RULES_FILE, setRules: rulesModuleSetRules } = await import(new URL('rules.js', base).href);
 const rules = await loadRules();
 
 const {
@@ -567,4 +567,111 @@ test('a store item name is matched on its active, not on its formulation', () =>
   assert.equal(resolveActive(catalogue, 'neem').id, 'azadirachtin_neem_oil');
   assert.equal(resolveActive(catalogue, 'copper'), null, 'two coppers: better nothing than the wrong one');
   assert.equal(resolveActive(catalogue, 'Rocket Force 200'), null);
+});
+
+// --- The server refuses it too ---------------------------------------------
+//
+// Ported from the second catalogue branch (claude/active-ingredient-catalogue-
+// rules-rspcs3), which built the same requirements independently and tested
+// the server side of them where this branch tested only the app. The phone is
+// the thing an attacker controls, and five handsets merging a log is how a bad
+// record would otherwise arrive, so each of these is checked in both places.
+
+const core = await import(new URL('../server/core.mjs', import.meta.url).href);
+
+const OWNER_S = { id: 'u_owner', role: 'ceo' };
+const MANAGER_S = { id: 'u_mgr', role: 'manager' };
+const AGRONOMIST_S = { id: 'u_agro', role: 'agronomist' };
+const SUPERVISOR_S = { id: 'u_sup', role: 'supervisor' };
+const HAND_S = { id: 'u_hand', role: 'hand' };
+
+test('the server keeps its banned list in step with the rules file', () => {
+  assert.deepEqual(core.BANNED_ACTIVES, rules.labels.banned,
+    'server/core.mjs carries the names because it is pasted into Deno Deploy alone; '
+    + 'if the rules file changes, change it there too');
+});
+
+test('the server refuses a banned active however it is spelled', () => {
+  for (const name of ['Carbofuran', 'Furadan 3G', 'carbofuran granules']) {
+    const event = { id: 'a1', type: 'active.add', payload: { id: 'x', name, group: 'IRAC 1A' } };
+    const verdict = core.mayWrite(event, OWNER_S);
+    assert.equal(verdict.ok, false, `${name} was accepted by the server`);
+    assert.ok(/banned/i.test(verdict.why), verdict.why);
+  }
+  assert.equal(core.namesBannedActive('Mancozeb 80% WP'), false);
+});
+
+test('the server puts a new active with the Owner and nobody else', () => {
+  const event = { id: 'a2', type: 'active.add',
+    payload: { id: 'pymetrozine', name: 'Pymetrozine', group: 'IRAC 9B' } };
+  for (const author of [HAND_S, SUPERVISOR_S, AGRONOMIST_S, MANAGER_S]) {
+    assert.equal(core.mayWrite(event, author).ok, false, `a ${author.role} added an active`);
+  }
+  assert.equal(core.mayWrite(event, OWNER_S).ok, true);
+});
+
+test('the server refuses an active with no resistance group', () => {
+  const event = { id: 'a3', type: 'active.add', payload: { id: 'x', name: 'Something new', group: '' } };
+  const verdict = core.mayWrite(event, OWNER_S);
+  assert.equal(verdict.ok, false);
+  assert.ok(/IRAC or FRAC/.test(verdict.why), verdict.why);
+});
+
+test('the server puts brand labels with the Farm Manager', () => {
+  const event = { id: 'l1', type: 'label.add',
+    payload: { id: 'lb', brand: 'Punch', activeIds: ['spinosad'], rate: '0.35 ml/L' } };
+  for (const author of [HAND_S, SUPERVISOR_S, AGRONOMIST_S]) {
+    assert.equal(core.mayWrite(event, author).ok, false, `a ${author.role} added a label`);
+  }
+  assert.equal(core.mayWrite(event, MANAGER_S).ok, true);
+  assert.equal(core.mayWrite(event, OWNER_S).ok, true);
+});
+
+test('the server will not take a label that carries a group of its own', () => {
+  // FR-STOCK-06: the group fills in from the active. A brand that could name
+  // its own group could restart a rotation by being rebottled.
+  const event = { id: 'l2', type: 'label.add',
+    payload: { id: 'lb', brand: 'Punch', activeIds: ['spinosad'], group: 'IRAC 28' } };
+  const verdict = core.mayWrite(event, MANAGER_S);
+  assert.equal(verdict.ok, false);
+  assert.ok(/group comes from the active/.test(verdict.why), verdict.why);
+});
+
+test('the server will not take a label with no active behind it', () => {
+  const event = { id: 'l3', type: 'label.add', payload: { id: 'lb', brand: 'Vanguish', activeIds: [] } };
+  assert.equal(core.mayWrite(event, MANAGER_S).ok, false);
+});
+
+test('the server refuses a store item linked to a banned active', () => {
+  // Here the link is the migration's own record: an input.upsert that names
+  // the active a store item was always made of.
+  const good = { id: 'k1', type: 'input.upsert', payload: { id: 'i1', activeId: 'mancozeb' } };
+  assert.equal(core.mayWrite(good, SUPERVISOR_S).ok, true);
+  assert.equal(core.mayWrite(good, HAND_S).ok, false);
+
+  const bad = { id: 'k2', type: 'input.upsert', payload: { id: 'i1', activeId: 'carbofuran' } };
+  assert.equal(core.mayWrite(bad, MANAGER_S).ok, false);
+
+  const smuggled = { id: 'k3', type: 'input.upsert',
+    payload: { id: 'i2', name: 'Furadan 3G', kind: 'chemical', qty: 5 } };
+  assert.equal(core.mayWrite(smuggled, MANAGER_S).ok, false, 'nor under its brand name');
+});
+
+// --- Also ported: what the rules file being half there should do ------------
+
+test('a rules document that is not rev 5.1 is refused rather than half-loaded', () => {
+  assert.throws(() => rulesModuleSetRules({ meta: { version: 'x' } }), /active_ingredients/i,
+    'an empty catalogue would pass every rotation check silently');
+  rulesModuleSetRules(rules);            // put the real document back for the rest of the file
+});
+
+test('a name that could be two actives resolves to neither', () => {
+  // Ported: better no answer than the wrong one when a store label is ambiguous.
+  assert.equal(resolveActive(cat(), 'copper'), null);
+  assert.equal(resolveActive(cat(), 'Copper Hydroxide 50WP').id, 'copper_hydroxide');
+});
+
+test('the catalogue says which version of the rules it was built from', () => {
+  assert.equal(rules.meta.version, 'rules-1.2');
+  assert.match(ref('active_ingredients/0/group'), new RegExp(`^${RULES_FILE.replace('.', '\\.')}#/`));
 });

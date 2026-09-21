@@ -10,14 +10,15 @@ import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
-import { adviserView } from './ui/adviser.js';
+import { doctorView } from './ui/doctor.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
-import { loadRules } from './domain/rules.js';
 import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
 import { missingTasks } from './domain/schedule.js';
+import { missingFollowUps } from './domain/doctor.js';
+import { loadRules } from './rules.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
@@ -33,7 +34,11 @@ registerRoute('#/dashboard', dashboardView);
 registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);
 registerRoute('#/audit', auditView);
-registerRoute('#/adviser', adviserView);
+// FR-DOC-11 — one entry point. The Farm Doctor and the farm adviser are tabs
+// on one screen, so nobody has to decide which of them their question is for
+// before they know what is wrong. Both addresses land in the same place.
+registerRoute('#/doctor', doctorView);
+registerRoute('#/adviser', doctorView);
 registerRoute('#/gates', gatesView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
@@ -76,7 +81,14 @@ async function warmWeather(ctx) {
  */
 async function generateToday(ctx) {
   if (!ctx.user || !can(ctx.user, 'assignTasks')) return;
-  const due = missingTasks(ctx.store.state, { date: isoDate() });
+  const today = isoDate();
+  // FR-DOC-07: the three-day check after every treatment is generated the same
+  // way, from the spray it belongs to, so it is on the board whether or not
+  // anybody remembered to write it down.
+  const due = [
+    ...missingTasks(ctx.store.state, { date: today }),
+    ...missingFollowUps(ctx.store.state, { today }),
+  ];
   if (!due.length) return;
 
   for (const task of due) {

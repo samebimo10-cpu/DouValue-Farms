@@ -5,6 +5,7 @@
 // notification.
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
+import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
 /**
@@ -155,6 +156,11 @@ const EMPTY = () => ({
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
+  // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
+  // gates, and the samples that went to a lab.
+  doctorOutputs: [],
+  gateEvidence: [],
+  labSamples: [],
   alertAcks: [],
   alertDecisions: [],
   positions: {},
@@ -199,6 +205,8 @@ export function reduce(events) {
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
+      case 'doctor.record': return `doctor:${p.id}`;
+      case 'lab.record': return `lab:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
@@ -221,6 +229,8 @@ export function reduce(events) {
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
+      case 'doctor.confirm': case 'doctor.approve': case 'doctor.owner-seen': return `doctor:${p.id}`;
+      case 'lab.send': case 'lab.result': return `lab:${p.id}`;
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
@@ -241,6 +251,8 @@ export function reduce(events) {
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
       case 'override': return state.gateOverrides.some((o) => o.id === id);
+      case 'doctor': return state.doctorOutputs.some((o) => o.id === id);
+      case 'lab': return state.labSamples.some((s) => s.id === id);
       case 'position': return !!state.positions[id];
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
@@ -283,6 +295,98 @@ export function reduce(events) {
       case 'gate.override.revoke': {
         const o = state.gateOverrides.find((x) => x.id === p.id);
         if (o) { o.revoked = true; o.revokedBy = e.by; o.revokedAt = e.at; }
+        break;
+      }
+
+      // --- The Farm Doctor (requirements 6.14) ---------------------------
+      //
+      // Every output the Doctor produces is saved with what it read, how sure
+      // it was and — later, by a separate record — who confirmed it
+      // (FR-DOC-10). The three FR-DOC-08 limits that matter here are enforced
+      // on the way in rather than trusted: whatever a payload claims, an
+      // output lands unconfirmed, unapproved and clearing nothing. The Farm
+      // Doctor cannot promote its own work by writing a field.
+      case 'doctor.record':
+        state.doctorOutputs.push({
+          ...p,
+          id: p.id || e.id,
+          by: DOCTOR.id,
+          savedBy: e.by,
+          at: p.at || e.at,
+          clears: false,
+          confirmedBy: null, confirmedAt: null,
+          approvedBy: null, approvedAt: null,
+        });
+        break;
+
+      // FR-DOC-08: a person confirms, and only one senior enough for that kind
+      // of output. A confirmation from the Doctor itself, or from someone
+      // junior, is not applied — the record stays unconfirmed, which is what
+      // every gate and every spray screen then reads.
+      case 'doctor.confirm': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (!o) break;
+        const person = state.people[e.by];
+        const spec = CONFIRMS[o.kind] || CONFIRMS.diagnosis;
+        if (e.by === DOCTOR.id || !person || roleRank(person) < spec.minRank) break;
+        o.confirmedBy = e.by;
+        o.confirmedRole = person.role;
+        o.confirmedAt = e.at;
+        o.confirmNote = p.note || '';
+        break;
+      }
+      // FR-GATE-00: the Owner approves Gate 0 and Gate 4 work; the Farm
+      // Manager approves a treatment plan. Approval never arrives before
+      // confirmation, because the two are different people saying different
+      // things.
+      case 'doctor.approve': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (!o || !o.confirmedBy) break;
+        const person = state.people[e.by];
+        const spec = CONFIRMS[o.kind] || CONFIRMS.plan;
+        const needed = spec.approver || spec.minRank;
+        if (e.by === DOCTOR.id || !person || roleRank(person) < needed) break;
+        o.approvedBy = e.by;
+        o.approvedAt = e.at;
+        o.approveNote = p.note || '';
+        break;
+      }
+      case 'doctor.owner-seen': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (o) { o.ownerSeenAt = e.at; o.ownerSeenBy = e.by; }
+        break;
+      }
+
+      // FR-DOC-06: one line of a gate's evidence, recorded by whoever did it.
+      // Evidence is never a pass on its own — gates.js and doctor.js read it,
+      // and people still clear the gate.
+      case 'gate.evidence':
+        state.gateEvidence.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+
+      // FR-DIAG-05 / FR-DOC-09: a sample, from the day it was recommended to
+      // the day the result came back.
+      case 'lab.record':
+        state.labSamples.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: p.status || 'recommended' });
+        break;
+      case 'lab.send': {
+        const sample = state.labSamples.find((x) => x.id === p.id);
+        if (sample) {
+          sample.lab = p.lab || sample.lab;
+          sample.sentDate = p.sentDate || isoDate(new Date(e.at));
+          sample.sentBy = e.by;
+          sample.status = 'sent';
+        }
+        break;
+      }
+      case 'lab.result': {
+        const sample = state.labSamples.find((x) => x.id === p.id);
+        if (sample) {
+          sample.result = p.result || '';
+          sample.resultDate = p.resultDate || isoDate(new Date(e.at));
+          sample.resultNote = p.note || '';
+          sample.status = 'returned';
+        }
         break;
       }
 

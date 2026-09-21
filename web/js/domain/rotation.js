@@ -14,7 +14,7 @@
 // manager who disagrees can argue with the rules rather than with the app.
 
 import { daysBetween, isoDate } from '../util.js';
-import { getRules, ref } from './rules.js';
+import { getRules, ref } from '../rules.js';
 import { buildCatalogue, canUseActive, parseGroup, resolveActive, sameGroup, groupOfSpray } from './catalogue.js';
 
 const norm = (s) => String(s || '').toLowerCase();

@@ -10,6 +10,10 @@
 // and hands it out. Anything that reads a number out of it says where it came
 // from (see `ref` below), so a blocked spray can be traced back to the line in
 // the rules that blocked it rather than to somebody's memory of the PDF.
+//
+// The catalogue of active ingredients is built on top of this, in
+// domain/catalogue.js, and the rotation sequences in domain/rotation.js. They
+// are the only readers of the agronomy; everything else asks them.
 
 export const RULES_FILE = 'rules/douvalue_rules_rev5_1.json';
 
@@ -26,14 +30,14 @@ const isNode = typeof process !== 'undefined' && !!(process.versions && process.
  * Where to look, in order.
  *
  * Deployed, the app sits at the site root and the rules beside it at /rules/,
- * so two levels up from js/domain/ is right. In the repository the app is one
- * level deeper, under web/, so three levels up is right. Trying both keeps a
+ * so one level up from js/ is right. In the repository the app is one level
+ * deeper, under web/, so two levels up is right. Trying both keeps a
  * developer's http-server and the published site on the same code path.
  */
 function candidates() {
   return [
+    new URL(`../${RULES_FILE}`, import.meta.url),
     new URL(`../../${RULES_FILE}`, import.meta.url),
-    new URL(`../../../${RULES_FILE}`, import.meta.url),
   ];
 }
 
@@ -94,8 +98,56 @@ export function getRules() {
 
 export function rulesLoaded() { return !!cache; }
 
+/**
+ * The rules if they are here, and null if they are not.
+ *
+ * For the code that has to carry on without them rather than stop: the Farm
+ * Doctor refuses to name a product when the rules have not arrived
+ * (FR-DOC-08), and a screen still has to paint in order to say so. Anything
+ * that would otherwise *decide* something uses getRules() and its exception.
+ */
+export function peekRules() { return cache; }
+
 /** Tests and the sample farm set the document directly. */
 export function setRules(doc) {
   cache = doc ? check(doc, 'the supplied rules') : null;
   return cache;
 }
+
+export function rulesVersion(rules = cache) {
+  return (rules && rules.meta && rules.meta.version) || null;
+}
+
+// --- Readers that are not the catalogue ------------------------------------
+//
+// The active ingredients, their groups and the rotation sequences are read by
+// domain/catalogue.js and domain/rotation.js. What is left here is the handful
+// of other sections the Farm Doctor reads directly.
+
+export function gateSpec(id, rules = cache) {
+  if (!rules || !Array.isArray(rules.gates)) return null;
+  return rules.gates.find((g) => g.id === id) || null;
+}
+
+export function doctorRules(rules = cache) { return (rules && rules.farm_doctor) || null; }
+
+export function triageRows(rules = cache) { return (rules && rules.triage) || []; }
+
+export function diagnosisCard(id, rules = cache) {
+  const cards = (rules && rules.diagnosis_cards) || [];
+  return cards.find((c) => c.id === id) || null;
+}
+
+/** The rules' own default waiting period, read out of the phi table. */
+export function defaultPhiDays(rules = cache) {
+  const rows = (rules && rules.phi) || [];
+  for (const row of rows) {
+    if (/other synthetic/i.test(String(row.product || ''))) {
+      const n = parseInt(String(row.phi_days), 10);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return 14;
+}
+
+export const DEFAULT_REI_HOURS = 24;   // rei.rule: "24 h until label value entered"

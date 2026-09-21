@@ -21,7 +21,7 @@ const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 // hard-coded product table, so the rules have to be on the table before a gate
 // can be asked anything. That is the point: a rotation check with no rules
 // behind it would pass everything.
-const { loadRules } = await import(new URL('domain/rules.js', base).href);
+const { loadRules } = await import(new URL('rules.js', base).href);
 await loadRules();
 
 const TODAY = '2026-09-16';

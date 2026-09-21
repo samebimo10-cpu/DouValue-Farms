@@ -18,7 +18,7 @@
 // rule that refused it.
 
 import { can } from '../store.js';
-import { getRules, ref } from './rules.js';
+import { getRules, ref } from '../rules.js';
 
 // --- Names and ids ---------------------------------------------------------
 

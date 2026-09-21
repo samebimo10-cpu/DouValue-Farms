@@ -53,15 +53,17 @@ export const clinicView = {
       + button('Check a sick plant', 'go', { cls: 'btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
       + button('Browse the guide', 'go', { cls: 'btn-lg btn-ghost', icon: '📖', data: { to: '#/guide' } })
       + '</div>'
-      // The clinic answers "what is wrong with this plant". The adviser answers
-      // "what should the farm do this week", which is the question people ask
-      // next, so it belongs one tap from here.
+      // The clinic answers "what is wrong with this plant". The Farm Doctor
+      // answers what to do about it and what the gates are still missing, and
+      // the adviser answers "what should the farm do this week" — FR-DOC-11
+      // puts those two behind one door, so this is one button, not two.
       + `<div style="margin-top:10px">${button('Alerts', 'go',
         { cls: 'btn-block', icon: '🚨', data: { to: '#/alerts' } })}</div>`
-      + `<div style="margin-top:10px">${button('Ask the farm adviser', 'go',
-        { cls: 'btn-block btn-ghost', icon: '🧠', data: { to: '#/adviser' } })}</div>`
-      + '<p style="margin:8px 0 0"><small>Reads your own records and says what to do about '
-      + 'them — beds, water, sprays, stock and money. Works with no network.</small></p>',
+      + `<div style="margin-top:10px">${button('Farm Doctor and adviser', 'go',
+        { cls: 'btn-block btn-ghost', icon: '🩺', data: { to: '#/doctor' } })}</div>`
+      + '<p style="margin:8px 0 0"><small>Photo review, treatment plans that already pass the '
+      + 'rules, gate evidence, the three-day check after a spray — and the adviser that reads '
+      + 'your own records. The rules-based half works with no network.</small></p>',
       { tight: true },
     );
 

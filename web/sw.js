@@ -9,7 +9,7 @@
 // the rules file at boot. A phone that still holds the old cache must discard
 // it rather than keep serving the app from the old address, or from a cache
 // with no rules in it.
-const CACHE = 'douvalue-v12';
+const CACHE = 'douvalue-v13';
 
 const SHELL = [
   './',
@@ -37,11 +37,14 @@ const SHELL = [
   './js/ui/manage.js',
   './js/ui/photo.js',
   './js/ui/adviser.js',
+  './js/ui/doctor.js',
   './js/ui/gates.js',
   './js/ui/alerts.js',
   './js/ui/zones.js',
   './js/ui/field-kit.js',
+  './js/rules.js',
   './js/domain/adviser.js',
+  './js/domain/doctor.js',
   './js/domain/analysis.js',
   './js/domain/brief.js',
   './js/domain/gates.js',
@@ -56,7 +59,6 @@ const SHELL = [
   './js/domain/pests.js',
   './js/domain/diagnose.js',
   './js/domain/safety.js',
-  './js/domain/rules.js',
   './js/domain/catalogue.js',
   './js/domain/rotation.js',
   './js/domain/integrity.js',

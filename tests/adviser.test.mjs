@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 const base = new URL('../web/js/', import.meta.url);
 // The brief reads resistance by IRAC/FRAC group, and the groups come out of the
 // rules file, so the rules go on the table before any brief is built.
-await (await import(new URL('domain/rules.js', base).href)).loadRules();
+await (await import(new URL('rules.js', base).href)).loadRules();
 const { buildBrief, briefToText } = await import(new URL('domain/brief.js', base).href);
 const { advise, URGENCY } = await import(new URL('domain/adviser.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);

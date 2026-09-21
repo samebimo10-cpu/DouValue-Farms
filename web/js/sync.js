@@ -236,6 +236,38 @@ export async function askAdviser({ brief, question = '', alreadySaid = [] }) {
   }
 }
 
+/**
+ * FR-DOC-03 — the Farm Doctor's photo review.
+ *
+ * The only part of the Farm Doctor that needs a connection. Everything it
+ * returns is put back through normalisePhotoReview() in domain/doctor.js
+ * before anybody sees it, so an answer that oversteps the FR-DOC-08 limits is
+ * trimmed on this side rather than trusted.
+ */
+export async function reviewPhotos({
+  photos = [], cycleId = null, zoneId = null, note = '', symptoms = [], shortlist = [], date = null,
+} = {}) {
+  if (!auth) {
+    return { ok: false, reason: 'offline',
+      message: 'This phone is not connected to a farm server, so the photos cannot be reviewed yet.' };
+  }
+  try {
+    return await api(`/api/farms/${encodeURIComponent(auth.farmId)}/photo-review`, {
+      method: 'POST',
+      body: { photos, cycleId, zoneId, note, symptoms, shortlist, date },
+      timeoutMs: 70000,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err.name === 'AbortError' ? 'timeout' : 'error',
+      message: err.name === 'AbortError'
+        ? 'The photo review took too long. Use the guided diagnosis — it needs no signal.'
+        : err.message,
+    };
+  }
+}
+
 // --- Exchanging records ---------------------------------------------------
 
 const MAX_PUSH_BYTES = 3_000_000;   // the server refuses more than 5 MB in one go

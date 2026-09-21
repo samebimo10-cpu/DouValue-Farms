@@ -272,6 +272,7 @@ const PARENT_OF = {
   '#/zones': '#/field',
   '#/diagnose': '#/clinic',
   '#/adviser': '#/clinic',
+  '#/doctor': '#/clinic',
   '#/guide': '#/clinic',
   '#/guide/item': '#/guide',
   '#/plan': '#/dashboard',
