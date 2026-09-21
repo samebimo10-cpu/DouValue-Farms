@@ -15,8 +15,9 @@ import assert from 'node:assert/strict';
 
 const base = new URL('../web/js/', import.meta.url);
 const {
-  alerts, breaches, kpis, levelFor, openAlerts, risingWarnings, thresholdFor, trend,
-  DEFAULT_LADDER, DEFAULT_THRESHOLDS,
+  alerts, breaches, escalationFor, isSyntheticFromWeek10, kpis, kpisByWeek, kpisByZone,
+  ladderRungs, levelFor, openAlerts, risingWarnings, straightToOwner, thresholdFor, trend, weekOf,
+  DEFAULT_LADDER, DEFAULT_THRESHOLDS, IMMEDIATE_TO_OWNER,
 } = await import(new URL('domain/alerts.js', base).href);
 const { digest, digestText, digestSize, exceptions } = await import(new URL('domain/digest.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
@@ -115,7 +116,8 @@ test('crossing the threshold opens an alert with a 24-hour deadline', () => {
   assert.equal(a.limit, 10);
 
   const deadlineHours = (new Date(a.dueAt) - new Date(a.at)) / 3600000;
-  assert.equal(deadlineHours, DEFAULT_LADDER.ownerAfterHours);
+  assert.equal(deadlineHours, DEFAULT_LADDER.kpiBreachAfterHours);
+  assert.equal(deadlineHours, 24, 'the deadline is the KPI-01 one, not the rung below it');
 });
 
 test('a second sighting of the same pest in the same zone does not open a second alert', () => {
@@ -145,26 +147,102 @@ test('the same pest in a different zone is a different alert', () => {
 
 // --- FR-SCOUT-04: the escalation ladder -----------------------------------
 
-test('the ladder climbs on elapsed time', () => {
-  assert.equal(levelFor(1, false), 'manager');
+test('the ladder has the four rungs the rules give it', () => {
+  // rules C-12 (escalation.threshold_alert): 0 h Farm Manager, 4 h Field
+  // Supervisor, 12 h Owner, 24 h Owner marked KPI breach.
+  const rungs = ladderRungs();
+  assert.deepEqual(rungs.map((r) => r.atHours), [0, 4, 12, 24]);
+  assert.deepEqual(rungs.map((r) => r.to),
+    ['Farm Manager', 'Field Supervisor', 'Owner', 'Owner']);
+  assert.equal(rungs[3].kpiBreach, true, 'the fourth rung is the KPI breach');
+  assert.equal(rungs[1].condition, 'not acknowledged');
+  assert.equal(rungs[2].condition, 'not closed');
+});
+
+test('the ladder climbs on elapsed time, rung by rung', () => {
+  assert.equal(levelFor(0, false), 'manager', '0 h — the Farm Manager at once');
   assert.equal(levelFor(3.9, false), 'manager');
-  assert.equal(levelFor(4, false), 'supervisor');
-  assert.equal(levelFor(23.9, false), 'supervisor');
-  assert.equal(levelFor(24, false), 'owner');
+  assert.equal(levelFor(4, false), 'supervisor', '4 h unacknowledged — the Field Supervisor');
+  assert.equal(levelFor(11.9, false), 'supervisor');
+  assert.equal(levelFor(12, false), 'owner', '12 h not closed — the Owner');
+  assert.equal(levelFor(23.9, false), 'owner');
+  assert.equal(levelFor(24, false), 'kpi', '24 h not closed — KPI breach');
 });
 
 test('acknowledging stops the climb to the Supervisor but not to the Owner', () => {
   // "Seen it" is not "dealt with", and Season 1 was full of seen.
   assert.equal(levelFor(6, true), 'manager');
-  assert.equal(levelFor(30, true), 'owner');
+  assert.equal(levelFor(12, true), 'owner', 'only closing it stops the climb to the Owner');
+  assert.equal(levelFor(30, true), 'kpi');
 });
 
-test('an alert nobody touched for a day is with the Owner', () => {
-  const state = farm({ scouts: [scout({ trapCount: 14, at: hoursAgo(26) })] });
+test('the Owner can shorten every rung for a test run, without a release', () => {
+  // Requirements §9: "threshold breach escalates correctly with times shortened
+  // for testing".
+  const quick = { supervisorAfterHours: 0.5, ownerAfterHours: 1, kpiBreachAfterHours: 2 };
+  assert.equal(levelFor(0.6, false, quick), 'supervisor');
+  assert.equal(levelFor(1, false, quick), 'owner');
+  assert.equal(levelFor(2, false, quick), 'kpi');
+  assert.deepEqual(ladderRungs({ ladder: quick }).map((r) => r.atHours), [0, 0.5, 1, 2]);
+});
+
+test('an alert nobody touched for half a day is with the Owner', () => {
+  const state = farm({ scouts: [scout({ trapCount: 14, at: hoursAgo(13) })] });
   const [a] = openAlerts(state, { now: NOW });
 
   assert.equal(a.level, 'owner');
+  assert.equal(a.kpiBreach, false, 'with the Owner, but not yet a KPI breach');
+  assert.equal(a.overdue, false);
+});
+
+test('an alert nobody touched for a day is a KPI breach, still with the Owner', () => {
+  const state = farm({ scouts: [scout({ trapCount: 14, at: hoursAgo(26) })] });
+  const [a] = openAlerts(state, { now: NOW });
+
+  assert.equal(a.level, 'kpi');
+  assert.equal(a.levelLabel, 'Owner — KPI breach');
+  assert.equal(a.kpiBreach, true);
   assert.equal(a.overdue, true);
+});
+
+test('the alert carries the whole ladder, so what was tried is on the record', () => {
+  const state = farm({ scouts: [scout({ trapCount: 14, at: hoursAgo(13) })] });
+  const [a] = openAlerts(state, { now: NOW });
+
+  assert.deepEqual(a.escalation.map((r) => r.level), ['manager', 'supervisor', 'owner', 'kpi']);
+  assert.deepEqual(a.escalation.map((r) => r.reached), [true, true, true, false]);
+  // The rungs carry the clock time they fire at, not just an offset.
+  const opened = new Date(a.at).getTime();
+  assert.equal(new Date(a.escalation[2].at).getTime() - opened, 12 * 3600000);
+});
+
+test('an acknowledged alert skips the Supervisor rung but still reaches the Owner', () => {
+  const state = farm({
+    scouts: [scout({ trapCount: 14, at: hoursAgo(13) })],
+    alertAcks: [{ id: 'ak1', cycleId: 'c1', pestId: 'thrips', by: 'u_mgr', at: hoursAgo(12) }],
+  });
+  const [a] = openAlerts(state, { now: NOW });
+
+  const supervisor = a.escalation.find((r) => r.level === 'supervisor');
+  assert.equal(supervisor.skipped, true);
+  assert.equal(supervisor.reached, false);
+  assert.match(supervisor.why, /never went to the Field Supervisor/);
+  assert.equal(a.escalation.find((r) => r.level === 'owner').reached, true);
+  assert.equal(a.level, 'owner');
+});
+
+test('an alert closed inside four hours never reached anybody but the Farm Manager', () => {
+  const state = farm({
+    scouts: [scout({ trapCount: 14, at: hoursAgo(5) })],
+    sprays: [{ id: 'sp1', cycleId: 'c1', productId: 'neem', productName: 'Neem oil',
+      date: day(0), at: hoursAgo(3), diagnosisId: 'd1' }],
+  });
+  const [a] = alerts(state, { now: NOW });
+
+  assert.equal(a.status, 'closed');
+  assert.equal(a.hoursToClose, 2);
+  assert.deepEqual(a.escalation.map((r) => r.reached), [true, false, false, false]);
+  assert.equal(a.kpiBreach, false);
 });
 
 test('an acknowledgement is honoured only if it came after the breach', () => {
@@ -403,4 +481,251 @@ test('KPI-05 counts alerts past their deadline', () => {
 
   assert.equal(k5.value, 1, 'only the one past 24 hours counts');
   assert.equal(k5.ok, false);
+});
+
+// --- FR-SCOUT-04: the straight-to-Owner list ------------------------------
+//
+// rules `escalation.immediate_to_owner`. Five things that do not climb the
+// ladder at all, because four hours of being polite about a tospovirus is four
+// hours the house does not have.
+
+test('the straight-to-Owner list is the five the rules name', () => {
+  assert.deepEqual(IMMEDIATE_TO_OWNER, [
+    'suspected virus (tospovirus, mosaic)',
+    'bacterial wilt',
+    'gate override',
+    'pod borer >10 plants',
+    'any synthetic logged from Week 10',
+  ]);
+});
+
+test('a suspected virus goes straight to the Owner, with what to do about it', () => {
+  const state = farm({
+    diagnoses: [{ id: 'd1', cycleId: 'c1', problemId: 'tospovirus',
+      problemName: 'Tomato spotted wilt virus', date: day(0), at: hoursAgo(2) }],
+  });
+  const [item] = straightToOwner(state, { now: NOW });
+
+  assert.equal(item.kind, 'virus');
+  assert.match(item.line, /VIRUS SUSPECTED/);
+  assert.match(item.line, /GH-01/);
+  assert.match(item.detail, /Isolate/);
+});
+
+test('bacterial wilt is its own rung on that list, not lumped in with virus', () => {
+  const state = farm({
+    diagnoses: [{ id: 'd1', cycleId: 'c1', problemId: 'bacterial_wilt',
+      problemName: 'Bacterial wilt', date: day(0), at: hoursAgo(2) }],
+  });
+  const [item] = straightToOwner(state, { now: NOW });
+
+  assert.equal(item.kind, 'bacterial_wilt');
+  assert.equal(item.rule, 'bacterial wilt');
+  assert.match(item.detail, /lab sample/);
+});
+
+test('a standing gate override reaches the Owner; a revoked one stops', () => {
+  const live = farm({
+    gateOverrides: [{ id: 'ov1', zoneId: 'gh1', gate: 'nematode', reason: 'Lab lost the slip',
+      by: 'u_owner', at: hoursAgo(3) }],
+  });
+  assert.equal(straightToOwner(live, { now: NOW })[0].kind, 'gate_override');
+
+  const revoked = farm({
+    gateOverrides: [{ id: 'ov1', zoneId: 'gh1', gate: 'nematode', reason: 'Lab lost the slip',
+      by: 'u_owner', at: hoursAgo(3), revoked: true }],
+  });
+  assert.deepEqual(straightToOwner(revoked, { now: NOW }), []);
+});
+
+test('pod borer goes to the Owner past ten plants, and not at ten', () => {
+  const at11 = farm({
+    scouts: [scout({ pestId: 'fruit_borer', perPlant: 3, plantsAffected: 11, at: hoursAgo(1) })],
+  });
+  assert.equal(straightToOwner(at11, { now: NOW })[0].kind, 'pod_borer');
+
+  const at10 = farm({
+    scouts: [scout({ pestId: 'fruit_borer', perPlant: 3, plantsAffected: 10, at: hoursAgo(1) })],
+  });
+  assert.deepEqual(straightToOwner(at10, { now: NOW }), []);
+
+  // Nobody counted the plants: stay quiet rather than invent a number from a
+  // ten-plant average, which cannot say "more than ten" at all.
+  const uncounted = farm({ scouts: [scout({ pestId: 'fruit_borer', perPlant: 9, at: hoursAgo(1) })] });
+  assert.deepEqual(straightToOwner(uncounted, { now: NOW }), []);
+});
+
+test('Week 10 is counted the way the rules count it', () => {
+  // "Transplant day = T = Day 1 of Week 0. week = floor((date - T) / 7)."
+  const cycle = { id: 'c1', transplantDate: '2026-01-01' };
+  assert.equal(weekOf(cycle, '2026-01-01'), 0);
+  assert.equal(weekOf(cycle, '2026-01-07'), 0, 'Week 0 is days 1-7');
+  assert.equal(weekOf(cycle, '2026-01-08'), 1);
+  assert.equal(weekOf(cycle, '2026-03-11'), 9, 'day 70 is the start of Week 10');
+  assert.equal(weekOf(cycle, '2026-03-12'), 10);
+});
+
+test('a synthetic from Week 10 reaches the Owner; neem does not', () => {
+  // SR-08: from Week 10 it is organics only.
+  const week12 = { c1: { id: 'c1', plotId: 'gh1', cropId: 'bell',
+    transplantDate: day(-88), status: 'active' } };
+
+  const synthetic = farm({
+    cycles: week12,
+    sprays: [{ id: 'sp1', cycleId: 'c1', productId: 'imidacloprid', productName: 'Imidacloprid',
+      date: day(0), at: hoursAgo(2), diagnosisId: 'd1' }],
+  });
+  const [item] = straightToOwner(synthetic, { now: NOW });
+  assert.equal(item.kind, 'week10_synthetic');
+  assert.match(item.line, /Week 12/);
+
+  const organic = farm({
+    cycles: week12,
+    sprays: [{ id: 'sp1', cycleId: 'c1', productId: 'neem', productName: 'Neem oil',
+      date: day(0), at: hoursAgo(2), diagnosisId: 'd1' }],
+  });
+  assert.deepEqual(straightToOwner(organic, { now: NOW }), []);
+});
+
+test('a synthetic before Week 10 is ordinary work, and stays off the list', () => {
+  const state = farm({
+    sprays: [{ id: 'sp1', cycleId: 'c1', productId: 'imidacloprid', productName: 'Imidacloprid',
+      date: day(0), at: hoursAgo(2), diagnosisId: 'd1' }],
+  });
+  // c1 was transplanted 40 days ago, which is Week 5.
+  assert.deepEqual(straightToOwner(state, { now: NOW }), []);
+});
+
+test('a product nobody recognises counts as a synthetic, not as an organic', () => {
+  // Erring this way raises a flag the Owner can dismiss. Erring the other way
+  // is residue on fruit already being picked.
+  assert.equal(isSyntheticFromWeek10('some_new_brand'), true);
+  assert.equal(isSyntheticFromWeek10('neem'), false);
+  assert.equal(isSyntheticFromWeek10('bt'), false);
+  assert.equal(isSyntheticFromWeek10('calcium_nitrate'), false, 'a nutrient is not a pesticide');
+});
+
+test('the digest carries the straight-to-Owner items and says why', () => {
+  const state = farm({
+    diagnoses: [{ id: 'd1', cycleId: 'c1', problemId: 'tospovirus',
+      problemName: 'Tomato spotted wilt virus', date: day(0), at: hoursAgo(2) }],
+    gateOverrides: [{ id: 'ov1', zoneId: 'gh1', gate: 'nematode',
+      reason: 'Lab lost the slip, resample sent', by: 'u_owner', at: hoursAgo(3) }],
+  });
+  const text = digestText(state, { now: NOW });
+
+  assert.match(text, /VIRUS SUSPECTED/);
+  assert.match(text, /Gate override/);
+  assert.match(text, /straight to the Owner/);
+});
+
+// --- FR-REP-03: the measures per week and per zone -------------------------
+
+test('the KPI table computes per zone as well as for the whole farm', () => {
+  const state = farm({
+    sprays: [
+      { id: 'sp1', cycleId: 'c1', productId: 'neem', date: day(-2), at: hoursAgo(50) },
+      { id: 'sp2', cycleId: 'c2', productId: 'neem', date: day(-2), at: hoursAgo(50) },
+    ],
+  });
+
+  const farmWide = kpis(state, { now: NOW }).find((r) => r.id === 'KPI-03');
+  assert.equal(farmWide.value, 2, 'two sprays with no diagnosis behind them');
+
+  const gh1 = kpis(state, { now: NOW, zoneId: 'gh1' }).find((r) => r.id === 'KPI-03');
+  assert.equal(gh1.value, 1, 'one of them was in GH-01');
+
+  const byZone = kpisByZone(state, { now: NOW });
+  assert.deepEqual(byZone.map((z) => z.zone.name).sort(), ['Field A', 'GH-01']);
+  for (const block of byZone) {
+    assert.deepEqual(block.rows.map((r) => r.id),
+      ['KPI-01', 'KPI-02', 'KPI-03', 'KPI-04', 'KPI-05', 'KPI-06']);
+  }
+});
+
+test('the KPI table computes week by week, each week on its own records', () => {
+  const state = farm({
+    sprays: [{ id: 'sp1', cycleId: 'c1', productId: 'neem', date: day(-9), at: hoursAgo(9 * 24) }],
+  });
+  const weeks = kpisByWeek(state, { now: NOW, weeks: 3 });
+
+  assert.equal(weeks.length, 3);
+  assert.equal(weeks[2].current, true, 'the last row is the week in progress');
+  assert.ok(weeks[0].from < weeks[1].from && weeks[1].from < weeks[2].from, 'oldest first');
+  for (const w of weeks) {
+    assert.equal(w.to, weeks.find((x) => x.from === w.from).to);
+  }
+  // The undiagnosed spray lands in exactly one of the weeks, not in all of them.
+  const hits = weeks.filter((w) => w.rows.find((r) => r.id === 'KPI-03').value > 0);
+  assert.equal(hits.length, 1);
+});
+
+test('every zone block and every week block answers the same six measures', () => {
+  const state = farm({ scouts: [scout({ trapCount: 14, at: hoursAgo(30) })] });
+  for (const week of kpisByWeek(state, { now: NOW, weeks: 2 })) {
+    assert.equal(week.rows.length, 6);
+    for (const row of week.rows) {
+      assert.ok(row.measure && row.target && row.display, `${row.id} is missing a column`);
+    }
+  }
+});
+
+// --- FR-SCOUT-04 on the screen --------------------------------------------
+
+const { alertsView } = await import(new URL('ui/alerts.js', base).href);
+
+// The screen reads the clock itself, so these build their records against the
+// real one rather than against this file's fixed NOW.
+const reallyHoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString();
+const today = () => new Date().toISOString().slice(0, 10);
+
+test('the alert board shows the whole ladder, not just where it has got to', () => {
+  const state = farm({
+    scouts: [scout({ trapCount: 14, date: today(), at: reallyHoursAgo(5) })],
+  });
+  const html = alertsView.render({ state, user: state.people.u_mgr, store: { state } });
+
+  assert.match(html, /0 h — Farm Manager/);
+  assert.match(html, /4 h — Field Supervisor/);
+  assert.match(html, /12 h — Owner/);
+  assert.match(html, /24 h — Owner, KPI breach/);
+  // Two rungs fired, two have not: each carries a shape as well as a colour.
+  assert.equal((html.match(/class="rung is-done"/g) || []).length, 2);
+  assert.equal((html.match(/class="rung is-todo"/g) || []).length, 2);
+});
+
+test('a rung that was skipped by an acknowledgement says so on the screen', () => {
+  const state = farm({
+    scouts: [scout({ trapCount: 14, date: today(), at: reallyHoursAgo(6) })],
+    alertAcks: [{ id: 'ak1', cycleId: 'c1', pestId: 'thrips', by: 'u_mgr', at: reallyHoursAgo(5) }],
+  });
+  const html = alertsView.render({ state, user: state.people.u_mgr, store: { state } });
+
+  assert.match(html, /class="rung is-skip"/);
+  assert.match(html, /never went to the Field Supervisor/);
+});
+
+test('the straight-to-Owner items sit above the ladder, with the rule that put them there', () => {
+  const state = farm({
+    diagnoses: [{ id: 'd1', cycleId: 'c1', problemId: 'tospovirus',
+      problemName: 'Tomato spotted wilt virus', date: today(), at: reallyHoursAgo(2) }],
+  });
+  const html = alertsView.render({ state, user: state.people.u_mgr, store: { state } });
+
+  assert.match(html, /Straight to the Owner/);
+  assert.match(html, /These do not climb the ladder/);
+  assert.match(html, /suspected virus \(tospovirus, mosaic\)/);
+});
+
+test('an override that has been standing for weeks is still in front of the Owner', () => {
+  // FR-GATE-07: an override is a state the farm is standing in, not an event
+  // that happened once. Ageing it off the list after a week is how a temporary
+  // override becomes a permanent one nobody remembers granting.
+  const state = farm({
+    gateOverrides: [{ id: 'ov1', zoneId: 'gh1', gate: 'nematode',
+      reason: 'Lab lost the slip, resample sent', by: 'u_owner', at: hoursAgo(24 * 30) }],
+  });
+
+  assert.equal(straightToOwner(state, { now: NOW })[0].kind, 'gate_override');
+  assert.match(digestText(state, { now: NOW }), /Gate override/);
 });

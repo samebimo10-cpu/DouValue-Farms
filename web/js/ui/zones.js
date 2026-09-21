@@ -15,6 +15,7 @@ import {
 } from './kit.js';
 import { can } from '../store.js';
 import { coverBoard, POSITION_TEMPLATE } from '../domain/positions.js';
+import { qrSvg, zoneCode } from '../domain/qr.js';
 import { gatesForZone } from '../domain/gates.js';
 import { tasksFor } from '../domain/schedule.js';
 import { isoDate, uid } from '../util.js';
@@ -63,7 +64,9 @@ function head(ctx, board) {
     + 'app.</small></p>'
     + `<div class="row wrap" style="margin-top:10px">${
       can(ctx.user, 'manageCycles') ? button('Add a zone', 'open-zone', { icon: '📍' }) : ''
-    }${button('Report an absence', 'open-absence', { cls: 'btn-ghost', icon: '🏠' })}</div>`,
+    }${button('Report an absence', 'open-absence', { cls: 'btn-ghost', icon: '🏠' })
+    }${button('Door codes to print', 'go', {
+      cls: 'btn-ghost', icon: '🔳', data: { to: '#/zones/codes' } })}</div>`,
     { tight: true },
   );
 }
@@ -321,3 +324,48 @@ async function saveAbsence(ctx, form) {
   closeSheet();
   toast('Recorded. Their zone moves to the backup holder.');
 }
+
+// --- Printable door codes — FR-FARM-03 ------------------------------------
+//
+// "Each zone has a printable QR code for its door or marker post."
+//
+// One page, one code per zone, cut up and taped to the doors. The code is
+// generated here rather than fetched, so this page prints in a shed with no
+// signal, which is where it will actually be printed.
+//
+// What is on the label matters as much as the code. A square of dots taped to a
+// door with nothing else on it gets peeled off by somebody who does not know
+// what it is, so the zone name is printed large underneath — big enough to be
+// read from the path — and one line says what it is for.
+
+export const zoneCodesView = {
+  perm: 'viewGuide',
+
+  render(ctx) {
+    const zones = Object.values(ctx.state.plots || {}).filter((z) => !z.retired);
+    const farmName = (ctx.state.settings || {}).farmName || 'DouValue Farms';
+
+    if (!zones.length) {
+      return card(empty('🔳', 'No zones to label yet',
+        'Add your greenhouses and fields first; each one gets its own code.'));
+    }
+
+    return card(
+      cardHead('Door codes', button('Print', 'print', { cls: 'btn-sm', icon: '🖨️' }))
+      + '<p><small>Print this page, cut along the lines and tape one to each door or marker '
+      + 'post. Scanning it is the quickest way to choose a zone, and it is what confirms which '
+      + 'house somebody is standing in when a job starts.</small></p>'
+      + '<p><small><b>Laminate them, or put them behind clear tape.</b> These live outside in '
+      + 'Port Harcourt rain. The codes carry enough error correction to survive splashes and a '
+      + 'torn corner, but not a week of weather.</small></p>',
+      { tight: true, cls: 'no-print' },
+    )
+      + `<div class="qr-sheet">${zones.map((z) => `<figure class="qr-card">`
+        + qrSvg(zoneCode(z), { moduleSize: 6, label: `Zone code for ${z.name}` })
+        + `<figcaption><b>${esc(z.name)}</b>`
+        + `<small>${esc(z.type === 'field' ? 'Open field' : 'Greenhouse')}`
+        + `${z.areaM2 ? ` · ${esc(z.areaM2)} m²` : ''}</small>`
+        + `<small>${esc(farmName)} — scan at the start of every job here</small>`
+        + '</figcaption></figure>').join('')}</div>`;
+  },
+};

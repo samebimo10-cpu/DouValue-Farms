@@ -87,7 +87,7 @@ const ANY = 'viewGuide';   // every role holds this, so it means "everyone on th
  * redact: strips fields the reader has no business seeing.
  */
 const EVENT_POLICY = {
-  'settings.update':   { write: 'settings',      read: ANY, redact: redactSettings },
+  'settings.update':   { write: 'settings',      read: ANY, redact: redactSettings, guard: guardSettings },
   'person.upsert':     { write: 'managePeople',  read: ANY, redact: redactPerson, guard: guardPersonWrite },
   'person.deactivate': { write: 'managePeople',  read: ANY, guard: guardPersonWrite },
   'plot.upsert':       { write: 'manageCycles',  read: ANY },
@@ -109,6 +109,11 @@ const EVENT_POLICY = {
   'diagnosis.record':  { write: 'diagnose',      read: ANY },
   'report.record':     { write: 'reportProblem', read: ANY },
   'report.resolve':    { write: 'assignTasks',   read: ANY },
+  // FR-TASK-05 / UX-09: an end-of-shift report is written by whoever worked
+  // the shift, and answered by whoever runs the work. Kept apart from
+  // report.record above: that one is an exception, this one is the day.
+  'shift.record':      { write: 'viewOwnTasks',  read: ANY, guard: guardShift },
+  'shift.comment':     { write: 'assignTasks',   read: ANY, guard: guardShiftComment },
   'input.upsert':      { write: 'logInputs',     read: ANY },
   'input.receive':     { write: 'logInputs',     read: ANY },
   'input.issue':       { write: 'logInputs',     read: ANY },
@@ -480,6 +485,56 @@ function guardNoTreat(event) {
   if (String(p.reason || '').trim().length < 10) {
     return { ok: false, why: 'Say why no treatment is needed — a sentence someone can check later' };
   }
+  return { ok: true };
+}
+
+/**
+ * UX-27 — the field-trial sign-off belongs to the Owner.
+ *
+ * Settings are the Farm Manager's in general, and that is right for crate
+ * weights and wages. This one is different: it is the switch that ends
+ * supervised use of the spray and gate screens, and the person most tempted to
+ * throw it early is the manager who finds the confirmation tedious. So the
+ * write permission stays where it is and this one field is lifted to the Owner.
+ */
+function guardSettings(event, author) {
+  const p = event.payload || {};
+  if (!Object.prototype.hasOwnProperty.call(p, 'fieldTrial')) return { ok: true };
+  if (!can(author.role, 'manageOwners')) {
+    return { ok: false, why: 'Only the Owner can sign off the field trial (UX-26/27)' };
+  }
+  return { ok: true };
+}
+
+/**
+ * UX-09 — an end-of-shift report has to say something.
+ *
+ * The floor is four words, and it is a floor rather than a suggestion because
+ * "ok" filed every evening for a month is a tick wearing a sentence's clothes.
+ * The app refuses it first; this refuses it for the phone that was patched.
+ *
+ * Nobody may file somebody else's day: the server stamps the author onto the
+ * event, so a report naming a different person is rejected rather than quietly
+ * re-attributed.
+ */
+function guardShift(event, author) {
+  const p = event.payload || {};
+  if (!p.date) return { ok: false, why: 'A shift report is about one day; say which' };
+  if (p.personId && p.personId !== author.id) {
+    return { ok: false, why: 'A shift report is filed by the person who worked the shift' };
+  }
+  const words = String(p.observation || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length < 4) {
+    return { ok: false, why: 'Say what you saw and what you did — a line, not a word' };
+  }
+  return { ok: true };
+}
+
+/** A comment answers one report, and an empty one answers nothing. */
+function guardShiftComment(event) {
+  const p = event.payload || {};
+  if (!p.shiftId) return { ok: false, why: 'Say which report this answers' };
+  if (!String(p.note || '').trim()) return { ok: false, why: 'An empty comment says nothing' };
   return { ok: true };
 }
 

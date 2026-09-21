@@ -163,6 +163,7 @@ const EMPTY = () => ({
   workLogs: [],
   weather: [],
   reports: [],
+  shifts: [],
   log: [],
   orphans: [],
 });
@@ -192,6 +193,7 @@ export function reduce(events) {
       case 'task.create': return `task:${p.id}`;
       case 'harvest.record': return `harvest:${p.id}`;
       case 'report.record': return `report:${p.id}`;
+      case 'shift.record': return `shift:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
@@ -211,6 +213,7 @@ export function reduce(events) {
       case 'task.update': case 'task.complete': case 'task.cancel': return `task:${p.id}`;
       case 'harvest.verify': return `harvest:${p.id}`;
       case 'report.resolve': return `report:${p.id}`;
+      case 'shift.comment': return `shift:${p.shiftId}`;
       case 'input.receive': case 'input.issue': return `input:${p.itemId}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
@@ -240,6 +243,7 @@ export function reduce(events) {
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
       case 'report': return state.reports.some((r) => r.id === id);
+      case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
       default: return true;
     }
@@ -371,6 +375,8 @@ export function reduce(events) {
         // happened, so they belong on the task rather than in a side list.
         if (p.photo) state.tasks[p.id].photo = p.photo;
         if (p.stamp) state.tasks[p.id].stamp = p.stamp;
+        // FR-PROOF-03: which zone was confirmed at the start, and how.
+        if (p.zoneCheck) state.tasks[p.id].zoneCheck = p.zoneCheck;
         break;
       case 'task.cancel':
         state.tasks[p.id].status = 'cancelled';
@@ -425,6 +431,22 @@ export function reduce(events) {
       case 'report.resolve': {
         const r = state.reports.find((x) => x.id === p.id);
         if (r) { r.status = 'resolved'; r.resolution = p.note || ''; r.resolvedBy = e.by; r.resolvedAt = e.at; }
+        break;
+      }
+
+      // FR-TASK-05 / UX-09: the end-of-shift report. Deliberately not a
+      // problem report — everybody files one at the end of an ordinary day,
+      // and it is never "resolved", only read and answered.
+      case 'shift.record':
+        state.shifts.push({
+          ...p, id: p.id || e.id, personId: p.personId || e.by, by: e.by, at: e.at, comments: [],
+        });
+        break;
+      case 'shift.comment': {
+        const shift = state.shifts.find((x) => x.id === p.shiftId);
+        if (shift) {
+          shift.comments.push({ id: p.id || e.id, note: p.note || '', by: e.by, at: e.at });
+        }
         break;
       }
 
@@ -630,6 +652,11 @@ export function openTasks(state, personId = null, onDate = null) {
 
 export function openReports(state) {
   return state.reports.filter((r) => r.status === 'open');
+}
+
+/** Today's end-of-shift reports (FR-TASK-05). Not the same list as openReports. */
+export function shiftsOn(state, day = isoDate()) {
+  return (state.shifts || []).filter((s) => s.date === day);
 }
 
 export function harvestsBetween(state, from, to) {

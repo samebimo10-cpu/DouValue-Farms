@@ -4,10 +4,9 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-// Bumped when the app moves: the app used to be served from /Stock-/farm/ and
-// now has its own site at /DouValue-Farms/. A phone that still holds the old
-// cache must discard it rather than keep serving the app from the old address.
-const CACHE = 'douvalue-v11';
+// Bumped whenever the shell changes. A phone holding an older cache discards it
+// on activate rather than serving half of one version and half of another.
+const CACHE = 'douvalue-v12';
 
 const SHELL = [
   './',
@@ -39,6 +38,11 @@ const SHELL = [
   './js/ui/alerts.js',
   './js/ui/zones.js',
   './js/ui/field-kit.js',
+  './js/ui/chart.js',
+  './js/ui/kpis.js',
+  './js/ui/scan.js',
+  './js/ui/shift.js',
+  './js/ui/update.js',
   './js/domain/adviser.js',
   './js/domain/analysis.js',
   './js/domain/brief.js',
@@ -56,14 +60,27 @@ const SHELL = [
   './js/domain/safety.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',
+  './js/domain/qr.js',
+  './js/domain/shift.js',
+  './js/domain/stock.js',
+  './js/domain/supervision.js',
 ];
 
+// NFR-OFF-05 — a new version waits to be asked.
+//
+// skipWaiting() used to be called here, which took the new version live the
+// moment it finished downloading. On this farm that means the page reloading
+// under somebody halfway through a scouting note, in a greenhouse, for no
+// reason they can see. So the new version installs, caches everything it needs,
+// and then sits still. The app notices it waiting and shows "New version — tap
+// to update"; the tap sends the message below, and only then does it take over.
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
-      .then(() => self.skipWaiting()),
-  );
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+});
+
+// The tap. Nothing else may trigger a takeover.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {

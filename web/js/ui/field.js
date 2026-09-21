@@ -16,6 +16,7 @@ import { confirmSummary, phraseChips } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
+import { requireSupervision, supervisionBanner, supervisionStamp } from './supervise.js';
 import { getLang } from '../i18n.js';
 
 /**
@@ -148,7 +149,13 @@ export const fieldView = {
       field.value = String(Math.max(0, next));
     },
     'save-scout': (ctx, form) => saveScout(ctx, form),
-    'open-spray': (ctx, el) => openSpraySheet(ctx, el.dataset.id),
+    // UX-27: until the field trial is signed off, a spray is not logged by
+    // somebody on their own.
+    'open-spray': async (ctx, el) => {
+      const watched = await requireSupervision(ctx, 'spray');
+      if (!watched.ok) return;
+      openSpraySheet(ctx, el.dataset.id, watched);
+    },
     'save-spray': (ctx, form) => saveSpray(ctx, form),
     'spray-product-change': (ctx, el) => updateSprayHints(ctx, el),
     'cycle-crop-change': (ctx, el) => updateCycleHints(ctx, el),
@@ -522,6 +529,11 @@ function openScoutSheet(ctx, cycleId) {
       'Leave empty if the bed looked clean.')
     + field('How many of the ten plants were affected?', select('affected',
       [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ value: n, label: `${n} of 10 (${n * 10}%)` })), 0))
+    // The pod-borer rule is written in whole plants, not in a percentage of a
+    // ten-plant sample: over ten plants with entry holes goes straight to the
+    // Owner and the whole field is sprayed today (rules escalation).
+    + field('Plants with entry holes, if you counted them', numberField('plantsAffected'),
+      'Borers only. Over ten plants with holes goes straight to the Owner.')
     + field('Anything else', textarea('note', { placeholder: 'optional' }))
     + phraseChips('scout', 'finding')
     + photoField('Photo of what you found', 'A picture of the leaf or the fruit is worth more than a description.')
@@ -540,6 +552,8 @@ async function saveScout(ctx, form) {
     trapCount: data.trapCount === '' || data.trapCount == null ? null : Number(data.trapCount),
     perPlant: data.perPlant === '' || data.perPlant == null ? null : Number(data.perPlant),
     affectedPct: (Number(data.affected) || 0) * 10, note: data.note || '',
+    plantsAffected: data.plantsAffected === '' || data.plantsAffected == null
+      ? null : Number(data.plantsAffected),
     photo: photoPayload(), date: isoDate(), enteredAt: new Date().toISOString(),
   });
   resetPhoto();
@@ -549,10 +563,18 @@ async function saveScout(ctx, form) {
 
 // --- Spray ----------------------------------------------------------------
 
-function openSpraySheet(ctx, cycleId) {
+let sprayWatch = null;   // UX-27: who is standing over this one
+
+function openSpraySheet(ctx, cycleId, watched = null) {
+  sprayWatch = watched;
   const usable = PRODUCTS.filter((p) => p.hazard !== 'avoid');
   const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
+    + (watched && watched.how === 'confirmed'
+      ? note('info', `${watched.byName} is confirmed as present`,
+        '<small>Their name goes on this record with yours, until the Owner signs off the '
+        + 'field trial.</small>')
+      : supervisionBanner(ctx.state, 'spray'))
     + '<form data-act="save-spray">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     + field('Product', `<select name="productId" data-act="spray-product-change">`
@@ -645,6 +667,8 @@ async function saveSpray(ctx, form) {
 
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
+    // UX-27: who was watching, while the trial round is still open.
+    supervision: supervisionStamp(sprayWatch),
     id: uid('sp'), cycleId: data.cycleId, productId: data.productId,
     productName: product ? product.name : '', phiDays: product ? product.phiDays : 0,
     reiHours: product ? product.reiHours : 24, targetProblem: data.targetProblem || '',

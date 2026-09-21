@@ -13,7 +13,9 @@ import { auditView } from './ui/audit.js';
 import { adviserView } from './ui/adviser.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
-import { zonesView } from './ui/zones.js';
+import { zonesView, zoneCodesView } from './ui/zones.js';
+import { kpiView } from './ui/kpis.js';
+import { shiftView } from './ui/shift.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { missingTasks } from './domain/schedule.js';
 import { startSync } from './sync.js';
@@ -36,6 +38,9 @@ registerRoute('#/gates', gatesView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
 registerRoute('#/zones', zonesView);
+registerRoute('#/zones/codes', zoneCodesView);
+registerRoute('#/kpis', kpiView);
+registerRoute('#/shifts', shiftView);
 registerRoute('#/people', peopleView);
 registerRoute('#/store', storeView);
 registerRoute('#/money', moneyView);
@@ -115,7 +120,12 @@ async function main() {
 
   if ('serviceWorker' in navigator) {
     try {
-      await navigator.serviceWorker.register('./sw.js');
+      const registration = await navigator.serviceWorker.register('./sw.js');
+      // NFR-OFF-05: a new version never takes over on its own. It waits, and
+      // the app offers "New version — tap to update" at a moment the person
+      // chooses — not in the middle of their scouting note.
+      const { mountUpdatePrompt } = await import('./ui/update.js');
+      mountUpdatePrompt(registration);
     } catch {
       // No offline cache. The app still runs; it just needs the network to load.
     }

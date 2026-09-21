@@ -459,8 +459,15 @@ DouValue-Farms/
 │     │  ├─ pests.js     32 problems, 67 symptoms, management for each
 │     │  ├─ diagnose.js  symptom scoring, next checks, risk board
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
-│     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
-│     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo
+│     │  ├─ predict.js   yield, revenue, planting window, labour, stock, cashflow
+│     │  ├─ alerts.js    thresholds, the four-rung ladder, straight-to-Owner, the KPIs
+│     │  ├─ proof.js     what makes a photo evidence, and the zone confirmed at the start
+│     │  ├─ shift.js     end-of-shift reports and the farm manager's board
+│     │  ├─ stock.js     low stock, addressed to the Farm Manager
+│     │  ├─ supervision.js  supervised spray and gate screens until the trial is signed off
+│     │  └─ qr.js        zone door codes: the encoder, and reading one back
+│     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo,
+│                        chart (the trend), kpis, scan, shift, update (the version prompt)
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
@@ -484,9 +491,13 @@ npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
-123 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
+400 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
-planting-window optimiser, event-log replay including out-of-order merges, the account
+planting-window optimiser, event-log replay including out-of-order merges, the escalation
+ladder rung by rung with the times shortened, the five things that go straight to the
+Owner, the success measures per week and per zone, the trap-count chart's geometry against
+its threshold line, the zone QR codes (the encoder against the specification's own worked
+example, and every code read back by a decoder written separately), the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own
 token trying to pull the wage bill, a hand pushing a sale, a hand pushing a record that
 promotes themselves, a manager trying to mint another manager, a reused invite, a wrong

@@ -19,6 +19,8 @@ import {
   labourForecast, revenueForecast, stockForecast, breakEven,
 } from '../domain/predict.js';
 import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
+import { lowStock, lowStockSummary, reorderLevel } from '../domain/stock.js';
+import { maySignOff, signOffPayload, trialRecord } from '../domain/supervision.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
 import { harvestClearance, PRODUCTS } from '../domain/safety.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
@@ -142,6 +144,8 @@ export const dashboardView = {
       + '<div class="grid">'
       + button('Today\'s digest', 'go', { cls: 'btn-ghost', icon: '📨', data: { to: '#/digest' } })
       + button('Alerts', 'go', { cls: 'btn-ghost', icon: '🚨', data: { to: '#/alerts' } })
+      + button('Success measures', 'go', { cls: 'btn-ghost', icon: '📈', data: { to: '#/kpis' } })
+      + button('End-of-shift reports', 'go', { cls: 'btn-ghost', icon: '📝', data: { to: '#/shifts' } })
       + button('Ask the adviser', 'go', { cls: 'btn-ghost', icon: '🧠', data: { to: '#/adviser' } })
       + button('Farm check', 'go', { cls: 'btn-ghost', icon: '🔎', data: { to: '#/audit' } })
       + button('Planting planner', 'go', { cls: 'btn-ghost', icon: '📅', data: { to: '#/plan' } })
@@ -186,12 +190,14 @@ function buildAlerts(ctx, cycles, cal) {
     });
   }
 
-  const usage = inputUsage(state);
-  for (const item of inputsList(state)) {
-    const f = stockForecast(item, usage);
-    if (f.status === 'critical' || f.status === 'low') {
-      alerts.push({ title: `${item.name} running out`, detail: f.text, to: '#/store' });
-    }
+  // FR-STOCK-02: low stock is the Farm Manager's to act on, so it is on their
+  // board by name rather than only in the Owner's digest tomorrow morning.
+  for (const row of lowStock(state)) {
+    alerts.push({
+      title: `${row.line} — ${row.to}`,
+      detail: row.detail,
+      to: '#/store',
+    });
   }
 
   const stages = cycles.map((c) => ({
@@ -616,14 +622,30 @@ export const storeView = {
     const { state } = ctx;
     const items = inputsList(state);
     const usage = inputUsage(state);
+    const low = lowStockSummary(state);
 
-    return card(
+    return (low.count
+      // FR-STOCK-02: at the top of the screen, addressed to the person who
+      // orders things, before the input is needed rather than after.
+      ? card(
+        cardHead('To order', badge(low.text, low.urgent ? 'danger' : 'warn'))
+        + `<p><small>For the ${esc(low.to ? `Farm Manager (${low.to.name})` : 'Farm Manager')}. `
+        + 'Ordering today lands in about two weeks, which is why this says it now.</small></p>'
+        + '<ul class="list">' + low.rows.map((r) => '<li><div class="grow">'
+          + `<b>${esc(r.line)}</b><small>${esc(r.detail)}</small></div>`
+          + badge(r.severity === 'now' ? 'order now' : 'order soon',
+            r.severity === 'now' ? 'danger' : 'warn') + '</li>').join('') + '</ul>',
+      )
+      : '')
+    + card(
       cardHead('Store', button('Add item', 'open-input', { cls: 'btn-sm' }))
       + (items.length
         ? '<ul class="list">' + items.map((item) => {
           const f = stockForecast(item, usage);
+          const level = reorderLevel(item);
           return `<li><div class="grow"><b>${esc(item.name)}</b>`
-            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}</small></div>`
+            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}`
+            + `${level ? ` · reorder at ${esc(level)} ${esc(item.unit)}` : ''}</small></div>`
             + badge(f.status === 'critical' ? 'order now' : f.status === 'low' ? 'low' : 'ok',
               f.status === 'critical' ? 'danger' : f.status === 'low' ? 'warn' : 'ok')
             + button('Move', 'open-move', { cls: 'btn-sm btn-ghost', data: { id: item.id } })
@@ -663,6 +685,11 @@ function openInputSheet(ctx) {
     ], 'chemical'))
     + field('Unit', select('unit', ['kg', 'litre', 'sachet', 'bag', 'piece', 'gram'], 'kg'))
     + field('How much is in stock now?', input('qty', { type: 'number', min: 0, step: '0.1', value: 0 }))
+    // FR-STOCK-02: "below a set level". This is the level.
+    + field('Tell the farm manager when it drops to', input('reorderLevel', {
+      type: 'number', min: 0, step: '0.1', placeholder: 'optional' }),
+      'The Farm Manager is alerted at or below this. Leave it empty and the app warns when the '
+      + 'rate it is being used says it runs out inside two weeks.')
     + field('What one unit costs', input('unitCost', { type: 'number', min: 0, step: '10' }))
     + '<button class="btn-block btn-lg" type="submit">Save item</button></form>');
 }
@@ -673,6 +700,7 @@ async function saveInput(ctx, form) {
   await ctx.store.dispatch('input.upsert', {
     id: uid('item'), name: data.name, kind: data.kind, unit: data.unit,
     qty: Number(data.qty) || 0, unitCost: Number(data.unitCost) || 0,
+    reorderLevel: Number(data.reorderLevel) || null,
   });
   closeSheet();
   toast('Added to the store');
@@ -854,6 +882,7 @@ export const settingsView = {
       + `<p><small>Climate for reference: ${MONTH_NAMES.map((n, i) =>
         `${n} ${climateFor(i + 1).rain}mm`).join(' · ')}</small></p>`)
     + syncCard(ctx)
+    + trialCard(ctx)
     + card(cardHead('Backup and sharing')
       + '<p><small>Everything lives on this phone. Export regularly, and merge the hands\' phones into '
       + 'yours when they come back to the office. Merging never overwrites: the two logs are joined and '
@@ -877,6 +906,27 @@ export const settingsView = {
   },
 
   actions: {
+    // UX-26/27 — the Owner's switch, and nobody else's.
+    'trial-signoff': async (ctx) => {
+      if (!maySignOff(ctx.user)) { toast('Only the Owner can sign off the trial', true); return; }
+      const ok = await confirmSheet('Sign off the field trial?',
+        'Two Greenhouse Hands have used the field screens in real work with the training '
+        + 'consultant watching, what slowed them down has been fixed, and it has been '
+        + 're-checked. After this, the spray and gate screens no longer ask for the Field '
+        + 'Supervisor or Farm Manager.', 'Yes, the round is done');
+      if (!ok) return;
+      await ctx.store.dispatch('settings.update', signOffPayload(ctx.user, { signedOff: true }));
+      toast('Field trial signed off. Supervised use has ended.');
+    },
+    'trial-reopen': async (ctx) => {
+      if (!maySignOff(ctx.user)) { toast('Only the Owner can change this', true); return; }
+      const ok = await confirmSheet('Put supervised use back on?',
+        'The spray and gate screens will ask for the Field Supervisor or Farm Manager again.',
+        'Yes, supervise them again');
+      if (!ok) return;
+      await ctx.store.dispatch('settings.update', signOffPayload(ctx.user, { signedOff: false }));
+      toast('Supervised use is back on');
+    },
     'sync-setup': (ctx) => openSyncSetup(ctx),
     'sync-save': (ctx, form) => saveSyncSetup(ctx, form),
     'sync-run': async () => {
@@ -978,6 +1028,43 @@ export const settingsView = {
     }
   },
 };
+
+// --- The field trial — UX-26, UX-27, §9a ----------------------------------
+//
+// One switch, held by the Owner. Until it is thrown, the spray and gate screens
+// ask for the Field Supervisor or Farm Manager; after it, they behave normally.
+//
+// It is in Settings rather than buried in the gate screens because it is a
+// statement about the farm, not about a screen: the trial round happened, what
+// it found was fixed, and the app is signed off for unsupervised use.
+function trialCard(ctx) {
+  const trial = trialRecord(ctx.state);
+  const owner = maySignOff(ctx.user);
+  const by = trial.by ? (ctx.state.people[trial.by] || {}).name : null;
+
+  return card(
+    cardHead('Field trial', trial.signedOff
+      ? badge('signed off', 'ok') : badge('supervised use', 'warn'))
+    + (trial.signedOff
+      ? `<p><small>Signed off${by ? ` by ${esc(by)}` : ''}`
+        + `${trial.at ? ` on ${esc(friendlyDate(trial.at.slice(0, 10)))}` : ''}. `
+        + 'The spray and gate screens are used normally.</small></p>'
+        + (owner
+          ? button('Put supervised use back on', 'trial-reopen', { cls: 'btn-ghost btn-block' })
+          : '')
+      : '<p><small>Until the after-build round is done, the spray and gate screens are used '
+        + 'only with the Field Supervisor or Farm Manager present — signed in, or confirming '
+        + 'on the spot (UX-27). Everything else works normally.</small></p>'
+        + '<p><small><b>The round:</b> two Greenhouse Hands use the field screens in real work '
+        + 'with the training consultant watching, anything that slows them down is written '
+        + 'down, and it is fixed and re-checked in one revision round (UX-26).</small></p>'
+        + (owner
+          ? button('Sign off the field trial', 'trial-signoff', { cls: 'btn-block btn-lg', icon: '✅' })
+          : note('info', 'The Owner signs this off',
+            '<small>It is deliberately not the Farm Manager\'s switch: the person who finds the '
+            + 'confirmation tedious is the person who must not be able to turn it off.</small>'))),
+  );
+}
 
 // --- Sync -----------------------------------------------------------------
 

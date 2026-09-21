@@ -15,6 +15,7 @@ import {
 } from './kit.js';
 import { can } from '../store.js';
 import { canPlant, gateBoard, GATE_RULES, GATE_STATE, latestSoilTest } from '../domain/gates.js';
+import { requireSupervision, supervisionBanner, supervisionStamp } from './supervise.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 
 export const gatesView = {
@@ -30,7 +31,7 @@ export const gatesView = {
         'Add your greenhouses and fields under Field, and this screen starts checking them.'));
     }
 
-    return head(board, blocked)
+    return head(ctx, board, blocked)
       + (blocked.length ? `<h2 class="section">Blocked</h2>${blocked.map(zoneCard).join('')}` : '')
       + (overridden.length
         ? `<h2 class="section">Open on an override</h2>${overridden.map(zoneCard).join('')}` : '')
@@ -39,9 +40,20 @@ export const gatesView = {
   },
 
   actions: {
-    'open-soiltest': (ctx, el) => openSoilTest(ctx, el.dataset.plotId || ''),
+    // UX-27: the gate screens are not used alone until the Owner signs off the
+    // field trial. Reading them is open to everybody; recording the evidence
+    // the gates are decided on is what needs somebody beside you.
+    'open-soiltest': async (ctx, el) => {
+      const watched = await requireSupervision(ctx, 'gate');
+      if (!watched.ok) return;
+      openSoilTest(ctx, el.dataset.plotId || '', watched);
+    },
     'save-soiltest': saveSoilTest,
-    'open-topsoil': (ctx) => openTopsoil(ctx),
+    'open-topsoil': async (ctx) => {
+      const watched = await requireSupervision(ctx, 'gate');
+      if (!watched.ok) return;
+      openTopsoil(ctx, watched);
+    },
     'save-topsoil': saveTopsoil,
     'open-override': (ctx, el) => openOverride(ctx, el.dataset.plotId, el.dataset.gate),
     'save-override': saveOverride,
@@ -49,7 +61,7 @@ export const gatesView = {
   },
 };
 
-function head(board, blocked) {
+function head(ctx, board, blocked) {
   return card(
     cardHead('Gates', blocked.length
       ? badge(`${blocked.length} blocked`, 'danger')
@@ -57,6 +69,7 @@ function head(board, blocked) {
     + '<p><small>Nothing is planted into ground that has not passed these checks, and nothing is '
     + 'sprayed without a confirmed diagnosis behind it. These are the four things that cost '
     + 'Season 1.</small></p>'
+    + supervisionBanner(ctx.state, 'gate')
     + `<div class="row wrap" style="margin-top:10px">${
       button('Record a soil test', 'open-soiltest', { icon: '🧪' })
     }${button('Log a topsoil delivery', 'open-topsoil', { icon: '🚚' })}</div>`,
@@ -145,11 +158,16 @@ function evidence(ctx) {
 
 // --- Recording the evidence -----------------------------------------------
 
-function openSoilTest(ctx, plotId) {
+let gateWatch = null;   // UX-27: who is standing over this one
+
+function openSoilTest(ctx, plotId, watched = null) {
+  gateWatch = watched;
   const zones = Object.values(ctx.state.plots || {});
   const batches = Object.values(ctx.state.topsoilBatches || {});
 
   openSheet('<h2>Record a soil test</h2>'
+    + (watched && watched.how === 'confirmed'
+      ? note('info', `${watched.byName} is confirmed as present`, '') : '')
     + '<p><small>A test is about one place on one day. Record it as it came back, including a '
     + 'result you do not like — a bad result recorded now is a cheaper season than a good one '
     + 'assumed.</small></p>'
@@ -191,14 +209,18 @@ async function saveSoilTest(ctx, form) {
     nematode: data.nematode || null,
     beforeCorrection: !!data.beforeCorrection,
     note: data.note || '',
+    supervision: supervisionStamp(gateWatch),
     enteredAt: new Date().toISOString(),
   });
   closeSheet();
   toast('Soil test recorded');
 }
 
-function openTopsoil(ctx) {
+function openTopsoil(ctx, watched = null) {
+  gateWatch = watched;
   openSheet('<h2>Log a topsoil delivery</h2>'
+    + (watched && watched.how === 'confirmed'
+      ? note('info', `${watched.byName} is confirmed as present`, '') : '')
     + '<p><small>Bought-in soil is the quickest way to move nematodes onto clean ground. Each load is '
     + 'a batch, and a batch goes nowhere until it has been tested.</small></p>'
     + '<form data-act="save-topsoil">'
@@ -218,7 +240,8 @@ async function saveTopsoil(ctx, form) {
   const id = uid('ts');
   await ctx.store.dispatch('topsoil.receive', {
     id, supplier: data.supplier, date: data.date || isoDate(),
-    quantity: data.quantity || '', enteredAt: new Date().toISOString(),
+    quantity: data.quantity || '', supervision: supervisionStamp(gateWatch),
+    enteredAt: new Date().toISOString(),
   });
   if (data.zoneId) await ctx.store.dispatch('topsoil.assign', { zoneId: data.zoneId, batchId: id });
   closeSheet();

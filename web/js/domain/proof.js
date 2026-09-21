@@ -107,3 +107,78 @@ export function stampFor(photo, { zoneName, personName, taskKind, at = new Date(
     timeVerified: photo ? photo.fresh !== null : false,
   };
 }
+
+// --- Which house are you actually standing in? — FR-PROOF-03, UX-12 --------
+//
+// The photo proves the work happened. It does not prove where. A trap
+// photographed in GH-02 and filed against GH-01 leaves both houses wrong: one
+// with a count that is not its own, and one with no count at all while looking
+// as though it has been checked.
+//
+// So the zone is confirmed at the START of the task, by scanning the code on
+// the door. That is the quickest way to choose a zone as well as the surest
+// (UX-12 asks for scanning to be offered first), and it costs a second.
+//
+// Two things this deliberately does NOT do. It does not use GPS: a phone's
+// position under a polythene roof is worth ±20 m on a farm whose houses are 8 m
+// apart, and NFR-DEV-03 rules out constant GPS anyway. And it does not refuse
+// to close a task when there is no scan — some phones have no BarcodeDetector
+// and some doors lose their label. The record carries how the zone was
+// confirmed, and a round confirmed by scan is worth more than one confirmed by
+// tapping a list; both beat nothing, and the audit screen can tell them apart.
+
+export const ZONE_CONFIRMED = {
+  qr: { method: 'qr', strength: 'scanned', label: 'Scanned at the door' },
+  list: { method: 'list', strength: 'chosen', label: 'Chosen from the list' },
+};
+
+/**
+ * The record that goes on the task: which zone, how it was confirmed, when and
+ * by whom. Same shape whichever way it was confirmed, so nothing downstream has
+ * to care which phone it came from.
+ */
+export function zoneStamp({ zone, method = 'list', at = new Date().toISOString(), by = null }) {
+  if (!zone) return null;
+  const kind = ZONE_CONFIRMED[method] || ZONE_CONFIRMED.list;
+  return {
+    zoneId: zone.id,
+    zoneName: zone.name,
+    method: kind.method,
+    strength: kind.strength,
+    label: kind.label,
+    at,
+    by,
+  };
+}
+
+/**
+ * May this task start against this confirmation? — FR-PROOF-03.
+ *
+ * A scan of the wrong door is the one case that is refused outright, because it
+ * is the case this whole feature exists to catch and because the person is, by
+ * definition, holding the answer in their hand. Everything else passes, with
+ * `confirmed` saying how much the record is worth.
+ */
+export function judgeZoneStart(task, stamp) {
+  if (!task) return { ok: false, why: 'That task is not on record.' };
+  const wanted = task.zoneId || null;
+
+  if (!stamp) {
+    return {
+      ok: true,
+      confirmed: false,
+      why: 'The zone was not confirmed at the start of this job.',
+      fix: 'Scan the code on the door next time — it takes a second and it settles where you were.',
+    };
+  }
+  if (wanted && stamp.zoneId !== wanted) {
+    return {
+      ok: false,
+      confirmed: false,
+      reason: 'wrong-zone',
+      why: `That code is ${stamp.zoneName}. This job is for another zone.`,
+      fix: 'Open the job for the house you are standing in, or go to the right one.',
+    };
+  }
+  return { ok: true, confirmed: true, strength: stamp.strength };
+}
