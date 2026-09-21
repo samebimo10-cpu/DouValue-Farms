@@ -75,7 +75,7 @@ const ANY = 'viewGuide';   // every role holds this, so it means "everyone on th
  * redact: strips fields the reader has no business seeing.
  */
 export const EVENT_POLICY = {
-  'settings.update':   { write: 'settings',      read: ANY, redact: redactSettings },
+  'settings.update':   { write: 'settings',      read: ANY, redact: redactSettings, guard: guardSettings },
   'person.upsert':     { write: 'managePeople',  read: ANY, redact: redactPerson, guard: guardPersonWrite },
   'person.deactivate': { write: 'managePeople',  read: ANY, guard: guardPersonWrite },
   'plot.upsert':       { write: 'manageCycles',  read: ANY },
@@ -94,13 +94,39 @@ export const EVENT_POLICY = {
   'harvest.verify':    { write: 'verifyHarvest', read: ANY },
   'spray.record':      { write: 'logSpray',      read: ANY },
   'scout.record':      { write: 'scout',         read: ANY },
-  'diagnosis.record':  { write: 'diagnose',      read: ANY },
+  'diagnosis.record':  { write: 'diagnose',      read: ANY, guard: guardDiagnosis },
   'report.record':     { write: 'reportProblem', read: ANY },
   'report.resolve':    { write: 'assignTasks',   read: ANY },
-  'input.upsert':      { write: 'logInputs',     read: ANY },
+  // FR-TASK-05 / UX-09: an end-of-shift report is written by whoever worked
+  // the shift, and answered by whoever runs the work. Kept apart from
+  // report.record above: that one is an exception, this one is the day.
+  'shift.record':      { write: 'viewOwnTasks',  read: ANY, guard: guardShift },
+  'shift.comment':     { write: 'assignTasks',   read: ANY, guard: guardShiftComment },
+  'input.upsert':      { write: 'logInputs',     read: ANY, guard: guardInputUpsert },
+  // FR-STOCK-06/09 — the catalogue. Adding an active ingredient is the Owner's
+  // alone (`manageOwners` is the CEO and nobody else); attaching a brand label
+  // to an active that is already in the catalogue is the Farm Manager's.
+  //
+  // Every phone builds the catalogue from rules/douvalue_rules_rev5_1.json and
+  // drops a banned active on the way in, so an `active.add` naming carbofuran
+  // never becomes a catalogue entry anywhere. The server refuses it as well,
+  // because the phone is the thing an attacker controls and five handsets
+  // merging a log is how a bad record would otherwise arrive. See
+  // BANNED_ACTIVES below for why the names are repeated here and what stops
+  // that copy going stale.
+  'active.add':        { write: 'manageOwners',  read: ANY, guard: guardActiveAdd },
+  'label.add':         { write: 'settings',      read: ANY, guard: guardLabelAdd },
+  'label.retire':      { write: 'settings',      read: ANY },
   'input.receive':     { write: 'logInputs',     read: ANY },
   'input.issue':       { write: 'logInputs',     read: ANY },
   'weather.record':    { write: 'logWork',       read: ANY },
+
+  // FR-DIAG-01 — reference photos for the triage rows and diagnosis cards.
+  // `settings` is held by the Farm Manager and the CEO and nobody else, which
+  // is the Owner-or-Farm-Manager rule. Everyone reads them: a reference photo
+  // is worth nothing on the one phone that has it.
+  'reference.photo.set':   { write: 'settings', read: ANY, guard: guardReferencePhoto },
+  'reference.photo.clear': { write: 'settings', read: ANY, guard: guardReferenceClear },
 
   // Gates (requirements 6.2). These decide whether planting and spraying are
   // allowed at all, so who may write them matters more than most.
@@ -112,8 +138,10 @@ export const EVENT_POLICY = {
   'topsoil.receive':   { write: 'logInputs',     read: ANY },
   'topsoil.assign':    { write: 'manageCycles',  read: ANY },
   // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
-  // and a confirmed diagnosis is what unlocks a treatment.
-  'diagnosis.confirm': { write: 'verifyHarvest', read: ANY },
+  // and a confirmed diagnosis is what unlocks a treatment. FR-DOC-01 adds the
+  // step that makes the confirmation mean something: the senior performs the
+  // confirm test the card names and records what it showed.
+  'diagnosis.confirm': { write: 'verifyHarvest', read: ANY, guard: guardConfirmDiagnosis },
   // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
   // the record. `manageOwners` is held by the CEO and nobody else.
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
@@ -492,6 +520,142 @@ function guardNoTreat(event) {
 }
 
 /**
+ * UX-27 — the field-trial sign-off belongs to the Owner.
+ *
+ * Settings are the Farm Manager's in general, and that is right for crate
+ * weights and wages. This one is different: it is the switch that ends
+ * supervised use of the spray and gate screens, and the person most tempted to
+ * throw it early is the manager who finds the confirmation tedious. So the
+ * write permission stays where it is and this one field is lifted to the Owner.
+ */
+function guardSettings(event, author) {
+  const p = event.payload || {};
+  if (!Object.prototype.hasOwnProperty.call(p, 'fieldTrial')) return { ok: true };
+  if (!can(author.role, 'manageOwners')) {
+    return { ok: false, why: 'Only the Owner can sign off the field trial (UX-26/27)' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-DIAG-01, FR-DIAG-02, FR-DOC-01 — a diagnosis is a card, the answers, the
+ * photos, the reasoning and a person.
+ *
+ * The Farm Doctor is not allowed to name a cause off a glance: it asks for the
+ * photos and the confirm step first. The screens enforce that, but the screens
+ * run on a phone that has been offline for three days, so the server enforces
+ * it too — otherwise "diagnosed" becomes a word somebody types to get past the
+ * treatment gate, which is exactly the guesswork that cost Season 1.
+ *
+ * This is deliberately structural. Which cards exist and which test confirms
+ * which card is in the rules JSON, and the server does not read the rules; it
+ * only insists that a diagnosis carries the parts a diagnosis has.
+ */
+function guardDiagnosis(event) {
+  const p = event.payload || {};
+  if (!p.cardId) return { ok: false, why: 'A diagnosis names the card it came from' };
+  if (p.triageRow == null) return { ok: false, why: 'A diagnosis names the triage row it started at' };
+  if (!Array.isArray(p.photos) || !p.photos.length) {
+    return { ok: false, why: 'Take a photo of the plant before naming a cause' };
+  }
+  if (!String(p.confirmTest || '').trim()) {
+    return { ok: false, why: 'Record which confirm test you did' };
+  }
+  if (!String(p.confirmResult || '').trim()) {
+    return { ok: false, why: 'Record what the confirm test showed' };
+  }
+  if (String(p.reasoning || '').trim().length < 10) {
+    return { ok: false, why: 'Write why you think it is this — a sentence someone can check later' };
+  }
+  return { ok: true };
+}
+
+/**
+ * UX-09 — an end-of-shift report has to say something.
+ *
+ * The floor is four words, and it is a floor rather than a suggestion because
+ * "ok" filed every evening for a month is a tick wearing a sentence's clothes.
+ * The app refuses it first; this refuses it for the phone that was patched.
+ *
+ * Nobody may file somebody else's day: the server stamps the author onto the
+ * event, so a report naming a different person is rejected rather than quietly
+ * re-attributed.
+ */
+function guardShift(event, author) {
+  const p = event.payload || {};
+  if (!p.date) return { ok: false, why: 'A shift report is about one day; say which' };
+  if (p.personId && p.personId !== author.id) {
+    return { ok: false, why: 'A shift report is filed by the person who worked the shift' };
+  }
+  const words = String(p.observation || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length < 4) {
+    return { ok: false, why: 'Say what you saw and what you did — a line, not a word' };
+  }
+  return { ok: true };
+}
+
+/**
+ * The rules put it plainly: "Field Supervisor or Farm Manager performs the
+ * confirm test and confirms". Performing it is the point, so the confirmation
+ * carries what the confirmer saw, not just their name.
+ */
+function guardConfirmDiagnosis(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which diagnosis is being confirmed' };
+  if (!String(p.confirmTest || '').trim()) {
+    return { ok: false, why: 'Say which confirm test you did' };
+  }
+  if (!String(p.confirmResult || '').trim()) {
+    return { ok: false, why: 'Say what the confirm test showed' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-DIAG-01 — a reference photo names the slot it fills and carries a picture.
+ *
+ * Which slots exist comes from the rules JSON, which this server does not read,
+ * so the check here is the shape and the size. The size is the point: these are
+ * the only pictures in the log that every phone downloads whether or not it
+ * ever opens them, so one oversized upload is a cost the whole farm pays on a
+ * metered bundle (FR-PROOF-04, NFR-DEV-01).
+ */
+const REFERENCE_PHOTO_MAX_BYTES = 200 * 1024;
+
+function guardReferencePhoto(event) {
+  const p = event.payload || {};
+  if (!/^(row|card):[A-Za-z0-9_]+$/.test(String(p.slot || ''))) {
+    return { ok: false, why: 'A reference photo must say which row or card it belongs to' };
+  }
+  const photo = p.photo || {};
+  if (!String(photo.dataUrl || '').startsWith('data:image/')) {
+    return { ok: false, why: 'A reference photo needs a picture' };
+  }
+  const bytes = Number(photo.bytes) || Math.round((String(photo.dataUrl).length * 3) / 4);
+  if (bytes > REFERENCE_PHOTO_MAX_BYTES) {
+    return { ok: false, why: 'That picture is too big to send to every phone on the farm' };
+  }
+  return { ok: true };
+}
+
+/** A comment answers one report, and an empty one answers nothing. */
+function guardShiftComment(event) {
+  const p = event.payload || {};
+  if (!p.shiftId) return { ok: false, why: 'Say which report this answers' };
+  if (!String(p.note || '').trim()) return { ok: false, why: 'An empty comment says nothing' };
+  return { ok: true };
+}
+
+function guardReferenceClear(event) {
+  const p = event.payload || {};
+  if (!p.slot) return { ok: false, why: 'Say which reference photo is being removed' };
+  if (String(p.reason || '').trim().length < 4) {
+    return { ok: false, why: 'Say why the picture is coming off' };
+  }
+  return { ok: true };
+}
+
+/**
  * FR-GATE-07 — an override is a decision on the record, not a switch.
  *
  * The permission table already limits this to the Owner. This adds the part
@@ -547,6 +711,90 @@ function guardLabResult(event) {
   const p = event.payload || {};
   if (!p.id) return { ok: false, why: 'Say which sample' };
   if (!String(p.result || '').trim()) return { ok: false, why: 'Say what the lab reported' };
+  return { ok: true };
+}
+
+/**
+ * The actives this farm will not hold, whatever anybody types.
+ *
+ * rules/douvalue_rules_rev5_1.json → labels.banned is the source of truth and
+ * every phone reads it from there. This file is different: it is pasted into
+ * Deno Deploy as one file with no rules beside it, so it cannot read them and
+ * carries the names instead. That copy is the kind CLAUDE.md warns about, so
+ * it has a tripwire — tests/catalogue.test.mjs fails if the two ever drift,
+ * the same way the suite fails when the generated Deno build drifts from this
+ * file.
+ *
+ * FR-STOCK-09: banned actives can never be added and must not ship in the
+ * catalogue at all. Carbofuran has killed farm workers and poisoned whole
+ * flocks of birds, and residues in pepper fail any buyer's test.
+ */
+export const BANNED_ACTIVES = ['Carbofuran (Furadan)'];
+
+const BANNED_WORDS = new Set(
+  BANNED_ACTIVES.flatMap((entry) => String(entry).toLowerCase().split(/[^a-z0-9-]+/).filter(Boolean)),
+);
+
+/** Does this name reach a banned active by any spelling on the label? */
+export function namesBannedActive(name) {
+  return String(name || '').toLowerCase().split(/[^a-z0-9-]+/).filter(Boolean)
+    .some((word) => BANNED_WORDS.has(word));
+}
+
+/**
+ * FR-STOCK-09 — a new active arrives with its resistance group, or not at all.
+ *
+ * "Any product without an IRAC or FRAC group on file cannot be selected for a
+ * treatment", so an active without one is a row that could never be used and a
+ * rotation the gate could never check.
+ */
+function guardActiveAdd(event) {
+  const p = event.payload || {};
+  const name = String(p.name || p.ai || '').trim();
+  if (!name) return { ok: false, why: 'An active ingredient needs a name' };
+  if (namesBannedActive(name)) {
+    return { ok: false, why: `${name} is banned and cannot be added to the catalogue` };
+  }
+  const group = String(p.group || '').trim();
+  if (!group || /^none$/i.test(group)) {
+    return { ok: false, why: 'An active needs its IRAC or FRAC group, read off the label' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-STOCK-06 — a label hangs off actives that are already in the catalogue.
+ * The group is never on the label record, so a new brand name cannot restart a
+ * rotation by claiming a group of its own.
+ */
+function guardLabelAdd(event) {
+  const p = event.payload || {};
+  const brand = String(p.brand || '').trim();
+  if (!brand) return { ok: false, why: 'A label needs the brand name on the container' };
+  if (namesBannedActive(brand)) return { ok: false, why: `${brand} is a banned product` };
+  if (!Array.isArray(p.activeIds) || !p.activeIds.length) {
+    return { ok: false, why: 'A label must name at least one active ingredient from the catalogue' };
+  }
+  if (p.activeIds.some((id) => namesBannedActive(id))) {
+    return { ok: false, why: 'That label names a banned active ingredient' };
+  }
+  if (p.group) return { ok: false, why: 'A label does not carry its own group — the group comes from the active' };
+  return { ok: true };
+}
+
+/**
+ * Naming what a store item is made of (FR-STOCK-05). The item's history — its
+ * movements, its cost, the sprays that came out of it — is not touched, and a
+ * banned active cannot be the answer.
+ */
+function guardInputUpsert(event) {
+  const p = event.payload || {};
+  if (p.activeId && namesBannedActive(p.activeId)) {
+    return { ok: false, why: 'That is a banned active ingredient' };
+  }
+  if (namesBannedActive(p.name)) {
+    return { ok: false, why: `${p.name} is banned and does not belong in this farm's store` };
+  }
   return { ok: true };
 }
 

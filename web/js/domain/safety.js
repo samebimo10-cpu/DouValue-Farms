@@ -113,11 +113,14 @@ export const PRODUCTS = [
     targets: ['magnesium_deficiency'], note: '' },
 
   // --- Products to keep off this farm ---
-  { id: 'carbofuran', name: 'Carbofuran', examples: 'Furadan', kind: 'insecticide',
-    group: 'IRAC 1A', phiDays: 60, reiHours: 48, hazard: 'avoid', bee: 'very high',
-    targets: ['root_knot_nematode'],
-    note: 'Banned across the EU and much of Africa. It has killed farm workers and poisoned whole flocks of birds. '
-      + 'Residues in pepper will fail any buyer test. Rotation with maize and marigold does the same job safely.' },
+  //
+  // Carbofuran (Furadan) is not here, and its absence is the requirement.
+  // FR-STOCK-09 and rules labels.banned say a banned active must not ship in
+  // the catalogue at all, "not even flagged as 'avoid'" — a greyed-out row is
+  // still a row somebody can ask about, and the rules' answer is that this
+  // farm does not hold the product. domain/catalogue.js refuses it by name on
+  // the way in, for every role including the Owner. The nematode guidance in
+  // domain/pests.js still says plainly why nobody should go looking for it.
   { id: 'paraquat', name: 'Paraquat', examples: 'Gramoxone', kind: 'herbicide',
     group: 'HRAC D', phiDays: 60, reiHours: 48, hazard: 'avoid', bee: 'low',
     targets: [],
@@ -256,17 +259,28 @@ export const SPRAY_RULES = [
   'Anybody pregnant or under 18 does not mix or spray. That is not negotiable.',
 ];
 
+/**
+ * The knapsack this farm actually carries.
+ *
+ * FR-TREAT-03 and FR-DOC-05 both name 16 L, and it is the size on the shelf.
+ * Every dose in the app is worked out against this one number, so a sprayer
+ * filling from the schedule and a sprayer filling from the Farm Doctor put the
+ * same amount in the same tank.
+ */
+export const KNAPSACK_L = 16;
+
 /** Rough spray volume for a knapsack operator, so the mix is not guesswork. */
-export function knapsackPlan(areaM2, rateMlPer15L = 30, volumeLPerHa = 400) {
+export function knapsackPlan(areaM2, rateMlPerLoad = 30, volumeLPerHa = 400) {
   const ha = areaM2 / 10000;
   const litres = Math.max(1, Math.round(ha * volumeLPerHa));
-  const loads = Math.max(1, Math.ceil(litres / 15));
+  const loads = Math.max(1, Math.ceil(litres / KNAPSACK_L));
   return {
     litres,
     loads,
-    perLoadMl: rateMlPer15L,
-    totalProductMl: Math.round(loads * rateMlPer15L),
-    text: `${litres} L of spray in about ${loads} knapsack load${loads === 1 ? '' : 's'} of 15 L, `
-      + `${rateMlPer15L} ml of product per load.`,
+    knapsackL: KNAPSACK_L,
+    perLoadMl: rateMlPerLoad,
+    totalProductMl: Math.round(loads * rateMlPerLoad),
+    text: `${litres} L of spray in about ${loads} knapsack load${loads === 1 ? '' : 's'} of ${KNAPSACK_L} L, `
+      + `${rateMlPerLoad} ml of product per load.`,
   };
 }

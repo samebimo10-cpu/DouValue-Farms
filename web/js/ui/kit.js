@@ -88,9 +88,17 @@ export function link(text, href, opts = {}) {
   return `<a class="btn ${opts.cls || ''}" href="${esc(href)}"${away}>${opts.icon ? `<span>${opts.icon}</span>` : ''}${esc(text)}</a>`;
 }
 
-export function tick(id, label, sub = '', on = false) {
-  return `<label class="tick ${on ? 'on' : ''}" data-act="toggle-tick" data-id="${esc(id)}">`
-    + `<span class="box">✓</span><span class="txt"><b>${esc(label)}</b>`
+/**
+ * A tick box. `opts.img` puts a reference picture beside the words; `opts.act`
+ * changes which action it fires. The words are never replaced by the picture —
+ * a tick with no picture has to read exactly as well as one with.
+ */
+export function tick(id, label, sub = '', on = false, opts = {}) {
+  return `<label class="tick ${on ? 'on' : ''}" data-act="${esc(opts.act || 'toggle-tick')}" `
+    + `data-id="${esc(id)}">`
+    + `<span class="box">✓</span>`
+    + (opts.img ? `<span class="tick-img"><img src="${opts.img}" alt="" loading="lazy"></span>` : '')
+    + `<span class="txt"><b>${esc(label)}</b>`
     + (sub ? `<span class="pid">${esc(sub)}</span>` : '') + '</span></label>';
 }
 

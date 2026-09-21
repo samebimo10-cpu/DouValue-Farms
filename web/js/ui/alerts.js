@@ -13,8 +13,11 @@ import {
   input, note, openSheet, readForm, select, spark, table, textarea, toast,
 } from './kit.js';
 import { can, cycleLabel } from '../store.js';
-import { alerts, ALERT_LEVEL, DEFAULT_LADDER, risingWarnings, trend } from '../domain/alerts.js';
+import {
+  alerts, ALERT_LEVEL, ladderFor, risingWarnings, straightToOwner, zoneTrends,
+} from '../domain/alerts.js';
 import { digest } from '../domain/digest.js';
+import { trendChart } from './chart.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 
 const hoursWord = (h) => (h < 1 ? 'under an hour' : `${Math.round(h)}h`);
@@ -30,12 +33,14 @@ export const alertsView = {
     const rising = risingWarnings(ctx.state, { today: isoDate() });
 
     return head(open)
+      + straightBlock(straightToOwner(ctx.state, { now }))
       + (open.length
         ? open.map((a) => openCard(ctx, a)).join('')
         : card(empty('✓', 'No open alerts',
           'Every count recorded is under its threshold, and anything that crossed one has been '
           + 'dealt with. This is the screen you want to be boring.')))
       + risingBlock(rising)
+      + trendBlock(ctx)
       + closedBlock(closed);
   },
 
@@ -66,7 +71,8 @@ function head(open) {
 
 function openCard(ctx, a) {
   const level = ALERT_LEVEL[a.level];
-  const clock = Math.min(1, a.hoursOpen / DEFAULT_LADDER.ownerAfterHours);
+  const ladder = ladderFor(ctx.state.settings);
+  const clock = Math.min(1, a.hoursOpen / ladder.kpiBreachAfterHours);
 
   return card(
     cardHead(`${a.pestName} on ${a.zoneName}`, badge(`with the ${level.label}`, level.tone))
@@ -77,9 +83,11 @@ function openCard(ctx, a) {
     + `<p class="why"><b>Counted:</b> ${esc(a.count)} ${a.countKind === 'trap' ? 'on the trap' : 'per plant'}`
     + `, against a threshold of ${esc(a.limit)}`
     + (a.overPct > 0 ? ` — ${esc(a.overPct)}% over` : '') + '.</p>'
-    + `<p class="why"><b>Open:</b> ${esc(hoursWord(a.hoursOpen))} of 24`
+    + `<p class="why"><b>Open:</b> ${esc(hoursWord(a.hoursOpen))} of `
+    + `${esc(ladder.kpiBreachAfterHours)}`
     + (a.ack ? `, picked up by ${esc(nameOf(ctx, a.ack.by))}` : ', nobody has picked it up yet') + '.</p>'
     + bar(clock, a.overdue ? 'danger' : clock > 0.5 ? 'warn' : '')
+    + ladderTrail(a)
     + (a.sightings.length > 1
       ? `<p><small>Seen ${a.sightings.length} times since — worst count ${esc(a.worst)}.</small></p>`
       : '')
@@ -96,6 +104,63 @@ function openCard(ctx, a) {
     + '<p style="margin-top:8px"><small>Raised by ' + esc(nameOf(ctx, a.raisedBy))
     + ` on ${esc(friendlyDate(a.date))}. Treating it is what closes this.</small></p>`,
   );
+}
+
+/**
+ * FR-SCOUT-04 — the ladder, shown as a ladder.
+ *
+ * Which rungs have fired, which is next and when. A person looking at an alert
+ * that has climbed to the Owner should be able to see that two other people
+ * were asked first, and a person looking at a fresh one should be able to see
+ * what happens if they leave it.
+ */
+function ladderTrail(a) {
+  return '<ol class="ladder">' + a.escalation.map((r) => {
+    const state = r.reached ? 'done' : r.skipped ? 'skip' : 'todo';
+    const mark = r.reached ? '✓' : r.skipped ? '–' : '·';
+    return `<li class="rung is-${state}"><span class="ic" aria-hidden="true">${mark}</span>`
+      + `<span class="grow"><b>${esc(r.atHours)} h — ${esc(r.to)}`
+      + `${r.kpiBreach ? ', KPI breach' : ''}</b>`
+      + `<small>${esc(r.why)}</small></span></li>`;
+  }).join('') + '</ol>';
+}
+
+/**
+ * The straight-to-Owner list — rules `escalation.immediate_to_owner`.
+ *
+ * Above the ladder, because that is the point of it: these five do not wait
+ * four hours for a Supervisor.
+ */
+function straightBlock(items) {
+  if (!items.length) return '';
+  return `<h2 class="section">Straight to the Owner</h2>${card(
+    '<p><small>These do not climb the ladder. The Owner is told at once.</small></p>'
+    + items.map((i) => note(
+      i.kind === 'virus' || i.kind === 'bacterial_wilt' ? 'danger' : 'warn',
+      i.line, `<small>${esc(i.detail)}</small>`
+        + `<small class="rule"> — ${esc(i.rule)}</small>`,
+    )).join(''),
+  )}`;
+}
+
+/** FR-SCOUT-06 — the trap-count trend per zone, with the threshold drawn. */
+function trendBlock(ctx) {
+  const trends = zoneTrends(ctx.state, { today: isoDate() });
+  if (!trends.length) return '';
+
+  const byZone = new Map();
+  for (const t of trends) {
+    if (!byZone.has(t.zoneName)) byZone.set(t.zoneName, []);
+    byZone.get(t.zoneName).push(t);
+  }
+
+  return `<h2 class="section">Trap counts by zone</h2>${[...byZone.entries()].map(([zone, list]) =>
+    card(
+      cardHead(zone, list.some((t) => t.over)
+        ? badge('over the line', 'danger')
+        : list.some((t) => t.rising) ? badge('climbing', 'warn') : badge('under', 'ok'))
+      + list.slice(0, 4).map((t) => trendChart(t.trend, { pestName: t.pestName })).join(''),
+    )).join('')}`;
 }
 
 function nameOf(ctx, id) {
@@ -231,6 +296,8 @@ function kpiBlock(rows) {
       r.target,
       { __raw: `<b>${esc(r.display)}</b>` },
     ]))
-    + '<p><small>Every one of these is read straight off the records. Nobody reports them.</small></p>',
+    + '<p><small>Every one of these is read straight off the records. Nobody reports them.</small></p>'
+    + button('See them per week and per zone', 'go',
+      { cls: 'btn-ghost btn-block', icon: '📈', data: { to: '#/kpis' } }),
   )}`;
 }

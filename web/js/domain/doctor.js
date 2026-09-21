@@ -27,11 +27,53 @@
 
 import { addDays, daysBetween, isoDate, round } from '../util.js';
 import {
-  DEFAULT_REI_HOURS, catalogue, catalogueEntry, defaultPhiDays, diagnosisCard,
-  gateSpec, getRules, isBanned, isOrganic, rulesVersion,
+  DEFAULT_REI_HOURS, defaultPhiDays, diagnosisCard, gateSpec, peekRules, rulesVersion,
 } from '../rules.js';
+// The catalogue and the rotation sequences are read in one place each
+// (domain/catalogue.js, domain/rotation.js). The Farm Doctor asks them rather
+// than keeping its own reading of the rules, so a group, a rate or a sequence
+// means the same thing to the Doctor, to the treatment gate and to the spray
+// screen — and changing the rules file changes all three at once.
+import {
+  buildCatalogue, canUseActive, groupOfSpray as catalogueGroupOfSpray, isBanned, resolveActive,
+} from './catalogue.js';
+import { rotationVerdict, week10Actives } from './rotation.js';
 import { PROBLEM_BY_ID } from './pests.js';
 import { latestSoilTest, nematodeGate, phGate } from './gates.js';
+
+/**
+ * The catalogue, in the shape the rest of this file reads.
+ *
+ * domain/catalogue.js calls an active ingredient's name `name`; the Farm
+ * Doctor's own records call it `ai`, after the column in the rules file. One
+ * adapter here is cheaper than renaming a field across either side, and
+ * `organic` is added from the rules' own Week 10 list (SR-08) rather than
+ * guessed at from the name.
+ */
+function catalogueOf(state, rules) {
+  if (!rules) return null;
+  return buildCatalogue(state || {}, rules);
+}
+
+function adapt(active, catalogue, rules) {
+  if (!active) return null;
+  const allowed = catalogue && rules ? week10Actives(catalogue, rules).actives : [];
+  return { ...active, ai: active.name, organic: allowed.some((a) => a.id === active.id) };
+}
+
+/** Every active in the catalogue, adapted. */
+function actives(state, rules) {
+  const catalogue = catalogueOf(state, rules);
+  if (!catalogue) return [];
+  return catalogue.actives.map((a) => adapt(a, catalogue, rules));
+}
+
+/** One active, by name, alias, id, or the product id an old spray was logged with. */
+function activeFor(name, state, rules) {
+  const catalogue = catalogueOf(state, rules);
+  if (!catalogue) return null;
+  return adapt(resolveActive(catalogue, name), catalogue, rules);
+}
 
 /** The Farm Doctor is not a person. This id is what every output is signed with. */
 export const DOCTOR = { id: 'farm-doctor', name: 'Farm Doctor' };
@@ -122,7 +164,7 @@ export function refusal(limitId, why, extra = {}) {
  */
 export function doctorOutput({
   id = null, kind, subject = {}, read = [], confidence = null, summary = '',
-  findings = [], notifyOwner = false, lab = null, at = null, rules = getRules(),
+  findings = [], notifyOwner = false, lab = null, at = null, rules = peekRules(),
 } = {}) {
   return {
     id: id || `fd_${kind}_${subject.id || subject.zoneId || subject.cycleId || 'farm'}_${(at || new Date().toISOString()).slice(0, 19)}`,
@@ -361,10 +403,10 @@ export function doseFor(entry, { labelRate = null, tanks = TANKS } = {}) {
  * file keeps the Farm Doctor's shortlist tied to the rules rather than to a
  * second list in the app that could drift away from them.
  */
-export function activesNamedIn(text, rules = getRules()) {
+export function activesNamedIn(text, rules = peekRules(), state = null) {
   const hay = String(text || '').toLowerCase();
   if (!hay) return [];
-  return catalogue(rules).filter((entry) => entry.aliases.some((alias) => {
+  return actives(state, rules).filter((entry) => (entry.aliases || []).some((alias) => {
     const a = String(alias).toLowerCase();
     return a.length > 3 && hay.includes(a);
   }));
@@ -401,7 +443,7 @@ export const CARD_FOR_PROBLEM = {
   leaf_curl_virus: 'mosaic_virus',
 };
 
-export function cardForProblem(problemId, rules = getRules()) {
+export function cardForProblem(problemId, rules = peekRules()) {
   const id = CARD_FOR_PROBLEM[problemId] || problemId;
   return diagnosisCard(id, rules);
 }
@@ -414,16 +456,18 @@ export function weekOf(cycle, date = isoDate()) {
   return Math.floor(dat / 7);
 }
 
-/** The group a past spray belongs to, read back through the catalogue. */
-function groupOfSpray(spray, rules = getRules()) {
-  if (!spray) return null;
-  if (spray.activeId) {
-    const byId = catalogue(rules).find((e) => e.id === spray.activeId);
-    if (byId) return byId.group || null;
-  }
-  const named = activesNamedIn(`${spray.productName || ''} ${spray.activeName || ''}`, rules);
-  if (named.length) return named[0].group || null;
-  return spray.group || null;
+/**
+ * The group a past spray belongs to.
+ *
+ * The farm's history predates the catalogue, so a spray may name a brand, an
+ * old product id or nothing useful at all. domain/catalogue.js knows how to
+ * read all three, and this is the Doctor asking it rather than guessing.
+ */
+function groupOfSpray(spray, rules = peekRules(), state = null) {
+  if (!spray || !rules) return null;
+  const catalogue = catalogueOf(state, rules);
+  if (!catalogue) return null;
+  return catalogueGroupOfSpray(catalogue, spray) || spray.group || null;
 }
 
 /** A block that is not one of the FR-DOC-08 limits but a rule in its own right. */
@@ -439,7 +483,7 @@ function block(code, requirement, why, fix, extra = {}) {
  * improved by having good rotation. Everything after them is the agronomy that
  * makes a legal spray a sensible one.
  */
-export function checkPlan(state, plan = {}, { today = isoDate(), rules = getRules() } = {}) {
+export function checkPlan(state, plan = {}, { today = isoDate(), rules = peekRules() } = {}) {
   const violations = [];
   const cycle = plan.cycleId ? ((state && state.cycles) || {})[plan.cycleId] : null;
   const name = plan.active || plan.activeId || plan.productName || '';
@@ -459,7 +503,7 @@ export function checkPlan(state, plan = {}, { today = isoDate(), rules = getRule
     };
   }
 
-  const entry = catalogueEntry(name, rules);
+  const entry = activeFor(name, state, rules);
   if (!entry) {
     return {
       ok: false, entry: null, dose: null,
@@ -497,22 +541,41 @@ export function checkPlan(state, plan = {}, { today = isoDate(), rules = getRule
     }
   }
 
-  // FR-GATE-05 — rotation. The rules are stricter than "not three in a row":
-  // never the same group twice running.
-  const rotation = rotationBlock(state, plan.cycleId, entry, { today, rules });
-  if (rotation) violations.push(rotation);
-
-  // SR-08 / rei.week_10_rule — from Week 10 it is organics only.
+  // FR-GATE-05, SR-08, the thrips programme and the Metalaxyl-M cadence, all
+  // from the rules' own sequences. This is the same verdict the treatment gate
+  // and the spray screen get (domain/rotation.js), so there is one answer to
+  // "may this go on this zone today?" rather than the Doctor's and the gate's.
+  //
+  // Two of its refusals are FR-DOC-08 limits rather than agronomy, and keep
+  // the limit's name: a product that is not in the catalogue, and one with no
+  // dose on file.
   const week = weekOf(cycle, plan.date || today);
-  if (week != null && week >= 10 && !entry.organic) {
-    violations.push(block('week-10', 'rules.spray_rules SR-08',
-      `This bed is in Week ${week}, and from Week 10 only neem, garlic-chilli and copper hydroxide may be sprayed.`,
-      'Use one of the organics, or wait until the cycle is over.'));
+  if (plan.cycleId) {
+    const rotation = rotationVerdict(state, plan.cycleId, entry.id, {
+      rules, today, target: plan.problemId || null, week,
+    });
+    if (!rotation.ok) {
+      if (rotation.reason === 'not-in-catalogue') {
+        violations.push(refusal('catalogue', rotation.why, { fix: rotation.fix }));
+      } else if (rotation.reason !== 'no-rate') {
+        // 'no-rate' is left out deliberately: doseFor() above has already
+        // answered it, and answered it better. It reads the schedule rate, a
+        // stored label and a rate entered on the plan itself, and refuses in
+        // the calculator's own words. Repeating it here would put the same
+        // FR-DOC-08 limit in the list twice.
+        violations.push(block(rotation.reason || 'rotation', 'FR-GATE-05', rotation.why, rotation.fix,
+          { alternatives: rotation.alternatives || [], sources: rotation.sources || [] }));
+      }
+    }
   }
 
   // SR-05 — a microbial inoculant is killed by a fungicide it follows too closely.
   const mixing = mixingBlock(state, plan.cycleId, entry, { today });
   if (mixing) violations.push(mixing);
+
+  // SR-01/02/03 — the hour it is going on, when the plan names one.
+  const timing = sprayWindowBlock(plan, entry, { rules });
+  if (timing) violations.push(timing);
 
   const phiDays = phiFor(entry, plan, rules);
   const reiHours = reiFor(plan);
@@ -551,38 +614,6 @@ function treatableDiagnosis(state, cycleId, { today = isoDate(), maxAgeDays = 14
   return { ok: true, diagnosis: confirmed };
 }
 
-/** insecticide_rotation / fungicide_rotation: never the same group twice running. */
-function rotationBlock(state, cycleId, entry, { today = isoDate(), rules = getRules(), windowDays = 60 } = {}) {
-  if (!cycleId || !entry.group) return null;
-  const kind = /fungicide|bactericide/.test(entry.type) ? 'frac' : 'irac';
-  const previous = ((state && state.sprays) || [])
-    .filter((s) => s.cycleId === cycleId && s.date && s.date <= today)
-    .filter((s) => daysBetween(s.date, today) <= windowDays)
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  const sameKind = previous.filter((s) => {
-    const g = groupOfSpray(s, rules);
-    if (!g) return false;
-    return kind === 'frac' ? /FRAC|^BM|^M\d/.test(g) : /IRAC/.test(g);
-  });
-  const last = sameKind[0];
-  if (!last) return null;
-  if (groupOfSpray(last, rules) !== entry.group) return null;
-
-  const alternatives = catalogue(rules)
-    .filter((e) => e.type === entry.type && e.group && e.group !== entry.group)
-    .filter((e) => { const s = stockOf(state, e, { today }); return s && s.qty > 0; })
-    .slice(0, 3).map((e) => e.ai);
-
-  return block('rotation', 'FR-GATE-05',
-    `${entry.ai} is ${entry.group}, and the last spray on this bed (${last.date}) was the same group. `
-    + 'The rules say never the same group twice running.',
-    alternatives.length
-      ? `Use a different group this time — ${alternatives.join(' or ')}.`
-      : 'Nothing from another group is in stock. Buy one in before spraying this bed again.',
-    { group: entry.group, alternatives, lastSpray: last });
-}
-
 /** SR-05: a microbial inoculant never within 48 h of a fungicide, never in the same tank. */
 function mixingBlock(state, cycleId, entry, { today = isoDate() } = {}) {
   if (!/biological|trichoderma|bacillus/i.test(`${entry.type} ${entry.ai}`)) return null;
@@ -619,7 +650,7 @@ function reiFor(plan) {
  */
 export function treatmentPlan(state, {
   problemId, cycleId = null, zoneId = null, diagnosisId = null, today = isoDate(),
-  tanks = TANKS, labels = {}, rules = getRules(),
+  tanks = TANKS, labels = {}, rules = peekRules(),
 } = {}) {
   const problem = PROBLEM_BY_ID[problemId] || null;
   const card = cardForProblem(problemId, rules);
@@ -683,6 +714,119 @@ export function treatmentPlan(state, {
 }
 
 // ---------------------------------------------------------------------------
+// FR-TREAT-04 — the gear, before the job
+// ---------------------------------------------------------------------------
+//
+// Ported from claude/farm-doctor-planning-calcs. SR-06 sets the floor — mask
+// and gloves for any spray, and for hydrated lime goggles, gloves, dust mask,
+// long sleeves and a briefing that gets logged. The farm's own spray rules go
+// further (sleeves, trousers and boots every time), and the stricter of the
+// two is the one that applies.
+
+export const PPE = {
+  mask: { id: 'mask', icon: 'mask', label: 'Mask over nose and mouth',
+    why: 'The spray drifts back at you the moment the wind shifts.' },
+  dust_mask: { id: 'dust_mask', icon: 'mask', label: 'Dust mask',
+    why: 'Hydrated lime dust burns the inside of the nose and the lungs.' },
+  gloves: { id: 'gloves', icon: 'gloves', label: 'Gloves',
+    why: 'Most of what gets into a person gets in through the hands.' },
+  goggles: { id: 'goggles', icon: 'goggles', label: 'Goggles',
+    why: 'There is no rinsing this back out of an eye in the field.' },
+  sleeves: { id: 'sleeves', icon: 'sleeves', label: 'Long sleeves and trousers',
+    why: 'Bare arms in a sprayed house carry it home on the skin.' },
+  boots: { id: 'boots', icon: 'boots', label: 'Boots',
+    why: 'The run-off ends up on the floor you are standing in.' },
+};
+
+/** One spray rule, by its id, in the rules' own words. */
+export function sprayRule(id, rules = peekRules()) {
+  const list = (rules && rules.spray_rules) || [];
+  return (list.find((r) => r.id === id) || {}).rule || '';
+}
+
+const GARLIC_CHILLI = 'garlic_chilli_extract_farm_made';
+
+/** What must be worn for this job (SR-06, and the farm's standing rules). */
+export function ppeFor({ active = null, task = 'spray', rules = peekRules() } = {}) {
+  const sr06 = sprayRule('SR-06', rules);
+
+  if (task === 'lime' || (active && active.id === 'hydrated_lime')) {
+    return {
+      task: 'lime',
+      items: [PPE.goggles, PPE.gloves, PPE.dust_mask, PPE.sleeves, PPE.boots],
+      briefing: true,
+      briefingText: 'Hydrated lime needs a team briefing before anyone opens a bag, '
+        + 'and the briefing is logged with who was there.',
+      source: 'SR-06',
+      rule: sr06,
+    };
+  }
+
+  const items = [PPE.mask, PPE.gloves, PPE.sleeves, PPE.boots];
+  // Goggles for anything that is not a PHI-0 botanical, and for garlic-chilli,
+  // which the PHI table marks as an eye and skin irritant in its own right.
+  if (!active || !active.organic || active.id === GARLIC_CHILLI) items.splice(2, 0, PPE.goggles);
+
+  return {
+    task: 'spray',
+    items,
+    briefing: false,
+    source: 'SR-06',
+    rule: sr06,
+    extra: active && active.id === GARLIC_CHILLI
+      ? 'Garlic-chilli is an eye and skin irritant. Treat it like a chemical, because it is one.'
+      : null,
+    // SR-07, the step everyone skips.
+    after: active && /insecticide/.test(active.type || '') ? sprayRule('SR-07', rules) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SR-01, SR-02, SR-03 — when a spray may go on
+// ---------------------------------------------------------------------------
+
+/**
+ * The spray window, ported from claude/farm-doctor-planning-calcs.
+ *
+ * Midday heat wastes the chemical and burns the crop, wet leaves stop Mancozeb
+ * binding, and once the crop is flowering the window closes until 5 PM so the
+ * spray does not land on open flowers. All four are rules in the file, so the
+ * refusal quotes them rather than restating them.
+ */
+export function sprayWindowBlock(plan = {}, entry = null, { rules = peekRules() } = {}) {
+  const at = plan.at || '';
+  if (!rules || !at || at.length <= 10) return null;
+
+  const [h, m] = at.slice(11).split(':').map(Number);
+  const clock = h + (m || 0) / 60;
+  const pretty = at.slice(11, 16);
+  const broken = [];
+
+  // SR-02 tightens SR-01 once the crop is flowering: after 5 PM, not 4.
+  const opensAt = plan.flowering ? 17 : 16;
+  if (clock < opensAt || clock > 19) {
+    broken.push({ why: `${pretty} is outside the spray window.`,
+      fix: plan.flowering ? sprayRule('SR-02', rules) : sprayRule('SR-01', rules) });
+  }
+  if (plan.openFlowers) broken.push({ why: 'The crop has open flowers.', fix: sprayRule('SR-02', rules) });
+  if (plan.wind) broken.push({ why: 'There is wind through the nets.', fix: sprayRule('SR-02', rules) });
+  if (plan.leavesWet) broken.push({ why: 'The leaves are wet.', fix: sprayRule('SR-03', rules) });
+  if (entry && entry.id === 'mancozeb' && plan.dryHoursAhead != null && Number(plan.dryHoursAhead) < 2) {
+    broken.push({
+      why: `Mancozeb needs 2 dry hours to bind and there ${Number(plan.dryHoursAhead) === 1 ? 'is 1' : `are ${plan.dryHoursAhead}`} ahead.`,
+      fix: sprayRule('SR-03', rules),
+    });
+  }
+  if (entry && entry.id === 'spinosad' && clock < 16) {
+    broken.push({ why: 'Spinosad breaks down in sunlight.', fix: 'After 4 PM only.' });
+  }
+
+  if (!broken.length) return null;
+  return block('timing', 'rules.spray_rules SR-01, SR-02, SR-03',
+    broken.map((b) => b.why).join(' '), broken.map((b) => b.fix).filter(Boolean).join(' '));
+}
+
+// ---------------------------------------------------------------------------
 // FR-DOC-03 — photo review online, the guided flow offline
 // ---------------------------------------------------------------------------
 
@@ -742,7 +886,7 @@ export function photoReviewRequest({
  * suspicion with a lab sample attached, every time.
  */
 export function normalisePhotoReview(raw = {}, {
-  state = null, cycleId = null, zoneId = null, photos = [], today = isoDate(), rules = getRules(),
+  state = null, cycleId = null, zoneId = null, photos = [], today = isoDate(), rules = peekRules(),
 } = {}) {
   const confidence = normaliseConfidence(raw.confidence);
 
@@ -840,7 +984,7 @@ export function normalisePhotoReview(raw = {}, {
  */
 export function labAdvice(state, {
   problemId = null, type = null, confidence = null, cycleId = null, zoneId = null,
-  today = isoDate(), rules = getRules(),
+  today = isoDate(), rules = peekRules(),
 } = {}) {
   const problem = problemId ? PROBLEM_BY_ID[problemId] : null;
   const kind = type || (problem && problem.type) || null;
@@ -1006,7 +1150,7 @@ function fromRecord(id, label, record, missingFix) {
  * that turns evidence into a cleared gate — and only when two people are named.
  */
 export function gateEvidence(state, {
-  zoneId, cycleId = null, today = isoDate(), rules = getRules(), gates = ['G0', 'G1', 'G4'],
+  zoneId, cycleId = null, today = isoDate(), rules = peekRules(), gates = ['G0', 'G1', 'G4'],
 } = {}) {
   const zone = ((state && state.plots) || {})[zoneId] || null;
   const out = [];
@@ -1390,7 +1534,7 @@ export const WORKED = {
  * count is visible as the disagreement it is rather than quietly filed.
  */
 export function followUpRecord(state, {
-  spray, worked, note = '', person = null, pestId = null, today = isoDate(), rules = getRules(),
+  spray, worked, note = '', person = null, pestId = null, today = isoDate(), rules = peekRules(),
 } = {}) {
   const answer = WORKED[String(worked || '').toLowerCase()] ? String(worked).toLowerCase() : null;
   const counts = spray ? countChange(state, {
@@ -1460,7 +1604,7 @@ export function followUpBoard(state, { today = isoDate(), withinDays = 45 } = {}
  * Owner (FR-GATE-00), and the value of this is that they argue with a filled-in
  * page instead of staring at a blank one at the end of a hard season.
  */
-export function draftCycleReview(state, cycleId, { today = isoDate(), rules = getRules() } = {}) {
+export function draftCycleReview(state, cycleId, { today = isoDate(), rules = peekRules() } = {}) {
   const cycle = ((state && state.cycles) || {})[cycleId] || null;
   if (!cycle) {
     return { ...doctorOutput({ kind: 'cycle-review', subject: { cycleId }, confidence: 'low', rules }),

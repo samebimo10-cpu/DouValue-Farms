@@ -1,161 +1,152 @@
-// The rules file, read once.
+// The rules loader.
 //
-// rules/douvalue_rules_rev5_1.json is the source of truth for this farm
-// (CLAUDE.md), and the repository holds exactly one copy of it. Nothing here
-// restates a threshold, a rate or a gate condition: everything below is a
-// reader over that file, so the way to change a rule stays "edit the JSON".
+// rules/douvalue_rules_rev5_1.json is the source of truth for this farm: the
+// gates, the rotation sequences, the thresholds, the active ingredients and
+// their IRAC/FRAC groups. CLAUDE.md is explicit that web/ and server/ both read
+// that one file and that nobody copies it, because two copies means one of them
+// is wrong and nobody finds out until a gate lets a spray through.
 //
-// The file is fetched rather than imported because it is published beside the
-// app rather than bundled into it. Two addresses are tried: the assembled site
-// puts the app at the root with the rules one level below it, and a developer
-// serving the repository root has the app under web/ and the rules a further
-// level up. The loader is content to fail — every caller has to cope with the
-// rules being absent anyway, since a phone's first run may be offline. The
-// Farm Doctor's answer to "I could not read the rules" is to refuse, not to
-// guess, which is the behaviour the limits in FR-DOC-08 ask for.
+// So this module holds no agronomy of its own. It finds the file, parses it,
+// and hands it out. Anything that reads a number out of it says where it came
+// from (see `ref` below), so a blocked spray can be traced back to the line in
+// the rules that blocked it rather than to somebody's memory of the PDF.
+//
+// The catalogue of active ingredients is built on top of this, in
+// domain/catalogue.js, and the rotation sequences in domain/rotation.js. They
+// are the only readers of the agronomy; everything else asks them.
 
-let RULES = null;
+export const RULES_FILE = 'rules/douvalue_rules_rev5_1.json';
 
-/** The rules as loaded, or null if they have not arrived on this device yet. */
-export function getRules() { return RULES; }
+let cache = null;
 
-/** Put a rules object in place. The tests read the file off disk and call this. */
-export function setRules(rules) { RULES = rules && typeof rules === 'object' ? rules : null; return RULES; }
+/** A pointer into the rules file, for showing the working. */
+export function ref(path) {
+  return `${RULES_FILE}#/${String(path).replace(/^\/+/, '')}`;
+}
 
-export function rulesVersion(rules = RULES) {
+const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+
+/**
+ * Where to look, in order.
+ *
+ * Deployed, the app sits at the site root and the rules beside it at /rules/,
+ * so one level up from js/ is right. In the repository the app is one level
+ * deeper, under web/, so two levels up is right. Trying both keeps a
+ * developer's http-server and the published site on the same code path.
+ */
+function candidates() {
+  return [
+    new URL(`../${RULES_FILE}`, import.meta.url),
+    new URL(`../../${RULES_FILE}`, import.meta.url),
+  ];
+}
+
+/** Nothing downstream may edit the source of truth, even by accident. */
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const v of Object.values(value)) deepFreeze(v);
+  return Object.freeze(value);
+}
+
+function check(doc, where) {
+  if (!doc || typeof doc !== 'object') throw new Error(`${where} is not a rules document`);
+  if (!Array.isArray(doc.active_ingredients) || !doc.active_ingredients.length) {
+    throw new Error(`${where} has no active_ingredients: it is not rev 5.1 of the rules`);
+  }
+  return deepFreeze(doc);
+}
+
+/**
+ * Read the rules. The one call the app makes at boot.
+ *
+ * `fetchImpl` and `url` exist for tests; normal callers pass nothing.
+ */
+export async function loadRules({ url = null, fetchImpl = null } = {}) {
+  if (cache) return cache;
+  const urls = url ? [new URL(url, import.meta.url)] : candidates();
+
+  // Node — tests, the sync server and any script — reads it off disk. There is
+  // no HTTP server in those places, and the file is right there in the repo.
+  if (isNode && !fetchImpl) {
+    const { readFileSync } = await import('node:fs');
+    let err = null;
+    for (const u of urls) {
+      try { return (cache = check(JSON.parse(readFileSync(u, 'utf8')), u.pathname)); }
+      catch (e) { err = e; }
+    }
+    throw new Error(`Could not read ${RULES_FILE}: ${err && err.message}`);
+  }
+
+  const get = fetchImpl || ((u) => fetch(u));
+  let last = null;
+  for (const u of urls) {
+    try {
+      const res = await get(String(u));
+      if (!res || !res.ok) { last = new Error(`HTTP ${res && res.status} for ${u}`); continue; }
+      cache = check(await res.json(), String(u));
+      return cache;
+    } catch (err) { last = err; }
+  }
+  throw new Error(`Could not load ${RULES_FILE}: ${last && last.message}. `
+    + 'The app will not run on guessed agronomy, so it stops here.');
+}
+
+/**
+ * The rules, synchronously, for the domain code that runs inside a screen.
+ *
+ * Throws rather than returning an empty document: a rotation check with no
+ * rules behind it would pass everything, which is the one failure this whole
+ * file exists to prevent.
+ */
+export function getRules() {
+  if (!cache) throw new Error('The rules have not been loaded yet — call loadRules() first');
+  return cache;
+}
+
+export function rulesLoaded() { return !!cache; }
+
+/**
+ * The rules if they are here, and null if they are not.
+ *
+ * For the code that has to carry on without them rather than stop: the Farm
+ * Doctor refuses to name a product when the rules have not arrived
+ * (FR-DOC-08), and a screen still has to paint in order to say so. Anything
+ * that would otherwise *decide* something uses getRules() and its exception.
+ */
+export function peekRules() { return cache; }
+
+/** Tests and the sample farm set the document directly. */
+export function setRules(doc) {
+  cache = doc ? check(doc, 'the supplied rules') : null;
+  return cache;
+}
+
+export function rulesVersion(rules = cache) {
   return (rules && rules.meta && rules.meta.version) || null;
 }
 
-const CANDIDATES = [
-  '../rules/douvalue_rules_rev5_1.json',       // assembled site: app at /, rules at /rules/
-  '../../rules/douvalue_rules_rev5_1.json',    // repository root served: app at /web/
-];
+// --- Readers that are not the catalogue ------------------------------------
+//
+// The active ingredients, their groups and the rotation sequences are read by
+// domain/catalogue.js and domain/rotation.js. What is left here is the handful
+// of other sections the Farm Doctor reads directly.
 
-/**
- * Fetch the rules and remember them. Returns null rather than throwing: a farm
- * phone that cannot reach the file still has to open.
- */
-export async function loadRules(fetchImpl = (typeof fetch === 'function' ? fetch : null)) {
-  if (!fetchImpl) return null;
-  for (const rel of CANDIDATES) {
-    try {
-      const res = await fetchImpl(new URL(rel, import.meta.url).href, { cache: 'no-cache' });
-      if (!res || !res.ok) continue;
-      const parsed = await res.json();
-      if (parsed && parsed.meta) return setRules(parsed);
-    } catch {
-      // Next candidate, then give up quietly.
-    }
-  }
-  return null;
-}
-
-// --- Readers over the file ------------------------------------------------
-
-/** A stable id for an active ingredient, so it can be keyed and compared. */
-export function activeId(name) {
-  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-}
-
-/**
- * The names one active ingredient might appear under on a stock shelf.
- * "Azadirachtin / neem oil" is one entry in the catalogue and two words on a
- * bottle, and a farm writes whichever is on the bottle.
- */
-export function activeAliases(entry) {
-  const raw = String(entry.ai || '');
-  const parts = raw.split('/').map((s) => s.trim()).filter(Boolean);
-  const out = new Set([raw, ...parts]);
-  for (const p of [...out]) {
-    const bare = p.replace(/\([^)]*\)/g, '').trim();          // "Bacillus thuringiensis (Bt)"
-    if (bare) out.add(bare);
-    const inner = /\(([^)]+)\)/.exec(p);
-    if (inner) out.add(inner[1].trim());
-    const first = bare.split(/\s+/)[0];
-    if (first && first.length > 4) out.add(first);            // "Mancozeb 80% WP" on the shelf
-  }
-  return [...out].filter(Boolean);
-}
-
-/**
- * The active-ingredient catalogue (FR-STOCK-05), normalised.
- *
- * `banned` is carried through so the ban is enforced from the same list the
- * catalogue comes from; FR-STOCK-09 keeps banned actives out of the catalogue
- * altogether, and this is the belt to that braces.
- */
-export function catalogue(rules = RULES) {
-  if (!rules || !Array.isArray(rules.active_ingredients)) return [];
-  const banned = bannedNames(rules);
-  return rules.active_ingredients
-    .filter((a) => a && a.ai)
-    .map((a) => ({
-      id: activeId(a.ai),
-      ai: a.ai,
-      type: a.type || '',
-      group: a.group || '',
-      scheduleRate: a.schedule_rate || null,
-      phiDays: a.phi_days == null ? null : Number(a.phi_days),
-      aliases: activeAliases(a),
-      organic: isOrganic(a),
-    }))
-    .filter((a) => !banned.some((b) => matchesName(b, a)));
-}
-
-export function catalogueEntry(name, rules = RULES) {
-  const id = activeId(name);
-  const list = catalogue(rules);
-  return list.find((a) => a.id === id)
-    || list.find((a) => a.aliases.some((alias) => activeId(alias) === id))
-    || null;
-}
-
-/** Names the rules say never to buy or use. Checked by name, not by id. */
-export function bannedNames(rules = RULES) {
-  const out = [];
-  const labelBan = rules && rules.labels && rules.labels.banned;
-  if (Array.isArray(labelBan)) out.push(...labelBan);
-  const doNotBuy = rules && rules.soil_and_water && rules.soil_and_water.lime
-    && rules.soil_and_water.lime.do_not_buy;
-  if (Array.isArray(doNotBuy)) out.push(...doNotBuy);
-  return out.map(String);
-}
-
-/** Does this banned entry — "Carbofuran (Furadan)" — describe that product? */
-export function matchesName(bannedEntry, product) {
-  const words = String(bannedEntry).toLowerCase().match(/[a-z]{4,}/g) || [];
-  const hay = [product.ai, product.name, ...(product.aliases || [])]
-    .filter(Boolean).join(' ').toLowerCase();
-  return words.some((w) => hay.includes(w));
-}
-
-export function isBanned(name, rules = RULES) {
-  const product = { ai: name, aliases: [name] };
-  return bannedNames(rules).some((b) => matchesName(b, product));
-}
-
-/** From Week 10 the only things that may be sprayed are these (SR-08, rei.week_10_rule). */
-export function isOrganic(active) {
-  const hay = `${active.ai || active.name || ''} ${active.type || ''}`.toLowerCase();
-  return /neem|azadirachtin|garlic|copper hydroxide|trichoderma|bacillus|botanical|biological/.test(hay);
-}
-
-export function gateSpec(id, rules = RULES) {
+export function gateSpec(id, rules = cache) {
   if (!rules || !Array.isArray(rules.gates)) return null;
   return rules.gates.find((g) => g.id === id) || null;
 }
 
-export function doctorRules(rules = RULES) { return (rules && rules.farm_doctor) || null; }
+export function doctorRules(rules = cache) { return (rules && rules.farm_doctor) || null; }
 
-export function triageRows(rules = RULES) { return (rules && rules.triage) || []; }
+export function triageRows(rules = cache) { return (rules && rules.triage) || []; }
 
-export function diagnosisCard(id, rules = RULES) {
+export function diagnosisCard(id, rules = cache) {
   const cards = (rules && rules.diagnosis_cards) || [];
   return cards.find((c) => c.id === id) || null;
 }
 
-/** The rules' own default waiting periods, read out of the phi table. */
-export function defaultPhiDays(rules = RULES) {
+/** The rules' own default waiting period, read out of the phi table. */
+export function defaultPhiDays(rules = cache) {
   const rows = (rules && rules.phi) || [];
   for (const row of rows) {
     if (/other synthetic/i.test(String(row.product || ''))) {

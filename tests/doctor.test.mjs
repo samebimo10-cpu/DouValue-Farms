@@ -23,6 +23,14 @@ const RULES = JSON.parse(readFileSync(
 
 const rulesModule = await import(new URL('rules.js', base).href);
 rulesModule.setRules(RULES);
+// The catalogue is built in one place for the whole app (FR-STOCK-05), and the
+// Farm Doctor reads it from there rather than keeping a second reading of the
+// same twenty actives.
+const catalogueModule = await import(new URL('domain/catalogue.js', base).href);
+const entryOf = (name) => {
+  const found = catalogueModule.resolveActive(catalogueModule.buildCatalogue({}, RULES), name);
+  return found ? { ...found, ai: found.name } : null;
+};
 
 const {
   CONFIDENCE, DOCTOR, FOLLOW_UP_DAYS, LIMITS, approvePlan, awaitingConfirmation, checkPlan,
@@ -277,7 +285,7 @@ test('FR-STOCK-04: expired stock is not stock', () => {
   const state = farm({
     inputs: { i_spin: { id: 'i_spin', name: 'Spinosad 45SC', qty: 2, expiry: day(-30) } },
   });
-  assert.equal(stockOf(state, rulesModule.catalogueEntry('Spinosad'), { today: TODAY }).expiredOnly, true);
+  assert.equal(stockOf(state, entryOf('Spinosad'), { today: TODAY }).expiredOnly, true);
 
   const verdict = checkPlan(state, { active: 'Spinosad', cycleId: 'c1' }, { today: TODAY });
   assert.equal(verdict.ok, false);
@@ -314,11 +322,12 @@ test('the catalogue comes from the rules file itself, not from a second copy', a
 
   assert.ok(loaded, 'the loader found the repository\'s own rules file');
   assert.equal(rulesModule.rulesVersion(loaded), RULES.meta.version);
-  assert.equal(rulesModule.catalogue(loaded).length, RULES.active_ingredients.length);
+  assert.equal(catalogueModule.buildCatalogue({}, loaded).actives.length,
+    RULES.active_ingredients.length - 0, 'the catalogue is the rules file, not a copy of it');
 });
 
 test('FR-STOCK-09: a banned active never appears in the catalogue at all', () => {
-  const names = rulesModule.catalogue(RULES).map((a) => a.ai.toLowerCase());
+  const names = catalogueModule.buildCatalogue({}, RULES).actives.map((a) => a.name.toLowerCase());
   assert.ok(!names.some((n) => n.includes('carbofuran')));
   assert.ok(!names.some((n) => n.includes('furadan')));
 });
@@ -353,13 +362,13 @@ test('FR-DOC-08: prose where a number should be does not become a dose', () => {
   assert.equal(parseRate('see prep table'), null);
   assert.equal(parseRate(''), null);
 
-  const refused = doseFor(rulesModule.catalogueEntry('Bacillus subtilis'), {});
+  const refused = doseFor(entryOf('Bacillus subtilis'), {});
   assert.equal(refused.ok, false);
   assert.equal(refused.limit, 'dose');
 });
 
 test('FR-DOC-05: the dose calculator covers the knapsack and both tanks', () => {
-  const dose = doseFor(rulesModule.catalogueEntry('Mancozeb'), {});
+  const dose = doseFor(entryOf('Mancozeb'), {});
   assert.equal(dose.ok, true);
   assert.deepEqual(dose.amounts.map((a) => a.text), ['40 g in 16 L', '1250 g in 500 L', '2500 g in 1000 L']);
 });

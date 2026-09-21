@@ -25,7 +25,8 @@ The page is public, because GitHub Pages on a public repository is. **The farm's
 are not**: everything anyone enters is stored in their own browser on their own phone and
 never leaves it. A stranger who opens the link gets an empty app, not your farm.
 
-To run it locally instead:
+To run it locally instead, serve the repository root — not `web/` — because the app reads
+`rules/douvalue_rules_rev5_1.json` from beside it and will not start without it:
 
 ```bash
 python3 -m http.server 8000     # from the repository root; or: npm start
@@ -202,30 +203,62 @@ The guide also names the products that should not be on this farm at all, and sa
 carbofuran, paraquat, chlorpyrifos, dimethoate. A buyer who tests for residues will find
 them, and two of them have killed farm workers.
 
-### 2. Diagnosis support
+### 2. Diagnosis support — the Farm Doctor
 
-Thirty-two problems that hit pepper in the Niger Delta, from Phytophthora blight and
-bacterial wilt through anthracnose, pepper veinal mottle virus, broad mite and the
-variegated grasshopper, to blossom-end rot and acid soil. Sixty-seven symptoms written as
-things you can see, in English and Pidgin.
+The 23 triage rows and 22 diagnosis cards from `rules/douvalue_rules_rev5_1.json`, read
+straight out of the file. Nothing about a pest, a disease or a disorder is written down in
+the code, so changing the rules changes the diagnosis.
 
-The wizard asks which parts of the plant you looked at, you tick what you can see, and it
-ranks the candidates. It is deliberately transparent about three things:
+The flow is the rules' own: **symptom → matching triage rows → card → confirm test**.
 
-- **How sure it is.** "Strong match", "Likely", "Possible", "Long shot", with the reason.
-- **How to confirm it.** The streaming test for bacterial wilt. Turning the leaf over for
-  powdery mildew. Washing a root to tell nematode galls from nitrogen nodules.
-- **What would settle it.** When the top two are close, it names the single observation
-  that separates them: *"Look for dark wet rot on the stem at soil level. If it is there,
-  this is Phytophthora blight. If not, it points to waterlogging."*
+1. You say what you can see — tick the rules' own wording, or write it yourself.
+2. The app scores all 23 triage rows and shows the ones that fit, with the words that
+   carried each match and the words that argue against it.
+3. **It will not name a cause yet.** First it asks for a photo and for the confirm test the
+   row names — the pH test, the loupe, the cut stem in clear water. That refusal is the
+   whole difference between a diagnosis and a guess (`FR-DOC-01`).
+4. Only then does it open the card: cause, how it shows, what to do now, treatment,
+   prevention, and whether the rules require a lab sample.
 
-Two rules stop it from bluffing. A symptom that fits a third of the guide, like "started
-after heavy rain", counts for far less than one that fits a single problem. And a problem
-whose tell-tale signs are all on a part nobody inspected cannot win the ranking — it goes
-into "go and check these" instead.
+Two things make it work on real field words rather than on a tick-list:
 
-It says plainly that it is a field guide and not a laboratory, and points at the Rivers
-State ADP extension service for anything that could take a whole bed.
+- **Negation.** "NO galls" in row 23 is the entire difference between acid soil and
+  nematode. Type *"stunted plants, no galls"* and the app moves towards acid soil **and
+  away from** nematode, instead of merely failing to match "galls".
+- **Contradiction as a signal.** A sign one row asserts and another denies is not noise; it
+  is the separating test. That is how the look-alikes are derived rather than listed.
+
+Look-alikes come with the test that tells them apart, and every test it names is a test the
+rules name (`FR-DOC-02`):
+
+| Pair | What settles it |
+|---|---|
+| Nematode galls vs acid-soil roots | the rules' own root read — pull a plant: red/brown galls → nematode; stubby, dead-tipped, no galls → acid soil |
+| Fusarium vs bacterial wilt | cut the stem in clear water: milky ooze streams → bacterial wilt |
+| Thrips vs broad mite | 10× loupe on the youngest tips: glassy oval mites and eggs → broad mite |
+
+Every triage row and every diagnosis card has a slot for one **reference photo** — 45 in
+all, derived from the rules. The pictures are not: the rules JSON is the source of truth and
+the app never writes to it, so they are the farm's own, attached in the app by the Owner or
+the Farm Manager and carried in the event log to every phone. A row's picture is the thing
+as you first see it and shows beside the tick-list; a card's is the confirmed thing and sits
+next to its cause. An empty slot costs nothing — the rules' wording is what the app matches
+on and what the tick-list shows either way — and *Clinic → the guide → reference photos*
+lists every slot with the gaps first, so what is still missing is a screen rather than a
+memory.
+
+A recorded diagnosis carries the card, the triage row, the answers, the photos, the written
+reasoning and the person (`FR-DIAG-02`). A farm hand may start one; a Field Supervisor or
+Farm Manager performs the confirm test again and confirms it, and nobody confirms their own
+(`FR-DIAG-03`). None of that is advisory — the event log refuses a confirmation with no
+confirm step behind it, and so does the server.
+
+Diagnoses recorded before this engine are kept and stay readable. Where the old name matches
+a card outright they are read as that card; the rest keep their old wording and are marked
+**legacy**, because nobody did the rules' confirm test on them.
+
+The local field guide in `pests.js` stays alongside it for what the rules do not carry:
+products, pre-harvest intervals, resistance groups, and the weather-and-stage risk board.
 
 ### 2b. The Farm Doctor
 
@@ -504,12 +537,19 @@ DouValue-Farms/
 │     │  ├─ integrity.js the eleven record checks and the scoring behind them
 │     │  ├─ crops.js     the three peppers: stages, spacing, feeding, water
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
-│     │  ├─ pests.js     32 problems, 67 symptoms, management for each
-│     │  ├─ diagnose.js  symptom scoring, next checks, risk board
+│     │  ├─ pests.js     32 local problems: products, PHI, weather response
+│     │  ├─ diagnose.js  triage rows, cards, look-alikes, confirm tests, risk board
 │     │  ├─ doctor.js    the Farm Doctor: limits, plans, gate evidence, follow-ups, lab
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
-│     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
-│     └─ ui/             shell, kit, worker, field, clinic, doctor, manage, audit, photo
+│     │  ├─ predict.js   yield, revenue, planting window, labour, stock, cashflow
+│     │  ├─ alerts.js    thresholds, the four-rung ladder, straight-to-Owner, the KPIs
+│     │  ├─ proof.js     what makes a photo evidence, and the zone confirmed at the start
+│     │  ├─ shift.js     end-of-shift reports and the farm manager's board
+│     │  ├─ stock.js     low stock, addressed to the Farm Manager
+│     │  ├─ supervision.js  supervised spray and gate screens until the trial is signed off
+│     │  └─ qr.js        zone door codes: the encoder, and reading one back
+│     └─ ui/             shell, kit, worker, field, clinic, doctor, ppe, manage, audit,
+│                        photo, chart (the trend), kpis, scan, shift, update (the prompt)
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
@@ -533,9 +573,16 @@ npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
-332 tests covering the diagnosis engine against known field cases, the six Farm Doctor
-limits one test each, pre-harvest and re-entry blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
-planting-window optimiser, event-log replay including out-of-order merges, the account
+577 tests covering the diagnosis engine against the rules JSON itself and against known
+field cases, the six Farm Doctor limits one test each, the active-ingredient catalogue and
+group rotation, both calculators, the escalation ladder, shift reports, the KPI screen, the
+zone QR codes and the update prompt, pre-harvest and re-entry
+blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
+planting-window optimiser, event-log replay including out-of-order merges, the escalation
+ladder rung by rung with the times shortened, the five things that go straight to the
+Owner, the success measures per week and per zone, the trap-count chart's geometry against
+its threshold line, the zone QR codes (the encoder against the specification's own worked
+example, and every code read back by a decoder written separately), the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own
 token trying to pull the wage bill, a hand pushing a sale, a hand pushing a record that
 promotes themselves, a manager trying to mint another manager, a reused invite, a wrong

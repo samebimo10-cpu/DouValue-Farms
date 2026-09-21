@@ -12,11 +12,23 @@ import { harvestClearance, reentryClearance, SPRAY_RULES } from '../domain/safet
 import { forecastHeadline, seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
-import { canComplete, stampFor } from '../domain/proof.js';
+import { canComplete, judgeZoneStart, stampFor, zoneStamp } from '../domain/proof.js';
+import { scanSupported, scanZone, zoneListSheet, zonePicker } from './scan.js';
 import { dayProgress, howTo } from '../domain/schedule.js';
 import {
-  bigNumber, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
+  bigNumber, buzz, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
 } from './field-kit.js';
+
+/**
+ * FR-PROOF-03 / UX-12 — the zone confirmed at the start of a task.
+ *
+ * Kept in memory rather than in the log: a confirmation that never turns into a
+ * completed task is not a record of anything. It lands in the log when the task
+ * closes, as part of the completion, which is where it is evidence.
+ */
+const zoneConfirmations = new Map();
+export function confirmationFor(taskId) { return zoneConfirmations.get(taskId) || null; }
+export function clearConfirmations() { zoneConfirmations.clear(); }
 
 let weather = null; // filled in by app.js when a forecast is available
 export function setWeather(w) { weather = w; }
@@ -114,6 +126,22 @@ export const todayView = {
       + '</div>',
     );
 
+    // FR-TASK-05 / UX-09 — the end of the day, in their own words. Its own
+    // card at the bottom of the screen, where the shift ends.
+    const filedToday = (state.shifts || [])
+      .some((sh) => (sh.personId || sh.by) === user.id && sh.date === today);
+    out += card(
+      cardHead('End of shift', filedToday ? badge('sent', 'ok') : badge('not yet', 'warn'))
+      + (filedToday
+        ? '<p><small>Today\'s report is in. The farm manager reads it and can comment on '
+          + 'it.</small></p>'
+        : '<p><small>Before you go: what did you see, and what did you do about it? A line is '
+          + 'enough, and it is the only record of the day in your own words.</small></p>')
+      + button(filedToday ? 'Read what you wrote' : 'Write today\'s report', 'go',
+        { cls: filedToday ? 'btn-ghost btn-block' : 'btn-block btn-lg', icon: '📝',
+          data: { to: '#/shifts' } }),
+    );
+
     const myHarvest = state.harvests.filter((h) => h.by === user.id && h.date === today);
     if (myHarvest.length) {
       out += card(
@@ -146,10 +174,44 @@ export const todayView = {
       const task = ctx.state.tasks[el.dataset.id];
       const verdict = canComplete(task, null);
       if (!verdict.ok) { openProofSheet(ctx, task, verdict); return; }
-      await ctx.store.dispatch('task.complete', { id: el.dataset.id });
+      const stamp = zoneConfirmations.get(task.id) || null;
+      const zoneVerdict = judgeZoneStart(task, stamp);
+      if (!zoneVerdict.ok) { toast(zoneVerdict.why, true); return; }
+      await ctx.store.dispatch('task.complete', { id: el.dataset.id, zoneCheck: stamp });
+      zoneConfirmations.delete(task.id);
       toast(getLang() === 'pcm' ? 'Well done' : 'Marked done');
     },
     'save-proof': saveProof,
+
+    // FR-PROOF-03: the door code, at the start of the job.
+    'scan-zone': async (ctx, el) => {
+      const task = ctx.state.tasks[el.dataset.id];
+      if (!task) return;
+      const result = await scanZone(ctx.state, { expectZoneId: task.zoneId });
+      if (!result.ok) {
+        // Cancelled, or the wrong door. scanZone has already said which.
+        if (result.reason === 'cancelled') openZonePicker(ctx, task, true);
+        return;
+      }
+      zoneConfirmations.set(task.id, zoneStamp({
+        zone: result.zone, method: 'qr', by: ctx.user.id,
+      }));
+      buzz();
+      toast(`${result.zone.name} confirmed`);
+      ctx.refresh();
+    },
+    'pick-zone': (ctx, el) => openZonePicker(ctx, ctx.state.tasks[el.dataset.id], false),
+    'choose-zone': (ctx, el) => {
+      const task = ctx.state.tasks[pickingFor];
+      const zone = ctx.state.plots[el.dataset.id];
+      if (!task || !zone) { closeSheet(); return; }
+      zoneConfirmations.set(task.id, zoneStamp({
+        zone, method: 'list', by: ctx.user.id,
+      }));
+      closeSheet();
+      toast(`${zone.name} chosen`);
+      ctx.refresh();
+    },
     'open-harvest': (ctx) => openHarvestSheet(ctx),
     'open-report': (ctx) => openReportSheet(ctx),
     'open-work': (ctx) => openWorkSheet(ctx),
@@ -160,10 +222,7 @@ export const todayView = {
     'save-harvest': (ctx, form) => saveHarvest(ctx, form),
     'save-report': (ctx, form) => saveReport(ctx, form),
     'save-work': (ctx, form) => saveWork(ctx, form),
-    'pick-photo': (ctx, el) => {
-      const fileInput = el.closest('.sheet').querySelector('input[type=file]');
-      if (fileInput) fileInput.click();
-    },
+    // 'pick-photo' is a shell action now, so every screen gets it.
   },
 };
 
@@ -208,10 +267,40 @@ function taskCard(state, task) {
       : '')
     + (task.status === 'done'
       ? `<p class="gate-row ok"><b>✓ Done</b> <small>${esc(task.doneNote || 'Recorded')}</small></p>`
-      : `<div style="margin-top:10px">${button(t('today.done'), 'task-done',
-        { cls: 'btn-block btn-lg', data: { id: task.id } })}</div>`),
+        + (task.zoneCheck
+          ? `<p><small>${esc(task.zoneCheck.label)}: ${esc(task.zoneCheck.zoneName)}</small></p>`
+          : '')
+      : startBlock(task)
+        + `<div style="margin-top:10px">${button(t('today.done'), 'task-done',
+          { cls: 'btn-block btn-lg', data: { id: task.id } })}</div>`),
     { cls: `task-card is-${state_}` },
   );
+}
+
+/**
+ * UX-12 and FR-PROOF-03 — confirm the zone before the job, not after it.
+ *
+ * Scanning is offered first where the phone can do it, and the list is always
+ * underneath. Nothing here blocks the work: a job with no confirmation still
+ * closes, it is simply worth less on the record.
+ */
+function startBlock(task) {
+  if (!task.zoneId) return '';
+  const done = zoneConfirmations.get(task.id);
+  if (done) {
+    return `<p class="gate-row ok"><b>✓ ${esc(done.zoneName)}</b> `
+      + `<small>${esc(done.label)}</small></p>`;
+  }
+  const picker = zonePicker();
+  return '<div class="row wrap" style="margin-top:10px">'
+    + button(picker.primary.label, picker.primary.act,
+      { cls: 'btn-ghost btn-sm', icon: picker.primary.icon, data: { id: task.id } })
+    + (picker.fallback
+      ? button(picker.fallback.label, picker.fallback.act,
+        { cls: 'btn-quiet btn-sm', icon: picker.fallback.icon, data: { id: task.id } })
+      : '')
+    + '</div>'
+    + `<p><small>${esc(picker.why)}</small></p>`;
 }
 
 function openProofSheet(ctx, task, verdict) {
@@ -233,6 +322,20 @@ function openProofSheet(ctx, task, verdict) {
   bindPhoto(el);
 }
 
+let pickingFor = null;
+
+/** UX-12's fallback: the zone list, always one tap away. */
+function openZonePicker(ctx, task, afterScan) {
+  if (!task) return;
+  pickingFor = task.id;
+  openSheet(zoneListSheet(ctx.state, {
+    title: 'Which zone are you in?',
+    why: afterScan
+      ? 'No code read. Choose the house you are standing in.'
+      : (scanSupported() ? null : 'This phone cannot scan codes, so choose from the list.'),
+  }));
+}
+
 async function saveProof(ctx, form) {
   const data = readForm(form);
   const task = ctx.state.tasks[data.taskId];
@@ -240,12 +343,20 @@ async function saveProof(ctx, form) {
   const verdict = canComplete(task, photo);
   if (!verdict.ok) { toast(verdict.why, true); return; }
 
+  // FR-PROOF-03: a confirmation for a different house is refused outright —
+  // it is the one case this whole check exists to catch.
+  const stamp = zoneConfirmations.get(task.id) || null;
+  const zoneVerdict = judgeZoneStart(task, stamp);
+  if (!zoneVerdict.ok) { toast(zoneVerdict.why, true); return; }
+
   const cycle = task.cycleId ? ctx.state.cycles[task.cycleId] : null;
   const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
   await ctx.store.dispatch('task.complete', {
     id: task.id,
     photo,
     note: data.note || '',
+    // FR-PROOF-03: where they were, and how sure the app is about it.
+    zoneCheck: stamp,
     // FR-PROOF-02: date, time, zone and person, in one shape everywhere.
     stamp: stampFor(photo, {
       zoneName: zone ? zone.name : null,
@@ -253,6 +364,7 @@ async function saveProof(ctx, form) {
       taskKind: task.kind,
     }),
   });
+  zoneConfirmations.delete(task.id);
   resetPhoto();
   closeSheet();
   toast(verdict.unverifiedTime

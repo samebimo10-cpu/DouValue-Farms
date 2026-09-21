@@ -60,14 +60,17 @@ export async function seedSampleFarm(store) {
   }
   events.push({ type: 'cycle.close', payload: { id: 'sp_c0', date: d(-150), note: 'Good season, ratooned then cleared.' } });
 
-  // Store
+  // Store. `reorderLevel` is the "set level" FR-STOCK-02 alerts the Farm
+  // Manager at: the sticky traps are deliberately under theirs, so the low
+  // stock alert is one of the things a trainee sees.
   const items = [
-    { id: 'sp_i1', name: 'Mancozeb 80% WP', kind: 'chemical', unit: 'kg', qty: 6, unitCost: 9500 },
-    { id: 'sp_i2', name: 'NPK 12-12-17+2MgO', kind: 'fertiliser', unit: 'bag', qty: 4, unitCost: 62000 },
-    { id: 'sp_i3', name: 'Urea 46-0-0', kind: 'fertiliser', unit: 'bag', qty: 1, unitCost: 58000 },
-    { id: 'sp_i4', name: 'Neem oil', kind: 'chemical', unit: 'litre', qty: 3, unitCost: 7000 },
-    { id: 'sp_i5', name: 'Agricultural lime', kind: 'fertiliser', unit: 'bag', qty: 8, unitCost: 15000 },
+    { id: 'sp_i1', name: 'Mancozeb 80% WP', kind: 'chemical', unit: 'kg', qty: 6, unitCost: 9500, reorderLevel: 2 },
+    { id: 'sp_i2', name: 'NPK 12-12-17+2MgO', kind: 'fertiliser', unit: 'bag', qty: 4, unitCost: 62000, reorderLevel: 2 },
+    { id: 'sp_i3', name: 'Urea 46-0-0', kind: 'fertiliser', unit: 'bag', qty: 1, unitCost: 58000, reorderLevel: 2 },
+    { id: 'sp_i4', name: 'Neem oil', kind: 'chemical', unit: 'litre', qty: 3, unitCost: 7000, reorderLevel: 2 },
+    { id: 'sp_i5', name: 'Agricultural lime', kind: 'fertiliser', unit: 'bag', qty: 8, unitCost: 15000, reorderLevel: 3 },
     { id: 'sp_i6', name: 'Harvest crates', kind: 'consumable', unit: 'piece', qty: 40, unitCost: 3500 },
+    { id: 'sp_i7', name: 'Yellow sticky traps', kind: 'consumable', unit: 'piece', qty: 18, unitCost: 350, reorderLevel: 60 },
   ];
   for (const item of items) events.push({ type: 'input.upsert', payload: item });
   for (let i = 1; i <= 8; i++) {
@@ -140,6 +143,30 @@ export async function seedSampleFarm(store) {
     ['spraying', 3, 'sp_c2'], ['drainage', 5, 'sp_c4'], ['mulching', 6, 'sp_c3']]) {
     events.push({ type: 'work.log', by: 'sp_emeka', payload: {
       id: uid('w'), activity, hours, cycleId, date: d(-Math.ceil(Math.random() * 10)) } });
+  }
+
+  // End-of-shift reports, so the Farm Manager's board is not empty in practice
+  // mode and a trainee can see what one looks like — including one that has
+  // been answered (FR-TASK-05, UX-09).
+  const shifts = [
+    ['sp_emeka', -2, 'sp_b2', 'Picked Bed 1 and Bed 2, about eleven crates between them. '
+      + 'Traps in Bed 2 looked busy, told Tamuno.'],
+    ['sp_blessing', -1, 'sp_b3', 'Cleared the drain along Bed 3 after the rain. Two plants at '
+      + 'the low end still standing in water.'],
+    ['sp_emeka', 0, 'sp_b1', 'Scouted Bed 1, counted the traps and replaced two. Nothing on the '
+      + 'young leaves today.'],
+  ];
+  for (const [person, offset, zoneId, observation] of shifts) {
+    const id = uid('sh');
+    events.push({ type: 'shift.record', by: person, payload: {
+      id, personId: person, date: d(offset), zoneId, observation },
+    at: new Date(`${d(offset)}T17:10:00`).toISOString() });
+    if (offset === -2) {
+      events.push({ type: 'shift.comment', by: 'sp_ada', payload: {
+        id: uid('shc'), shiftId: id,
+        note: 'Thank you — Tamuno counted Bed 2 this morning and it is over. Spray goes on at four.' },
+      at: new Date(`${d(offset + 1)}T07:20:00`).toISOString() });
+    }
   }
 
   // Money.

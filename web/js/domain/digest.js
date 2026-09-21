@@ -17,13 +17,12 @@
 // paying to download pictures of sticky traps.
 
 import { isoDate } from '../util.js';
-import { alerts, kpis, risingWarnings } from './alerts.js';
+import { alerts, kpis, OWNER_LEVELS, risingWarnings, straightToOwner } from './alerts.js';
 import { ownerNotifications } from './doctor.js';
 import { gateBoard } from './gates.js';
 import { sampleDataCheck } from './readiness.js';
 import { uncoveredToday } from './positions.js';
-import { stockForecast } from './predict.js';
-import { inputUsage, inputsList } from '../store.js';
+import { lowStock } from './stock.js';
 
 /**
  * Everything wrong on the farm right now, in priority order.
@@ -44,32 +43,31 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
     out.push({ severity: 'critical', line: `SAMPLE ACCOUNTS STILL ACTIVE: ${sample.why}`, detail: sample.fix });
   }
 
-  // 1. Suspected virus. FR-DIAG-04 sends this straight to the Owner, and it
-  //    outranks everything because by the time it is certain it is too late.
-  for (const d of state.diagnoses || []) {
-    if ((d.date || '') !== today) continue;
-    const problem = String(d.problemId || '');
-    if (!/virus|tospo|pvmv|cmv|leaf_curl/i.test(problem)) continue;
+  // 1. The straight-to-Owner list — rules `escalation.immediate_to_owner`.
+  //    Suspected virus, bacterial wilt, a gate override, pod borer past ten
+  //    plants, and any synthetic from Week 10. None of these wait on the
+  //    ladder: by the time a tospovirus is certain the house is gone.
+  for (const item of straightToOwner(state, { now })) {
     out.push({
-      severity: 'critical',
-      line: `VIRUS SUSPECTED: ${d.problemName || problem} on ${zoneOf(state, d.cycleId)}`,
-      detail: 'Isolate those plants, do not move tools or hands between houses, pull and burn '
-        + 'the affected ones. Confirm before replanting.',
+      severity: item.kind === 'virus' || item.kind === 'bacterial_wilt' ? 'critical' : 'warn',
+      line: item.line,
+      detail: `${item.detail} (straight to the Owner: ${item.rule})`,
     });
   }
 
   // 2. Open alerts that have climbed to the Owner. These are the ones the
   //    ladder has already tried to hand to two other people.
   const open = alerts(state, { now, settings: config }).filter((a) => a.status === 'open');
-  for (const a of open.filter((x) => x.level === 'owner')) {
+  for (const a of open.filter((x) => OWNER_LEVELS.has(x.level))) {
     out.push({
       severity: 'critical',
-      line: `${a.pestName} on ${a.zoneName} — ${Math.round(a.hoursOpen)}h open, still not closed`,
+      line: `${a.pestName} on ${a.zoneName} — ${Math.round(a.hoursOpen)}h open, still not closed`
+        + (a.kpiBreach ? ' (KPI breach)' : ''),
       detail: `Counted ${a.count} against a threshold of ${a.limit}.`
         + (a.vector ? ' This one carries virus.' : ''),
     });
   }
-  for (const a of open.filter((x) => x.level !== 'owner')) {
+  for (const a of open.filter((x) => !OWNER_LEVELS.has(x.level))) {
     out.push({
       severity: 'warn',
       line: `${a.pestName} on ${a.zoneName} — ${Math.round(a.hoursOpen)}h, with the ${
@@ -78,16 +76,10 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
     });
   }
 
-  // 3. Gate overrides. Somebody decided to go ahead without a check passing,
-  //    and FR-GATE-07 says the Owner sees every one.
+  // 3. Zones planted behind a closed gate. The overrides themselves came
+  //    through the straight-to-Owner list above (FR-GATE-07); this is the
+  //    worse case, where nobody even overrode anything.
   for (const row of gateBoard(state, { today })) {
-    for (const g of row.overridden) {
-      out.push({
-        severity: 'warn',
-        line: `${row.zone.name} open on an override — ${g.name}`,
-        detail: `Reason given: ${g.override.reason}`,
-      });
-    }
     if (row.planted && row.blocking.length) {
       out.push({
         severity: 'critical',
@@ -149,26 +141,19 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
     });
   }
 
-  // 6. Low stock, before it stops work rather than after.
-  const usage = inputUsage(state);
-  for (const item of inputsList(state)) {
-    const f = stockForecast(item, usage, new Date(now));
-    if (f.status !== 'critical' && f.status !== 'low') continue;
+  // 6. Low stock, before it stops work rather than after. FR-STOCK-02 sends
+  //    these to the Farm Manager, who is the person who orders things; the
+  //    Owner still sees them here, but is no longer the only one who does.
+  for (const row of lowStock(state, { now })) {
     out.push({
-      severity: f.status === 'critical' ? 'warn' : 'watch',
-      line: `${item.name} runs out in ${f.daysLeft} days`,
-      detail: f.text,
+      severity: row.severity === 'now' ? 'warn' : 'watch',
+      line: `${row.line} — ${row.to}`,
+      detail: row.detail,
     });
   }
 
   const rank = { critical: 0, warn: 1, watch: 2 };
   return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
-}
-
-function zoneOf(state, cycleId) {
-  const cycle = (state.cycles || {})[cycleId];
-  const zone = cycle ? (state.plots || {})[cycle.plotId] : null;
-  return zone ? zone.name : 'a zone';
 }
 
 /**

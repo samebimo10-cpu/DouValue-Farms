@@ -15,18 +15,21 @@
 //   useful; "cannot recommend" is how people learn to ignore a screen.
 
 import {
-  badge, button, card, cardHead, empty, esc, field, input, note, readForm, select, textarea, toast,
+  badge, button, card, cardHead, empty, esc, field, input, note, readForm, select, table, textarea,
+  toast,
 } from './kit.js';
 import { adviserView } from './adviser.js';
 import { photoThumb } from './photo.js';
 import { captureEvidence } from '../db.js';
+import { dosePlan, limePlan, parseRate, TANKS, TEXTURES } from '../domain/calc.js';
+import { ppeIcon } from './ppe.js';
 import {
   CONFIDENCE, LIMITS, WORKED, approvePlan, awaitingConfirmation, confirmOutput,
-  doctorRecords, draftCycleReview, followUpBoard, followUpRecord, gateEvidence,
+  doctorRecords, draftCycleReview, followUpBoard, followUpRecord, gateEvidence, ppeFor,
   labSamples, normalisePhotoReview, openLabSamples, ownerNotifications, photoReviewRequest,
   treatmentPlan,
 } from '../domain/doctor.js';
-import { getRules } from '../rules.js';
+import { rulesLoaded } from '../rules.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
 import { activeCycles, can, cycleLabel } from '../store.js';
 import { reviewPhotos } from '../sync.js';
@@ -37,6 +40,7 @@ const TABS = [
   { id: 'ask', label: 'Ask', icon: '🧠' },
   { id: 'photo', label: 'Photos', icon: '📷' },
   { id: 'plan', label: 'Plan', icon: '💊' },
+  { id: 'calc', label: 'Calculators', icon: '⚖️' },
   { id: 'gates', label: 'Gates', icon: '🚧' },
   { id: 'checks', label: 'Checks', icon: '🔁' },
   { id: 'lab', label: 'Lab', icon: '🧪' },
@@ -51,6 +55,9 @@ let reviewing = false;
 let review = null;          // the last normalised photo review
 let reviewProblem = '';
 let gateZone = '';
+let doseForm = null;          // the rate typed into the dose calculator
+let limeForm = null;          // the three readings, the texture and the area
+let limeResult = null;
 let planFor = null;         // { cycleId, problemId, plan }
 
 function currentTab() {
@@ -68,6 +75,7 @@ export const doctorView = {
     switch (active) {
       case 'photo': body += photoPanel(ctx); break;
       case 'plan': body += planPanel(ctx); break;
+      case 'calc': body += calcPanel(ctx); break;
       case 'gates': body += gatePanel(ctx); break;
       case 'checks': body += checksPanel(ctx); break;
       case 'lab': body += labPanel(ctx); break;
@@ -169,6 +177,27 @@ export const doctorView = {
       ctx.refresh();
     },
 
+    // --- FR-DOC-05: the two calculators ---------------------------------
+    'doctor-dose': (ctx, form) => {
+      doseForm = form && form.tagName === 'FORM' ? readForm(form) : {};
+      ctx.refresh();
+    },
+    'doctor-lime': (ctx, form) => {
+      limeForm = form && form.tagName === 'FORM' ? readForm(form) : {};
+      limeResult = limePlan({
+        readings: [limeForm.ph1, limeForm.ph2, limeForm.ph3],
+        texture: limeForm.texture,
+        areaM2: Number(limeForm.areaM2) || 0,
+        zoneType: limeForm.zoneType,
+        solarised: !!limeForm.solarised,
+        transplantDate: limeForm.transplantDate || null,
+        holdSince: limeForm.holdSince || null,
+        limeDate: isoDate(),
+        today: isoDate(),
+      });
+      ctx.refresh();
+    },
+
     // --- FR-DOC-10: saving an output ------------------------------------
     'doctor-save': async (ctx, el) => {
       const payload = pendingOutput(ctx, el.dataset.what);
@@ -260,7 +289,7 @@ function head(ctx, active) {
   const waiting = awaitingConfirmation(ctx.state);
   return card(
     cardHead('Farm Doctor',
-      getRules() ? badge('rules loaded', 'ok') : badge('rules not loaded', 'warn'))
+      rulesLoaded() ? badge('rules loaded', 'ok') : badge('rules not loaded', 'warn'))
     + '<p><small>Diagnosis, treatment plans, gate evidence and follow-up checks — and the '
     + 'farm adviser, in the same place. It advises; people decide. It never clears a gate, '
     + 'confirms its own diagnosis, approves its own plan, or names a product that is not in '
@@ -457,6 +486,128 @@ function latestConfirmedDiagnosis(state, cycleId) {
     .filter((d) => d.cycleId === cycleId && d.confirmedBy)
     .sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))[0];
   return found ? found.id : null;
+}
+
+// --- FR-DOC-05: the dose and lime calculators -----------------------------
+
+function calcPanel(ctx) {
+  return doseCard(ctx) + limeCard(ctx) + ppeCard(ctx);
+}
+
+/**
+ * The dose, per knapsack and per tank.
+ *
+ * A rate is a number the rules or a label gives. This does the arithmetic and
+ * nothing else — it will not invent a rate it was not given (FR-DOC-08), which
+ * is why the only input is the rate itself.
+ */
+function doseCard(ctx) {
+  const typed = (doseForm && doseForm.rate) || '';
+  const rate = typed ? parseRate(typed) : null;
+  const plan = rate && rate.ok !== false ? dosePlan(rate) : null;
+
+  return card(
+    cardHead('Dose calculator')
+    + '<p><small>Type the rate off the label or the schedule — "0.3 ml/L", "2.5 g/L", '
+    + '"150 ml / 16 L". The calculator does the arithmetic for the knapsack and both tanks. '
+    + 'It will not make up a rate it was not given.</small></p>'
+    + '<form data-act="doctor-dose">'
+    + field('Rate', input('rate', { value: typed, placeholder: 'e.g. 2.5 g/L' }))
+    + '<button class="btn-block btn-lg" type="submit">Work out the dose</button>'
+    + '</form>'
+    + (typed && !plan
+      ? note('warn', 'That is not a rate the app can read',
+        '<small>A rate looks like "2.5 g/L" or "150 ml / 16 L". Words like "per label" are a '
+        + 'pointer, not a dose.</small>')
+      : '')
+    + (plan
+      ? table([{ label: 'Tank' }, { label: 'Product', num: true }],
+        plan.tanks.map((t) => [t.label, t.text || `${t.amount} ${t.unit}`]))
+      : ''),
+  );
+}
+
+/**
+ * FR-DOC-05 — three pH readings, a texture and a bed area, and out comes a
+ * route, a product and kilograms. Or, just as often, "hold and re-test in ten
+ * days", which is the rules refusing to let a block be limed twice off one
+ * reading.
+ */
+function limeCard(ctx) {
+  const f = limeForm || {};
+  return card(
+    cardHead('Lime calculator')
+    + '<p><small>Three points per block, a calibrated meter, and the texture of the soil. '
+    + 'The route and the rate come from the rules.</small></p>'
+    + '<form data-act="doctor-lime">'
+    + '<div class="row wrap">'
+    + field('pH point 1', input('ph1', { type: 'number', step: '0.1', value: f.ph1 || '' }))
+    + field('pH point 2', input('ph2', { type: 'number', step: '0.1', value: f.ph2 || '' }))
+    + field('pH point 3', input('ph3', { type: 'number', step: '0.1', value: f.ph3 || '' }))
+    + '</div>'
+    + field('Soil texture', select('texture',
+      TEXTURES.map((t) => ({ value: t.id, label: t.label || t.name || t.id })), f.texture || ''))
+    + field('Area to treat (m²)', input('areaM2', { type: 'number', value: f.areaM2 || '' }),
+      'Greenhouse: the bed area only. Open field: the full cropped area.')
+    + field('Where', select('zoneType', [
+      { value: 'greenhouse', label: 'Greenhouse — bed area only' },
+      { value: 'field', label: 'Open field — full cropped area' },
+    ], f.zoneType || 'greenhouse'))
+    + `<label class="tick ${f.solarised ? 'on' : ''}">`
+    + `<input type="checkbox" name="solarised" ${f.solarised ? 'checked' : ''} `
+    + 'style="width:24px;height:24px;margin-right:10px">'
+    + '<span class="txt"><b>Already under solarisation plastic</b>'
+    + '<span class="pid">Route B and hydrated lime. Unticked means Route A, at T-35 to T-28.</span></span></label>'
+    + field('Transplant date, if it is set', input('transplantDate',
+      { type: 'date', value: f.transplantDate || '' }))
+    + field('Date the block went on hold, if it did', input('holdSince',
+      { type: 'date', value: f.holdSince || '' }),
+      'Only for a block already held between 5.2 and 5.49. Leaves the 10-day clock where it is.')
+    + '<button class="btn-block btn-lg" type="submit">Work out the lime</button>'
+    + '</form>',
+  ) + (limeResult ? limeOut(limeResult) : '');
+}
+
+function limeOut(result) {
+  if (!result.ok) {
+    return card(note('danger', result.why, `<small>${esc(result.fix || '')}</small>`));
+  }
+  const tone = result.band === 'in-range' ? 'ok' : result.band === 'hold' ? 'warn' : 'danger';
+  return card(
+    cardHead('What to do', badge(
+      result.band === 'hold' ? 'held' : result.band === 'in-range' ? 'clear' : `Route ${result.route || '—'}`,
+      tone))
+    + note(tone, result.headline || '', `<small>${esc(result.detail || '')}</small>`)
+    + (result.reading
+      ? `<p><small>Three points: ${esc(result.reading.points.join(', '))} — average `
+        + `<b>${esc(String(result.reading.mean))}</b>, spread ${esc(String(result.reading.spread))}. `
+        + `Gate is ${esc(String(result.gateMin))}–${esc(String(result.gateMax))}.</small></p>`
+      : '')
+    + (result.kgText ? `<div class="dose-big">${esc(result.kgText)}</div>` : '')
+    + (result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
+    + ((result.locks || []).length
+      ? '<ul class="list">' + result.locks.map((l) => `<li><div class="grow"><b>${esc(l.what || l.label || '')}</b>`
+        + `<small>${esc(l.why || l.detail || '')}</small></div></li>`).join('') + '</ul>'
+      : ''),
+  );
+}
+
+/** FR-TREAT-04 — the gear, as pictures, before anyone opens a container. */
+function ppeCard(ctx) {
+  const kit = rulesLoaded() ? ppeFor({ task: 'spray' }) : null;
+  const lime = rulesLoaded() ? ppeFor({ task: 'lime' }) : null;
+  if (!kit) return '';
+  const row = (k) => '<div class="row wrap">' + k.items.map((i) => '<div class="ppe-item">'
+    + ppeIcon(i.id) + `<b>${esc(i.label)}</b><small>${esc(i.why)}</small></div>`).join('') + '</div>';
+  return card(
+    cardHead('The gear')
+    + '<p><small>Shown before the task starts, and confirmed with a tap on the spray screen. '
+    + `${esc(kit.rule || '')}</small></p>`
+    + '<h3>Any spray</h3>' + row(kit)
+    + (kit.after ? `<p><small>${esc(kit.after)}</small></p>` : '')
+    + '<h3>Hydrated lime</h3>' + row(lime)
+    + (lime.briefing ? note('warn', 'And a briefing', `<small>${esc(lime.briefingText)}</small>`) : ''),
+  );
 }
 
 // --- FR-DOC-06: gates -----------------------------------------------------

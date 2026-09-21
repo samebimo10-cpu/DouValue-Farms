@@ -230,7 +230,14 @@ small { font-size: .875rem; color: var(--ink-2); }
 .syncbar.danger { background: var(--danger-bg); color: var(--danger); }
 .syncbar.info { background: var(--info-bg); color: var(--info); }
 
-.photo-input { display: none; }
+.photo-input, .reference-input { display: none; }
+
+/* A reference picture inside a tick. It sits beside the words, never instead
+   of them: a slot with no photo must read exactly as well as one with. */
+.tick-img { flex: 0 0 auto; }
+.tick-img img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; display: block; }
+.ref-shot img { max-width: 100%; border-radius: 12px; display: block; }
+.ref-missing { opacity: 0.72; }
 .photo-shot { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; }
 .photo-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 
@@ -629,3 +636,108 @@ pre.working {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* --- The escalation ladder — FR-SCOUT-04 ---------------------------------
+   Four rungs, with what has already been tried shown as tried. Each carries a
+   shape as well as a colour (UX-07), because this is read in sunlight. */
+.ladder { list-style: none; margin: 10px 0 0; padding: 0; border-left: 2px solid var(--line); }
+.ladder .rung { display: flex; gap: 8px; padding: 4px 0 4px 10px; margin-left: -2px;
+  border-left: 2px solid transparent; }
+.ladder .rung .ic { width: 1.1em; font-weight: 800; }
+.ladder .rung small { display: block; color: var(--ink-2); }
+.ladder .is-done { border-left-color: var(--danger); }
+.ladder .is-done .ic { color: var(--danger); }
+.ladder .is-skip { opacity: .65; }
+.ladder .is-skip .ic { color: var(--ok); }
+.ladder .is-todo { opacity: .7; }
+.ladder .is-todo .ic { color: var(--ink-2); }
+.note .rule { display: block; color: var(--ink-2); font-style: italic; }
+
+/* --- The trap-count trend — FR-SCOUT-06 ----------------------------------
+   Heavy strokes and large dots: this is read at arm's length in bright sun.
+   The threshold line is the reason the chart exists, so it is the most
+   visible thing on it, and the caption says the same thing in words. */
+.trend { margin: 12px 0 0; }
+.trend-head { margin-bottom: 4px; }
+.trend-svg { display: block; width: 100%; height: auto; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px; }
+.trend-svg .axis { stroke: var(--line); stroke-width: 1; }
+.trend-svg .trend-line { fill: none; stroke: var(--accent); stroke-width: 2.5;
+  stroke-linejoin: round; stroke-linecap: round; }
+.trend-svg circle { fill: var(--accent); }
+.trend-svg circle.over { fill: var(--danger); stroke: var(--surface); stroke-width: 1.5; }
+.trend-svg .threshold { stroke: var(--danger); stroke-width: 2; stroke-dasharray: 5 4; }
+.trend-svg .threshold-label { fill: var(--danger); font-size: 9px; font-weight: 700; }
+.trend-svg .tick { fill: var(--ink-2); font-size: 9px; }
+.trend-caption { margin: 4px 0 0; color: var(--ink-2); }
+.trend-empty { margin: 4px 0 0; color: var(--ink-2); }
+
+/* KPI week grid — a tick or a cross, never a number on its own. */
+.kpi-ok { color: var(--ok); }
+.kpi-bad { color: var(--danger); }
+
+/* --- Door codes to print — FR-FARM-03 ------------------------------------
+   On screen: a grid. On paper: one per third of a page, with a cut line, so a
+   sheet comes out of the printer ready to be cut up and taped to nine doors. */
+.qr-sheet { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.qr-card { margin: 0; padding: 12px; background: #fff; border: 1px dashed #999;
+  border-radius: 10px; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+.qr-card svg { width: 100%; height: auto; max-width: 240px; }
+.qr-card figcaption b { display: block; font-size: 1.6rem; line-height: 1.1; margin-top: 6px;
+  color: #000; }
+.qr-card figcaption small { display: block; color: #333; }
+
+@media print {
+  .qr-sheet { grid-template-columns: repeat(2, 1fr); gap: 0; }
+  .qr-card { border-style: dashed; border-color: #000; margin: 0; padding: 10mm 4mm; }
+  .update-host, .scan-box { display: none !important; }
+}
+
+/* --- Scanning a door code — UX-12 ---------------------------------------- */
+.scan-box { position: relative; aspect-ratio: 1; background: #000; border-radius: 12px;
+  overflow: hidden; margin: 8px 0; }
+.scan-box video { width: 100%; height: 100%; object-fit: cover; }
+
+/* A list you choose from with one thumb — the fallback when there is no
+   camera, and for anybody who prefers it. */
+.list.big li { padding: 14px 12px; min-height: 56px; }
+.list.big li b { font-size: 1.05rem; }
+
+/* --- "New version — tap to update" — NFR-OFF-05 --------------------------
+   Above everything, because it is the one message that is about the app
+   itself. It never covers the tab bar, and it never acts on its own. */
+.update-host { position: fixed; left: 0; right: 0; bottom: 74px; z-index: 60;
+  display: flex; justify-content: center; padding: 0 12px; }
+.update-bar { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 480px;
+  padding: 10px 12px; border-radius: 12px; background: var(--brand-navy); color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .28); }
+.update-bar b { flex: 1; font-size: .95rem; }
+.update-bar button { min-height: 40px; padding: 0 14px; border: 0; border-radius: 8px;
+  background: var(--brand-green); color: #fff; font-weight: 700; }
+.update-bar button.later { background: transparent; color: var(--topbar-ink-2);
+  padding: 0 6px; font-weight: 600; }
+/* FR-TREAT-04 — the protective gear, as pictures big enough to read at arm's
+   length in the sun, and at least 56 dp apart so a gloved thumb can tap past
+   them (UX-03). */
+.ppe-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:12px 0; }
+.ppe-item { margin:0; padding:12px; border:2px solid var(--line); border-radius:14px; text-align:center;
+  display:flex; flex-direction:column; align-items:center; gap:6px; background:var(--surface); }
+.ppe-item .ppe-art { color:var(--ink); }
+.ppe-item figcaption b { display:block; font-size:15px; line-height:1.25; }
+.ppe-item figcaption small { display:block; color:var(--ink-2); font-size:13px; line-height:1.3; }
+
+/* The Farm Doctor's plan check: one row per rule, so a refusal points at the
+   rule it failed rather than at the whole plan. */
+.check-list { list-style:none; margin:0; padding:0; }
+.check-row { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+.check-row:last-child { border-bottom:0; }
+.check-row .mark { flex:0 0 28px; font-size:20px; line-height:1.2; text-align:center; }
+.check-row.pass .mark { color:var(--ok); }
+.check-row.warn .mark { color:var(--warn); }
+.check-row.fail .mark { color:var(--danger); }
+.check-row.na .mark { color:var(--ink-2); }
+.check-row .body { flex:1 1 auto; min-width:0; }
+.check-row .body b { display:block; font-size:15px; }
+.check-row .body small { display:block; color:var(--ink-2); font-size:13px; line-height:1.35; }
+.check-row .body .ref { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; opacity:.75; }
+.dose-big { font-size:30px; font-weight:700; line-height:1.1; }

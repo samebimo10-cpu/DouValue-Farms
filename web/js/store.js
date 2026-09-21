@@ -5,6 +5,7 @@
 // notification.
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
+import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
 import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
@@ -146,11 +147,16 @@ const EMPTY = () => ({
   cycles: {},
   tasks: {},
   inputs: {},
+  actives: {},
+  labels: {},
   harvests: [],
   sales: [],
   sprays: [],
   scouts: [],
   diagnoses: [],
+  doctorOutputs: [],
+  // Reference photos for the triage rows and diagnosis cards, keyed by slot.
+  referencePhotos: {},
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
@@ -169,6 +175,7 @@ const EMPTY = () => ({
   workLogs: [],
   weather: [],
   reports: [],
+  shifts: [],
   log: [],
   orphans: [],
 });
@@ -198,7 +205,9 @@ export function reduce(events) {
       case 'task.create': return `task:${p.id}`;
       case 'harvest.record': return `harvest:${p.id}`;
       case 'report.record': return `report:${p.id}`;
+      case 'shift.record': return `shift:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
+      case 'label.add': return `label:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
@@ -219,7 +228,9 @@ export function reduce(events) {
       case 'task.update': case 'task.complete': case 'task.cancel': return `task:${p.id}`;
       case 'harvest.verify': return `harvest:${p.id}`;
       case 'report.resolve': return `report:${p.id}`;
+      case 'shift.comment': return `shift:${p.shiftId}`;
       case 'input.receive': case 'input.issue': return `input:${p.itemId}`;
+      case 'label.retire': return `label:${p.id}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
@@ -241,6 +252,7 @@ export function reduce(events) {
       case 'cycle': return !!state.cycles[id];
       case 'task': return !!state.tasks[id];
       case 'input': return !!state.inputs[id];
+      case 'label': return !!state.labels[id];
       case 'person': return !!state.people[id];
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
@@ -252,6 +264,7 @@ export function reduce(events) {
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
       case 'report': return state.reports.some((r) => r.id === id);
+      case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
       default: return true;
     }
@@ -475,6 +488,8 @@ export function reduce(events) {
         // happened, so they belong on the task rather than in a side list.
         if (p.photo) state.tasks[p.id].photo = p.photo;
         if (p.stamp) state.tasks[p.id].stamp = p.stamp;
+        // FR-PROOF-03: which zone was confirmed at the start, and how.
+        if (p.zoneCheck) state.tasks[p.id].zoneCheck = p.zoneCheck;
         break;
       case 'task.cancel':
         state.tasks[p.id].status = 'cancelled';
@@ -517,11 +532,46 @@ export function reduce(events) {
         state.diagnoses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
 
+      // FR-DIAG-02 / FR-DOC-01 — a diagnosis the Farm Doctor produced cannot be
+      // confirmed until the card, the photos and the confirm test are all on
+      // the record. Replay enforces it as well as the screens do, because a
+      // phone that skipped the flow must not be able to sync its way past it.
+      //
+      // Records from before the rules engine carry no card and no confirm step.
+      // They are left exactly as they were confirmed at the time: the event log
+      // is a record of what people actually did, and rewriting history here
+      // would make every past treatment look ungated.
       case 'diagnosis.confirm': {
         const d = state.diagnoses.find((x) => x.id === p.id);
-        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        if (!d) break;
+        if (!isLegacyDiagnosis(d) && !confirmStepDone(d)) {
+          d.confirmRefused = 'The confirm test and the photos were not on the record.';
+          break;
+        }
+        d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || '';
         break;
       }
+
+      // FR-DIAG-01 — the reference photo beside each triage row and card.
+      //
+      // Only a slot the rules actually have is accepted. The rules JSON is the
+      // source of truth and the app never writes to it, so the picture lives
+      // here in the log instead, and a slot that no longer exists after a rules
+      // change quietly stops being shown rather than inventing a row.
+      case 'reference.photo.set': {
+        if (!isPhotoSlot(p.slot) || !p.photo || !p.photo.dataUrl) break;
+        state.referencePhotos[p.slot] = {
+          slot: p.slot,
+          photo: p.photo,
+          caption: p.caption || '',
+          by: e.by,
+          at: e.at,
+        };
+        break;
+      }
+      case 'reference.photo.clear':
+        delete state.referencePhotos[p.slot];
+        break;
 
       case 'report.record':
         state.reports.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: 'open' });
@@ -529,6 +579,22 @@ export function reduce(events) {
       case 'report.resolve': {
         const r = state.reports.find((x) => x.id === p.id);
         if (r) { r.status = 'resolved'; r.resolution = p.note || ''; r.resolvedBy = e.by; r.resolvedAt = e.at; }
+        break;
+      }
+
+      // FR-TASK-05 / UX-09: the end-of-shift report. Deliberately not a
+      // problem report — everybody files one at the end of an ordinary day,
+      // and it is never "resolved", only read and answered.
+      case 'shift.record':
+        state.shifts.push({
+          ...p, id: p.id || e.id, personId: p.personId || e.by, by: e.by, at: e.at, comments: [],
+        });
+        break;
+      case 'shift.comment': {
+        const shift = state.shifts.find((x) => x.id === p.shiftId);
+        if (shift) {
+          shift.comments.push({ id: p.id || e.id, note: p.note || '', by: e.by, at: e.at });
+        }
         break;
       }
 
@@ -546,6 +612,27 @@ export function reduce(events) {
       case 'input.issue':
         state.inputs[p.itemId].qty = (Number(state.inputs[p.itemId].qty) || 0) - Number(p.qty || 0);
         state.stockMoves.push({ ...p, id: p.id || e.id, direction: 'out', by: e.by, at: e.at });
+        break;
+
+      // --- The chemical catalogue (requirements 6.8) --------------------
+      // The twenty actives and their IRAC/FRAC groups come from the rules file
+      // and are never written here. What the farm records is only what the
+      // rules leave to it: an active the Owner has added, with its group, and
+      // the brand labels a manager attaches to actives already in the
+      // catalogue. Both are read through domain/catalogue.js, which drops any
+      // banned active whatever the log says — so a bad merge cannot put
+      // carbofuran back on a spray screen.
+      case 'active.add':
+        state.actives[p.id] = { ...p, by: e.by, at: e.at };
+        break;
+      case 'label.add':
+        state.labels[p.id] = { ...(state.labels[p.id] || {}), ...p, by: e.by, at: e.at };
+        break;
+      case 'label.retire':
+        if (state.labels[p.id]) {
+          state.labels[p.id].retired = true;
+          state.labels[p.id].retiredBy = e.by;
+        }
         break;
 
       case 'weather.record':
@@ -734,6 +821,11 @@ export function openTasks(state, personId = null, onDate = null) {
 
 export function openReports(state) {
   return state.reports.filter((r) => r.status === 'open');
+}
+
+/** Today's end-of-shift reports (FR-TASK-05). Not the same list as openReports. */
+export function shiftsOn(state, day = isoDate()) {
+  return (state.shifts || []).filter((s) => s.date === day);
 }
 
 export function harvestsBetween(state, from, to) {

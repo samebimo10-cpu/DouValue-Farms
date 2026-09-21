@@ -19,12 +19,19 @@ import {
   labourForecast, revenueForecast, stockForecast, breakEven,
 } from '../domain/predict.js';
 import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
+import { lowStock, lowStockSummary, reorderLevel } from '../domain/stock.js';
+import { maySignOff, signOffPayload, trialRecord } from '../domain/supervision.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
-import { harvestClearance, PRODUCTS } from '../domain/safety.js';
+import { harvestClearance } from '../domain/safety.js';
+import {
+  buildCatalogue, canUseActive, checkAddActive, checkAddLabel, migrateStockToActives,
+  planStockMigration, rateFor,
+} from '../domain/catalogue.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
 import { spraysForCycle } from '../store.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { hashPin } from './shell.js';
+import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -142,6 +149,8 @@ export const dashboardView = {
       + '<div class="grid">'
       + button('Today\'s digest', 'go', { cls: 'btn-ghost', icon: '📨', data: { to: '#/digest' } })
       + button('Alerts', 'go', { cls: 'btn-ghost', icon: '🚨', data: { to: '#/alerts' } })
+      + button('Success measures', 'go', { cls: 'btn-ghost', icon: '📈', data: { to: '#/kpis' } })
+      + button('End-of-shift reports', 'go', { cls: 'btn-ghost', icon: '📝', data: { to: '#/shifts' } })
       + button('Ask the adviser', 'go', { cls: 'btn-ghost', icon: '🧠', data: { to: '#/adviser' } })
       + button('Farm check', 'go', { cls: 'btn-ghost', icon: '🔎', data: { to: '#/audit' } })
       + button('Planting planner', 'go', { cls: 'btn-ghost', icon: '📅', data: { to: '#/plan' } })
@@ -186,12 +195,14 @@ function buildAlerts(ctx, cycles, cal) {
     });
   }
 
-  const usage = inputUsage(state);
-  for (const item of inputsList(state)) {
-    const f = stockForecast(item, usage);
-    if (f.status === 'critical' || f.status === 'low') {
-      alerts.push({ title: `${item.name} running out`, detail: f.text, to: '#/store' });
-    }
+  // FR-STOCK-02: low stock is the Farm Manager's to act on, so it is on their
+  // board by name rather than only in the Owner's digest tomorrow morning.
+  for (const row of lowStock(state)) {
+    alerts.push({
+      title: `${row.line} — ${row.to}`,
+      detail: row.detail,
+      to: '#/store',
+    });
   }
 
   const stages = cycles.map((c) => ({
@@ -616,14 +627,33 @@ export const storeView = {
     const { state } = ctx;
     const items = inputsList(state);
     const usage = inputUsage(state);
+    const low = lowStockSummary(state);
+    const catalogue = buildCatalogue(state);
 
-    return card(
+    return (low.count
+      // FR-STOCK-02: at the top of the screen, addressed to the person who
+      // orders things, before the input is needed rather than after.
+      ? card(
+        cardHead('To order', badge(low.text, low.urgent ? 'danger' : 'warn'))
+        + `<p><small>For the ${esc(low.to ? `Farm Manager (${low.to.name})` : 'Farm Manager')}. `
+        + 'Ordering today lands in about two weeks, which is why this says it now.</small></p>'
+        + '<ul class="list">' + low.rows.map((r) => '<li><div class="grow">'
+          + `<b>${esc(r.line)}</b><small>${esc(r.detail)}</small></div>`
+          + badge(r.severity === 'now' ? 'order now' : 'order soon',
+            r.severity === 'now' ? 'danger' : 'warn') + '</li>').join('') + '</ul>',
+      )
+      : '')
+    + card(
       cardHead('Store', button('Add item', 'open-input', { cls: 'btn-sm' }))
       + (items.length
         ? '<ul class="list">' + items.map((item) => {
           const f = stockForecast(item, usage);
+          const level = reorderLevel(item);
+          const active = item.activeId ? catalogue.byId[item.activeId] : null;
           return `<li><div class="grow"><b>${esc(item.name)}</b>`
-            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}</small></div>`
+            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}`
+            + `${level ? ` · reorder at ${esc(level)} ${esc(item.unit)}` : ''}`
+            + (active ? ` · ${esc(active.name)} (${esc(active.group)})` : '') + '</small></div>'
             + badge(f.status === 'critical' ? 'order now' : f.status === 'low' ? 'low' : 'ok',
               f.status === 'critical' ? 'danger' : f.status === 'low' ? 'warn' : 'ok')
             + button('Move', 'open-move', { cls: 'btn-sm btn-ghost', data: { id: item.id } })
@@ -639,7 +669,8 @@ export const storeView = {
             state.inputs[m.itemId]?.name || m.itemId,
             m.direction === 'in' ? 'received' : 'issued',
             round(m.qty, 2)]))
-        : '<p><small>Nothing moved yet.</small></p>'));
+        : '<p><small>Nothing moved yet.</small></p>'))
+    + catalogueCard(ctx, catalogue);
   },
 
   actions: {
@@ -647,14 +678,145 @@ export const storeView = {
     'save-input': (ctx, form) => saveInput(ctx, form),
     'open-move': (ctx, el) => openMoveSheet(ctx, el.dataset.id),
     'save-move': (ctx, form) => saveMove(ctx, form),
+    'open-label': (ctx) => openLabelSheet(ctx),
+    'save-label': (ctx, form) => saveLabel(ctx, form),
+    'open-active': (ctx) => openActiveSheet(ctx),
+    'save-active': (ctx, form) => saveActive(ctx, form),
+    'match-stock': (ctx) => matchStock(ctx),
   },
 };
+
+/**
+ * The active-ingredient catalogue — FR-STOCK-05, 06, 08 and 09.
+ *
+ * Twenty actives with their IRAC/FRAC groups, straight out of the rules file.
+ * What the farm adds is only what the rules leave to it: brand labels, and (for
+ * the Owner alone) an active the rules do not list. Nothing here is typed twice
+ * — the group on a label is the group of its active.
+ */
+function catalogueCard(ctx, catalogue) {
+  const plan = planStockMigration(ctx.state, catalogue);
+  const mayLabel = can(ctx.user, 'settings');
+  const mayActive = can(ctx.user, 'manageOwners');
+
+  const rows = catalogue.actives.map((a) => {
+    const usable = canUseActive(catalogue, a.id);
+    const rate = rateFor(catalogue, a.id);
+    return [
+      a.name,
+      a.group,
+      usable.ok ? rate.rate : 'no rate — needs a label',
+      a.labels.length ? a.labels.map((l) => l.brand).join(', ') : '—',
+    ];
+  });
+
+  return card(cardHead('Chemical catalogue',
+    (mayLabel ? button('Add brand label', 'open-label', { cls: 'btn-sm' }) : '')
+    + (mayActive ? button('Add active', 'open-active', { cls: 'btn-sm btn-ghost' }) : ''))
+    + (plan.matched.length
+      ? note('info', `${plan.matched.length} store item${plan.matched.length === 1 ? '' : 's'} `
+        + 'can be put onto an active ingredient',
+        `<small>${esc(plan.matched.map((r) => `${r.name} → ${r.active.name}`).join(', '))}. `
+        + 'Nothing is rewritten: the match is recorded against the item, and every past treatment '
+        + `stays exactly as it was (${plan.treatmentsBefore} on record).</small>`)
+        + button('Match them', 'match-stock', { cls: 'btn-block' })
+      : '')
+    + '<p><small>Treatments are chosen by active ingredient, and the resistance group comes with it. '
+    + 'A brand is a label attached to an active, never a product of its own.</small></p>'
+    + table([{ label: 'Active ingredient' }, { label: 'Group' }, { label: 'Rate' }, { label: 'Brands' }], rows)
+    + (plan.unmatchedChemicals.length
+      ? note('warn', 'Store items with no active ingredient yet',
+        `<small>${esc(plan.unmatchedChemicals.map((r) => r.name).join(', '))}. `
+        + 'Until one is attached they cannot be sprayed, because the rotation gate has no group to read.</small>')
+      : '')
+    + (mayActive ? '' : '<p><small>Only the Owner can add a new active ingredient, and must give its '
+      + 'IRAC or FRAC group.</small></p>'));
+}
+
+/** FR-STOCK-05 — the one-tap version of the boot-time migration, for a manager. */
+async function matchStock(ctx) {
+  const before = (ctx.state.sprays || []).length;
+  const result = await migrateStockToActives(ctx.store, buildCatalogue(ctx.state));
+  const after = (ctx.store.state.sprays || []).length;
+  toast(`${result.written} item${result.written === 1 ? '' : 's'} matched · `
+    + `${after} treatment${after === 1 ? '' : 's'} on record, ${before === after ? 'unchanged' : 'CHANGED'}`);
+}
+
+function openLabelSheet(ctx) {
+  const catalogue = buildCatalogue(ctx.state);
+  const el = openSheet('<h2>Add a brand label</h2>'
+    + '<p><small>The group fills in from the active ingredient, so it cannot be mistyped.</small></p>'
+    + '<form data-act="save-label">'
+    + field('Brand name', input('brand', { required: true, placeholder: 'e.g. Punch' }))
+    + field('Active ingredient or ingredients',
+      `<select name="activeIds" multiple size="8">`
+      + catalogue.actives.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.group)}</option>`).join('')
+      + '</select>')
+    + field('Formulation', input('formulation', { placeholder: 'e.g. 45SC, 80WP' }))
+    + field('Concentration', input('concentration', { placeholder: 'e.g. 45 g/L' }))
+    + field('Label rate', input('rate', { placeholder: 'e.g. 0.3 ml/L' }))
+    + field('Label PHI, in days', input('phiDays', { type: 'number', min: 0, placeholder: 'blank uses the default' }))
+    + field('Label REI, in hours', input('reiHours', { type: 'number', min: 0, placeholder: 'blank uses the default' }))
+    + '<p><small>Leave PHI or REI blank and the default applies: 24 hours before re-entry, 14 days before '
+    + 'picking for a synthetic. A figure off the label is used only if it is longer.</small></p>'
+    + photoField('Photo of the label',
+      'The container is the record. A photo of the label settles any later argument about the rate, '
+      + 'the concentration and the waiting periods.')
+    + '<button class="btn-block btn-lg" type="submit">Save label</button></form>');
+  bindPhoto(el);
+}
+
+async function saveLabel(ctx, form) {
+  const data = readForm(form);
+  const selected = [...form.querySelectorAll('select[name=activeIds] option:checked')].map((o) => o.value);
+  const catalogue = buildCatalogue(ctx.state);
+  const check = checkAddLabel(ctx.user,
+    { ...data, activeIds: selected, id: uid('lbl'), photo: photoPayload() }, catalogue);
+  if (!check.ok) { toast(check.why, true); return; }
+
+  await ctx.store.dispatch('label.add', check.payload);
+  resetPhoto();
+  closeSheet();
+  toast('Label saved');
+}
+
+function openActiveSheet(ctx) {
+  if (!can(ctx.user, 'manageOwners')) { toast('Only the Owner can add an active ingredient', true); return; }
+  openSheet('<h2>Add an active ingredient</h2>'
+    + '<p><small>Only the Owner does this, and the IRAC or FRAC group is required: without a group the '
+    + 'rotation gate cannot see the product, and a product the gate cannot see cannot be sprayed.</small></p>'
+    + '<form data-act="save-active">'
+    + field('Active ingredient', input('name', { required: true, placeholder: 'as printed on the label' }))
+    + field('IRAC or FRAC group', input('group', { required: true, placeholder: 'e.g. IRAC 4A, FRAC M3' }))
+    + field('Kind', select('type', ['insecticide', 'fungicide', 'miticide', 'bactericide', 'botanical',
+      'biological'], 'insecticide'))
+    + field('Schedule rate, if the farm has one', input('scheduleRate', { placeholder: 'e.g. 0.5 ml/L' }))
+    + '<button class="btn-block btn-lg" type="submit">Add to the catalogue</button></form>');
+}
+
+async function saveActive(ctx, form) {
+  const data = readForm(form);
+  const catalogue = buildCatalogue(ctx.state);
+  const check = checkAddActive(ctx.user, data, catalogue);
+  if (!check.ok) {
+    // A banned product is not a validation message in the corner of a form.
+    openSheet('<h2>Refused</h2>' + note('danger', check.why, `<small>${esc(check.fix || '')}</small>`));
+    return;
+  }
+  await ctx.store.dispatch('active.add', check.payload);
+  closeSheet();
+  toast(`${check.payload.name} added to the catalogue`);
+}
 
 function openInputSheet(ctx) {
   openSheet('<h2>Add a store item</h2>'
     + '<form data-act="save-input">'
     + field('Name', `<input name="name" list="product-list" required placeholder="e.g. Mancozeb 80% WP">`
-      + `<datalist id="product-list">${PRODUCTS.map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>`)
+      + `<datalist id="product-list">${buildCatalogue(ctx.state).actives
+        .map((a) => `<option value="${esc(a.name)}">`).join('')}</datalist>`)
+    + field('Active ingredient, if it is a chemical',
+      select('activeId', buildCatalogue(ctx.state).actives.map((a) => ({ value: a.id, label: `${a.name} — ${a.group}` })),
+        '', { placeholder: 'Work it out from the name' }))
     + field('Kind', select('kind', [
       { value: 'chemical', label: 'Pesticide or fungicide' },
       { value: 'fertiliser', label: 'Fertiliser or lime' },
@@ -663,6 +825,11 @@ function openInputSheet(ctx) {
     ], 'chemical'))
     + field('Unit', select('unit', ['kg', 'litre', 'sachet', 'bag', 'piece', 'gram'], 'kg'))
     + field('How much is in stock now?', input('qty', { type: 'number', min: 0, step: '0.1', value: 0 }))
+    // FR-STOCK-02: "below a set level". This is the level.
+    + field('Tell the farm manager when it drops to', input('reorderLevel', {
+      type: 'number', min: 0, step: '0.1', placeholder: 'optional' }),
+      'The Farm Manager is alerted at or below this. Leave it empty and the app warns when the '
+      + 'rate it is being used says it runs out inside two weeks.')
     + field('What one unit costs', input('unitCost', { type: 'number', min: 0, step: '10' }))
     + '<button class="btn-block btn-lg" type="submit">Save item</button></form>');
 }
@@ -670,9 +837,13 @@ function openInputSheet(ctx) {
 async function saveInput(ctx, form) {
   const data = readForm(form);
   if (!data.name) { toast('Name is needed', true); return; }
+  // An item typed in without an active is matched by name on the next open, so
+  // nobody has to know the catalogue to add a bag of something to the store.
   await ctx.store.dispatch('input.upsert', {
     id: uid('item'), name: data.name, kind: data.kind, unit: data.unit,
     qty: Number(data.qty) || 0, unitCost: Number(data.unitCost) || 0,
+    reorderLevel: Number(data.reorderLevel) || null,
+    activeId: data.activeId || null,
   });
   closeSheet();
   toast('Added to the store');
@@ -854,6 +1025,7 @@ export const settingsView = {
       + `<p><small>Climate for reference: ${MONTH_NAMES.map((n, i) =>
         `${n} ${climateFor(i + 1).rain}mm`).join(' · ')}</small></p>`)
     + syncCard(ctx)
+    + trialCard(ctx)
     + card(cardHead('Backup and sharing')
       + '<p><small>Everything lives on this phone. Export regularly, and merge the hands\' phones into '
       + 'yours when they come back to the office. Merging never overwrites: the two logs are joined and '
@@ -877,6 +1049,27 @@ export const settingsView = {
   },
 
   actions: {
+    // UX-26/27 — the Owner's switch, and nobody else's.
+    'trial-signoff': async (ctx) => {
+      if (!maySignOff(ctx.user)) { toast('Only the Owner can sign off the trial', true); return; }
+      const ok = await confirmSheet('Sign off the field trial?',
+        'Two Greenhouse Hands have used the field screens in real work with the training '
+        + 'consultant watching, what slowed them down has been fixed, and it has been '
+        + 're-checked. After this, the spray and gate screens no longer ask for the Field '
+        + 'Supervisor or Farm Manager.', 'Yes, the round is done');
+      if (!ok) return;
+      await ctx.store.dispatch('settings.update', signOffPayload(ctx.user, { signedOff: true }));
+      toast('Field trial signed off. Supervised use has ended.');
+    },
+    'trial-reopen': async (ctx) => {
+      if (!maySignOff(ctx.user)) { toast('Only the Owner can change this', true); return; }
+      const ok = await confirmSheet('Put supervised use back on?',
+        'The spray and gate screens will ask for the Field Supervisor or Farm Manager again.',
+        'Yes, supervise them again');
+      if (!ok) return;
+      await ctx.store.dispatch('settings.update', signOffPayload(ctx.user, { signedOff: false }));
+      toast('Supervised use is back on');
+    },
     'sync-setup': (ctx) => openSyncSetup(ctx),
     'sync-save': (ctx, form) => saveSyncSetup(ctx, form),
     'sync-run': async () => {
@@ -978,6 +1171,43 @@ export const settingsView = {
     }
   },
 };
+
+// --- The field trial — UX-26, UX-27, §9a ----------------------------------
+//
+// One switch, held by the Owner. Until it is thrown, the spray and gate screens
+// ask for the Field Supervisor or Farm Manager; after it, they behave normally.
+//
+// It is in Settings rather than buried in the gate screens because it is a
+// statement about the farm, not about a screen: the trial round happened, what
+// it found was fixed, and the app is signed off for unsupervised use.
+function trialCard(ctx) {
+  const trial = trialRecord(ctx.state);
+  const owner = maySignOff(ctx.user);
+  const by = trial.by ? (ctx.state.people[trial.by] || {}).name : null;
+
+  return card(
+    cardHead('Field trial', trial.signedOff
+      ? badge('signed off', 'ok') : badge('supervised use', 'warn'))
+    + (trial.signedOff
+      ? `<p><small>Signed off${by ? ` by ${esc(by)}` : ''}`
+        + `${trial.at ? ` on ${esc(friendlyDate(trial.at.slice(0, 10)))}` : ''}. `
+        + 'The spray and gate screens are used normally.</small></p>'
+        + (owner
+          ? button('Put supervised use back on', 'trial-reopen', { cls: 'btn-ghost btn-block' })
+          : '')
+      : '<p><small>Until the after-build round is done, the spray and gate screens are used '
+        + 'only with the Field Supervisor or Farm Manager present — signed in, or confirming '
+        + 'on the spot (UX-27). Everything else works normally.</small></p>'
+        + '<p><small><b>The round:</b> two Greenhouse Hands use the field screens in real work '
+        + 'with the training consultant watching, anything that slows them down is written '
+        + 'down, and it is fixed and re-checked in one revision round (UX-26).</small></p>'
+        + (owner
+          ? button('Sign off the field trial', 'trial-signoff', { cls: 'btn-block btn-lg', icon: '✅' })
+          : note('info', 'The Owner signs this off',
+            '<small>It is deliberately not the Farm Manager\'s switch: the person who finds the '
+            + 'confirmation tedious is the person who must not be able to turn it off.</small>'))),
+  );
+}
 
 // --- Sync -----------------------------------------------------------------
 
