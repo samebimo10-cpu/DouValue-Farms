@@ -200,30 +200,52 @@ The guide also names the products that should not be on this farm at all, and sa
 carbofuran, paraquat, chlorpyrifos, dimethoate. A buyer who tests for residues will find
 them, and two of them have killed farm workers.
 
-### 2. Diagnosis support
+### 2. Diagnosis support — the Farm Doctor
 
-Thirty-two problems that hit pepper in the Niger Delta, from Phytophthora blight and
-bacterial wilt through anthracnose, pepper veinal mottle virus, broad mite and the
-variegated grasshopper, to blossom-end rot and acid soil. Sixty-seven symptoms written as
-things you can see, in English and Pidgin.
+The 23 triage rows and 22 diagnosis cards from `rules/douvalue_rules_rev5_1.json`, read
+straight out of the file. Nothing about a pest, a disease or a disorder is written down in
+the code, so changing the rules changes the diagnosis.
 
-The wizard asks which parts of the plant you looked at, you tick what you can see, and it
-ranks the candidates. It is deliberately transparent about three things:
+The flow is the rules' own: **symptom → matching triage rows → card → confirm test**.
 
-- **How sure it is.** "Strong match", "Likely", "Possible", "Long shot", with the reason.
-- **How to confirm it.** The streaming test for bacterial wilt. Turning the leaf over for
-  powdery mildew. Washing a root to tell nematode galls from nitrogen nodules.
-- **What would settle it.** When the top two are close, it names the single observation
-  that separates them: *"Look for dark wet rot on the stem at soil level. If it is there,
-  this is Phytophthora blight. If not, it points to waterlogging."*
+1. You say what you can see — tick the rules' own wording, or write it yourself.
+2. The app scores all 23 triage rows and shows the ones that fit, with the words that
+   carried each match and the words that argue against it.
+3. **It will not name a cause yet.** First it asks for a photo and for the confirm test the
+   row names — the pH test, the loupe, the cut stem in clear water. That refusal is the
+   whole difference between a diagnosis and a guess (`FR-DOC-01`).
+4. Only then does it open the card: cause, how it shows, what to do now, treatment,
+   prevention, and whether the rules require a lab sample.
 
-Two rules stop it from bluffing. A symptom that fits a third of the guide, like "started
-after heavy rain", counts for far less than one that fits a single problem. And a problem
-whose tell-tale signs are all on a part nobody inspected cannot win the ranking — it goes
-into "go and check these" instead.
+Two things make it work on real field words rather than on a tick-list:
 
-It says plainly that it is a field guide and not a laboratory, and points at the Rivers
-State ADP extension service for anything that could take a whole bed.
+- **Negation.** "NO galls" in row 23 is the entire difference between acid soil and
+  nematode. Type *"stunted plants, no galls"* and the app moves towards acid soil **and
+  away from** nematode, instead of merely failing to match "galls".
+- **Contradiction as a signal.** A sign one row asserts and another denies is not noise; it
+  is the separating test. That is how the look-alikes are derived rather than listed.
+
+Look-alikes come with the test that tells them apart, and every test it names is a test the
+rules name (`FR-DOC-02`):
+
+| Pair | What settles it |
+|---|---|
+| Nematode galls vs acid-soil roots | the rules' own root read — pull a plant: red/brown galls → nematode; stubby, dead-tipped, no galls → acid soil |
+| Fusarium vs bacterial wilt | cut the stem in clear water: milky ooze streams → bacterial wilt |
+| Thrips vs broad mite | 10× loupe on the youngest tips: glassy oval mites and eggs → broad mite |
+
+A recorded diagnosis carries the card, the triage row, the answers, the photos, the written
+reasoning and the person (`FR-DIAG-02`). A farm hand may start one; a Field Supervisor or
+Farm Manager performs the confirm test again and confirms it, and nobody confirms their own
+(`FR-DIAG-03`). None of that is advisory — the event log refuses a confirmation with no
+confirm step behind it, and so does the server.
+
+Diagnoses recorded before this engine are kept and stay readable. Where the old name matches
+a card outright they are read as that card; the rest keep their old wording and are marked
+**legacy**, because nobody did the rules' confirm test on them.
+
+The local field guide in `pests.js` stays alongside it for what the rules do not carry:
+products, pre-harvest intervals, resistance groups, and the weather-and-stage risk board.
 
 ### 3. Predictions
 
@@ -456,8 +478,9 @@ DouValue-Farms/
 │     │  ├─ integrity.js the eleven record checks and the scoring behind them
 │     │  ├─ crops.js     the three peppers: stages, spacing, feeding, water
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
-│     │  ├─ pests.js     32 problems, 67 symptoms, management for each
-│     │  ├─ diagnose.js  symptom scoring, next checks, risk board
+│     │  ├─ rules.js     loads rules/douvalue_rules_rev5_1.json; the only reader
+│     │  ├─ pests.js     32 local problems: products, PHI, weather response
+│     │  ├─ diagnose.js  the Farm Doctor: triage, cards, look-alikes, risk board
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
 │     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo
@@ -484,7 +507,7 @@ npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
-123 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
+294 tests covering the Farm Doctor against the rules JSON itself, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
 planting-window optimiser, event-log replay including out-of-order merges, the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own

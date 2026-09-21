@@ -45,15 +45,23 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
 
   // 1. Suspected virus. FR-DIAG-04 sends this straight to the Owner, and it
   //    outranks everything because by the time it is certain it is too late.
+  //    FR-DOC-09 widens it: the Farm Doctor also notifies the Owner for
+  //    bacterial wilt, nematodes and a second low-confidence result, and marks
+  //    those records as needing a lab when it names them.
   for (const d of state.diagnoses || []) {
     if ((d.date || '') !== today) continue;
-    const problem = String(d.problemId || '');
-    if (!/virus|tospo|pvmv|cmv|leaf_curl/i.test(problem)) continue;
+    const problem = String(d.cardId || d.problemId || '');
+    const virus = /virus|tospo|pvmv|cmv|leaf_curl/i.test(problem);
+    if (!virus && !d.labRecommended) continue;
     out.push({
       severity: 'critical',
-      line: `VIRUS SUSPECTED: ${d.problemName || problem} on ${zoneOf(state, d.cycleId)}`,
-      detail: 'Isolate those plants, do not move tools or hands between houses, pull and burn '
-        + 'the affected ones. Confirm before replanting.',
+      line: `${virus ? 'VIRUS SUSPECTED' : 'LAB SAMPLE NEEDED'}: ${d.problemName || problem} `
+        + `on ${zoneOf(state, d.cycleId)}`,
+      detail: virus
+        ? 'Isolate those plants, do not move tools or hands between houses, pull and burn '
+          + 'the affected ones. Confirm before replanting.'
+        : 'The rules require a lab result for this one before it is treated as settled '
+          + '(FR-DOC-09). Send the sample and tell the Owner.',
     });
   }
 

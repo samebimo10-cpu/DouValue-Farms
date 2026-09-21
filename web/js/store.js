@@ -5,6 +5,7 @@
 // notification.
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
+import { confirmStepDone, isLegacyDiagnosis } from './domain/diagnose.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
 /**
@@ -413,9 +414,23 @@ export function reduce(events) {
         state.diagnoses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
 
+      // FR-DIAG-02 / FR-DOC-01 — a diagnosis the Farm Doctor produced cannot be
+      // confirmed until the card, the photos and the confirm test are all on
+      // the record. Replay enforces it as well as the screens do, because a
+      // phone that skipped the flow must not be able to sync its way past it.
+      //
+      // Records from before the rules engine carry no card and no confirm step.
+      // They are left exactly as they were confirmed at the time: the event log
+      // is a record of what people actually did, and rewriting history here
+      // would make every past treatment look ungated.
       case 'diagnosis.confirm': {
         const d = state.diagnoses.find((x) => x.id === p.id);
-        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        if (!d) break;
+        if (!isLegacyDiagnosis(d) && !confirmStepDone(d)) {
+          d.confirmRefused = 'The confirm test and the photos were not on the record.';
+          break;
+        }
+        d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || '';
         break;
       }
 

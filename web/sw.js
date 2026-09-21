@@ -7,7 +7,7 @@
 // Bumped when the app moves: the app used to be served from /Stock-/farm/ and
 // now has its own site at /DouValue-Farms/. A phone that still holds the old
 // cache must discard it rather than keep serving the app from the old address.
-const CACHE = 'douvalue-v11';
+const CACHE = 'douvalue-v12';
 
 const SHELL = [
   './',
@@ -52,7 +52,11 @@ const SHELL = [
   './js/domain/crops.js',
   './js/domain/climate.js',
   './js/domain/pests.js',
+  './js/domain/rules.js',
   './js/domain/diagnose.js',
+  // The source of truth itself. NFR-OFF-01: the clinic has to work on a
+  // phone with no signal, and it cannot diagnose anything without this.
+  '../rules/douvalue_rules_rev5_1.json',
   './js/domain/safety.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',

@@ -94,7 +94,7 @@ export const EVENT_POLICY = {
   'harvest.verify':    { write: 'verifyHarvest', read: ANY },
   'spray.record':      { write: 'logSpray',      read: ANY },
   'scout.record':      { write: 'scout',         read: ANY },
-  'diagnosis.record':  { write: 'diagnose',      read: ANY },
+  'diagnosis.record':  { write: 'diagnose',      read: ANY, guard: guardDiagnosis },
   'report.record':     { write: 'reportProblem', read: ANY },
   'report.resolve':    { write: 'assignTasks',   read: ANY },
   'input.upsert':      { write: 'logInputs',     read: ANY },
@@ -112,8 +112,10 @@ export const EVENT_POLICY = {
   'topsoil.receive':   { write: 'logInputs',     read: ANY },
   'topsoil.assign':    { write: 'manageCycles',  read: ANY },
   // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
-  // and a confirmed diagnosis is what unlocks a treatment.
-  'diagnosis.confirm': { write: 'verifyHarvest', read: ANY },
+  // and a confirmed diagnosis is what unlocks a treatment. FR-DOC-01 adds the
+  // step that makes the confirmation mean something: the senior performs the
+  // confirm test the card names and records what it showed.
+  'diagnosis.confirm': { write: 'verifyHarvest', read: ANY, guard: guardConfirmDiagnosis },
   // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
   // the record. `manageOwners` is held by the CEO and nobody else.
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
@@ -467,6 +469,56 @@ function guardNoTreat(event) {
   if (!p.cycleId || !p.pestId) return { ok: false, why: 'Say which zone and which pest' };
   if (String(p.reason || '').trim().length < 10) {
     return { ok: false, why: 'Say why no treatment is needed — a sentence someone can check later' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-DIAG-01, FR-DIAG-02, FR-DOC-01 — a diagnosis is a card, the answers, the
+ * photos, the reasoning and a person.
+ *
+ * The Farm Doctor is not allowed to name a cause off a glance: it asks for the
+ * photos and the confirm step first. The screens enforce that, but the screens
+ * run on a phone that has been offline for three days, so the server enforces
+ * it too — otherwise "diagnosed" becomes a word somebody types to get past the
+ * treatment gate, which is exactly the guesswork that cost Season 1.
+ *
+ * This is deliberately structural. Which cards exist and which test confirms
+ * which card is in the rules JSON, and the server does not read the rules; it
+ * only insists that a diagnosis carries the parts a diagnosis has.
+ */
+function guardDiagnosis(event) {
+  const p = event.payload || {};
+  if (!p.cardId) return { ok: false, why: 'A diagnosis names the card it came from' };
+  if (p.triageRow == null) return { ok: false, why: 'A diagnosis names the triage row it started at' };
+  if (!Array.isArray(p.photos) || !p.photos.length) {
+    return { ok: false, why: 'Take a photo of the plant before naming a cause' };
+  }
+  if (!String(p.confirmTest || '').trim()) {
+    return { ok: false, why: 'Record which confirm test you did' };
+  }
+  if (!String(p.confirmResult || '').trim()) {
+    return { ok: false, why: 'Record what the confirm test showed' };
+  }
+  if (String(p.reasoning || '').trim().length < 10) {
+    return { ok: false, why: 'Write why you think it is this — a sentence someone can check later' };
+  }
+  return { ok: true };
+}
+
+/**
+ * The rules put it plainly: "Field Supervisor or Farm Manager performs the
+ * confirm test and confirms". Performing it is the point, so the confirmation
+ * carries what the confirmer saw, not just their name.
+ */
+function guardConfirmDiagnosis(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which diagnosis is being confirmed' };
+  if (!String(p.confirmTest || '').trim()) {
+    return { ok: false, why: 'Say which confirm test you did' };
+  }
+  if (!String(p.confirmResult || '').trim()) {
+    return { ok: false, why: 'Say what the confirm test showed' };
   }
   return { ok: true };
 }

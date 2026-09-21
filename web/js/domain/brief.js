@@ -105,7 +105,7 @@ function problems(state, today, days = 30) {
     .sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))
     .map((d) => compact({
       bed: bedOf(d.cycleId),
-      problem: (PROBLEM_BY_ID[d.problemId] || {}).name || d.problemId,
+      problem: d.problemName || (PROBLEM_BY_ID[d.problemId] || {}).name || d.problemId,
       confidence: d.confidence || null,
       when: (d.date || '').slice(0, 10),
     }));
