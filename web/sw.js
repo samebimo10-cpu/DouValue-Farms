@@ -4,10 +4,11 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-// Bumped when the app moves: the app used to be served from /Stock-/farm/ and
-// now has its own site at /DouValue-Farms/. A phone that still holds the old
-// cache must discard it rather than keep serving the app from the old address.
-const CACHE = 'douvalue-v11';
+// Bumped when the app moves or when the shell gains a file. v12 adds the Farm
+// Doctor and, with it, the rules file itself: the plan checks and both
+// calculators are required to work with no signal (FR-DOC-03), and they cannot
+// do that if their own rule book needs a network.
+const CACHE = 'douvalue-v12';
 
 const SHELL = [
   './',
@@ -32,6 +33,8 @@ const SHELL = [
   './js/ui/field.js',
   './js/ui/audit.js',
   './js/ui/clinic.js',
+  './js/ui/doctor.js',
+  './js/ui/ppe.js',
   './js/ui/manage.js',
   './js/ui/photo.js',
   './js/ui/adviser.js',
@@ -54,14 +57,26 @@ const SHELL = [
   './js/domain/pests.js',
   './js/domain/diagnose.js',
   './js/domain/safety.js',
+  './js/domain/rules.js',
+  './js/domain/catalogue.js',
+  './js/domain/calc.js',
+  './js/domain/doctor.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',
 ];
 
+// The single copy of the rules, published beside the app by
+// scripts/assemble_site.sh. One file, one answer (CLAUDE.md). Cached apart
+// from the shell on purpose: if it is missing the app must still install and
+// run — the Farm Doctor says it has no rule book, which is a far better
+// failure than no offline app at all.
+const RULES = './rules/douvalue_rules_rev5_1.json';
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
+      .then((cache) => cache.addAll(SHELL)
+        .then(() => cache.add(RULES).catch(() => { /* offline rules unavailable */ })))
       .then(() => self.skipWaiting()),
   );
 });

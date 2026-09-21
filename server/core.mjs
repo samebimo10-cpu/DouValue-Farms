@@ -114,6 +114,13 @@ export const EVENT_POLICY = {
   // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
   // and a confirmed diagnosis is what unlocks a treatment.
   'diagnosis.confirm': { write: 'verifyHarvest', read: ANY },
+  // FR-DOC-10: the Farm Doctor's own output — what it read and what it found.
+  // Anyone who may diagnose may run a check and record it, because a check is
+  // only ever advice. FR-DOC-08 is why approving it is a separate event with a
+  // separate permission: the Farm Manager approves a treatment plan, and
+  // nobody approves their own.
+  'doctor.record':     { write: 'diagnose',      read: ANY },
+  'doctor.approve':    { write: 'prescribe',     read: ANY },
   // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
   // the record. `manageOwners` is held by the CEO and nobody else.
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },

@@ -16,6 +16,9 @@ import { confirmSummary, phraseChips } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
+import { confirmPpe } from './ppe.js';
+import { rulesReady } from '../domain/rules.js';
+import { followUpTask, ppeFor } from '../domain/doctor.js';
 import { getLang } from '../i18n.js';
 
 /**
@@ -549,7 +552,30 @@ async function saveScout(ctx, form) {
 
 // --- Spray ----------------------------------------------------------------
 
-function openSpraySheet(ctx, cycleId) {
+/** When the gear was confirmed, so it lands on the spray record with the rest. */
+let ppeConfirmedAt = null;
+
+/**
+ * FR-TREAT-04 — the gear, before the job.
+ *
+ * The requirement puts the pictures before the task starts, so the sheet opens
+ * before the spray form, not after it. Declining does not "cancel a dialog":
+ * it stops the task, which is the whole point of asking.
+ */
+async function openSpraySheet(ctx, cycleId) {
+  const kit = rulesReady() ? ppeFor({ active: null }) : null;
+  if (kit) {
+    const worn = await confirmPpe(kit, { title: 'Before you spray, put this on' });
+    if (!worn) {
+      toast('Spray not started. Get the gear on first.', true);
+      return;
+    }
+    ppeConfirmedAt = new Date().toISOString();
+  }
+  openSprayForm(ctx, cycleId);
+}
+
+function openSprayForm(ctx, cycleId) {
   const usable = PRODUCTS.filter((p) => p.hazard !== 'avoid');
   const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
@@ -643,14 +669,29 @@ async function saveSpray(ctx, form) {
     ]), 'Yes, record it');
   if (!goAhead) return;
 
+  const sprayId = uid('sp');
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
-    id: uid('sp'), cycleId: data.cycleId, productId: data.productId,
+    id: sprayId, cycleId: data.cycleId, productId: data.productId,
     productName: product ? product.name : '', phiDays: product ? product.phiDays : 0,
     reiHours: product ? product.reiHours : 24, targetProblem: data.targetProblem || '',
     operator: data.operator || '', note: data.note || '', date: data.date || isoDate(),
+    // FR-TREAT-04: the confirmation is part of the record, not a screen that
+    // flashed past. Who sprayed and whether they said they had the gear on.
+    ppeConfirmedAt,
     photo: photoPayload(), at: new Date().toISOString(), enteredAt: new Date().toISOString(),
   });
+  ppeConfirmedAt = null;
+
+  // FR-TREAT-05 and FR-DOC-07: go back in three days and find out whether it
+  // worked, because a treatment nobody checked is the reason the same product
+  // gets sprayed four more times.
+  const followUp = followUpTask(
+    { id: sprayId, cycleId: data.cycleId, zoneId: cycle ? cycle.plotId : null, date: data.date || isoDate() },
+    { zoneName: zone ? zone.name : '' },
+  );
+  await ctx.store.dispatch('task.create', followUp, { eventId: `ev_${followUp.id}` });
+
   resetPhoto();
   closeSheet();
   toast(product && product.phiDays > 0

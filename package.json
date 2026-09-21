@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/**/*.test.mjs\"",
-    "start": "npx --yes http-server web -p 8000 -c-1"
+    "start": "./scripts/assemble_site.sh _site && npx --yes http-server _site -p 8000 -c-1"
   },
   "license": "MIT"
 }

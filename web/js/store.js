@@ -150,6 +150,7 @@ const EMPTY = () => ({
   sprays: [],
   scouts: [],
   diagnoses: [],
+  doctorOutputs: [],
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
@@ -194,6 +195,7 @@ export function reduce(events) {
       case 'report.record': return `report:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
+      case 'doctor.record': return `doctor:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
@@ -215,6 +217,7 @@ export function reduce(events) {
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
+      case 'doctor.approve': return `doctor:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
@@ -234,6 +237,7 @@ export function reduce(events) {
       case 'person': return !!state.people[id];
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
+      case 'doctor': return state.doctorOutputs.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
       case 'override': return state.gateOverrides.some((o) => o.id === id);
       case 'position': return !!state.positions[id];
@@ -416,6 +420,25 @@ export function reduce(events) {
       case 'diagnosis.confirm': {
         const d = state.diagnoses.find((x) => x.id === p.id);
         if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        break;
+      }
+
+      // --- Farm Doctor (requirements 6.14) ------------------------------
+      // FR-DOC-10: every output is saved with what it read, what it found and
+      // who confirmed it. Recording and approving are two events on purpose —
+      // FR-DOC-08 says the Farm Doctor never approves its own plan, and two
+      // events with two different authors is what makes that true rather than
+      // merely stated.
+      case 'doctor.record':
+        state.doctorOutputs.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      case 'doctor.approve': {
+        const out = state.doctorOutputs.find((x) => x.id === p.id);
+        if (out) {
+          out.approvedBy = e.by;
+          out.approvedAt = e.at;
+          out.approvalNote = p.note || '';
+        }
         break;
       }
 

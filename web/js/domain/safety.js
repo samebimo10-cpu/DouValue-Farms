@@ -256,17 +256,28 @@ export const SPRAY_RULES = [
   'Anybody pregnant or under 18 does not mix or spray. That is not negotiable.',
 ];
 
+/**
+ * The knapsack this farm actually carries.
+ *
+ * FR-TREAT-03 and FR-DOC-05 both name 16 L, and it is the size on the shelf.
+ * Every dose in the app is worked out against this one number, so a sprayer
+ * filling from the schedule and a sprayer filling from the Farm Doctor put the
+ * same amount in the same tank.
+ */
+export const KNAPSACK_L = 16;
+
 /** Rough spray volume for a knapsack operator, so the mix is not guesswork. */
-export function knapsackPlan(areaM2, rateMlPer15L = 30, volumeLPerHa = 400) {
+export function knapsackPlan(areaM2, rateMlPerLoad = 30, volumeLPerHa = 400) {
   const ha = areaM2 / 10000;
   const litres = Math.max(1, Math.round(ha * volumeLPerHa));
-  const loads = Math.max(1, Math.ceil(litres / 15));
+  const loads = Math.max(1, Math.ceil(litres / KNAPSACK_L));
   return {
     litres,
     loads,
-    perLoadMl: rateMlPer15L,
-    totalProductMl: Math.round(loads * rateMlPer15L),
-    text: `${litres} L of spray in about ${loads} knapsack load${loads === 1 ? '' : 's'} of 15 L, `
-      + `${rateMlPer15L} ml of product per load.`,
+    knapsackL: KNAPSACK_L,
+    perLoadMl: rateMlPerLoad,
+    totalProductMl: Math.round(loads * rateMlPerLoad),
+    text: `${litres} L of spray in about ${loads} knapsack load${loads === 1 ? '' : 's'} of ${KNAPSACK_L} L, `
+      + `${rateMlPerLoad} ml of product per load.`,
   };
 }

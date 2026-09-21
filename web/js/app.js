@@ -6,6 +6,7 @@ import { registerRoute, startShell } from './ui/shell.js';
 import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
 import { clinicView, diagnoseView, guideView, guideItemView } from './ui/clinic.js';
+import { doctorView } from './ui/doctor.js';
 import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
@@ -15,6 +16,7 @@ import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
+import { loadRules } from './domain/rules.js';
 import { missingTasks } from './domain/schedule.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
@@ -25,6 +27,7 @@ registerRoute('#/field', fieldView);
 registerRoute('#/field/cycle', cycleView);
 registerRoute('#/clinic', clinicView);
 registerRoute('#/diagnose', diagnoseView);
+registerRoute('#/doctor', doctorView);
 registerRoute('#/guide', guideView);
 registerRoute('#/guide/item', guideItemView);
 registerRoute('#/dashboard', dashboardView);
@@ -89,6 +92,15 @@ async function main() {
   let practising = false;
   try { practising = sessionStorage.getItem('douvalue.practice') === '1'; } catch { /* off */ }
   setPractice(practising);
+
+  // The rules file is the source of truth for the gates, the rotations and
+  // both calculators, so it is read before anything can ask about them. It is
+  // in the service-worker cache, so the second open needs no network; a first
+  // open with no signal still starts the app, and the Farm Doctor says plainly
+  // that it has no rule book rather than guessing at one.
+  await loadRules().catch((err) => {
+    console.error('Could not read the rules file', err);
+  });
 
   const store = await createStore();
 

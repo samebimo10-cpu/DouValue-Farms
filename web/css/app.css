@@ -629,3 +629,29 @@ pre.working {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* FR-TREAT-04 — the protective gear, as pictures big enough to read at arm's
+   length in the sun, and at least 56 dp apart so a gloved thumb can tap past
+   them (UX-03). */
+.ppe-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin:12px 0; }
+.ppe-item { margin:0; padding:12px; border:2px solid var(--line); border-radius:14px; text-align:center;
+  display:flex; flex-direction:column; align-items:center; gap:6px; background:var(--surface); }
+.ppe-item .ppe-art { color:var(--ink); }
+.ppe-item figcaption b { display:block; font-size:15px; line-height:1.25; }
+.ppe-item figcaption small { display:block; color:var(--ink-2); font-size:13px; line-height:1.3; }
+
+/* The Farm Doctor's plan check: one row per rule, so a refusal points at the
+   rule it failed rather than at the whole plan. */
+.check-list { list-style:none; margin:0; padding:0; }
+.check-row { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); }
+.check-row:last-child { border-bottom:0; }
+.check-row .mark { flex:0 0 28px; font-size:20px; line-height:1.2; text-align:center; }
+.check-row.pass .mark { color:var(--ok); }
+.check-row.warn .mark { color:var(--warn); }
+.check-row.fail .mark { color:var(--danger); }
+.check-row.na .mark { color:var(--ink-2); }
+.check-row .body { flex:1 1 auto; min-width:0; }
+.check-row .body b { display:block; font-size:15px; }
+.check-row .body small { display:block; color:var(--ink-2); font-size:13px; line-height:1.35; }
+.check-row .body .ref { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; opacity:.75; }
+.dose-big { font-size:30px; font-weight:700; line-height:1.1; }

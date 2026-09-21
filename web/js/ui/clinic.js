@@ -57,6 +57,13 @@ export const clinicView = {
       // next, so it belongs one tap from here.
       + `<div style="margin-top:10px">${button('Alerts', 'go',
         { cls: 'btn-block', icon: '🚨', data: { to: '#/alerts' } })}</div>`
+      // FR-DOC-11: the Farm Doctor and the adviser share this entry point, so
+      // nobody has to work out which of the two their question belongs to.
+      + `<div style="margin-top:10px">${button('Farm Doctor', 'go',
+        { cls: 'btn-block', icon: '🩺', data: { to: '#/doctor' } })}</div>`
+      + '<p style="margin:8px 0 0"><small>Checks a treatment plan against every rule before it is '
+      + 'sprayed, works out the dose per 16 L knapsack and per tank, and turns three pH readings '
+      + 'into a lime route and kilograms.</small></p>'
       + `<div style="margin-top:10px">${button('Ask the farm adviser', 'go',
         { cls: 'btn-block btn-ghost', icon: '🧠', data: { to: '#/adviser' } })}</div>`
       + '<p style="margin:8px 0 0"><small>Reads your own records and says what to do about '

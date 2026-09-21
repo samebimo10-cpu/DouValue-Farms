@@ -271,6 +271,7 @@ const PARENT_OF = {
   '#/digest': '#/dashboard',
   '#/zones': '#/field',
   '#/diagnose': '#/clinic',
+  '#/doctor': '#/clinic',
   '#/adviser': '#/clinic',
   '#/guide': '#/clinic',
   '#/guide/item': '#/guide',
