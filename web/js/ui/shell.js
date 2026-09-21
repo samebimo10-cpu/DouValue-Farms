@@ -274,6 +274,7 @@ const PARENT_OF = {
   '#/adviser': '#/clinic',
   '#/guide': '#/clinic',
   '#/guide/item': '#/guide',
+  '#/guide/photos': '#/guide',
   '#/plan': '#/dashboard',
   '#/reports': '#/dashboard',
   '#/audit': '#/dashboard',
@@ -615,7 +616,25 @@ const shellActions = {
   'go': (c, el) => navigate(el.dataset.to),
   'back': () => history.back(),
   'print': () => window.print(),
+
+  // The camera and gallery buttons. These live here rather than in each screen
+  // because the file input they open is display:none, so the button is the only
+  // way in: a screen that renders the control and forgets the handler has a
+  // photo field nobody can use, which is how the scouting and spray sheets came
+  // to have dead camera buttons on a requirement (FR-PROOF-01) that will not let
+  // the task be finished without one.
+  //
+  // Scope from the tightest wrapper outwards, so a sheet holding two photo
+  // fields opens the right one.
+  'pick-photo': (c, el) => openPicker(el, '.photo-input'),
+  'pick-reference': (c, el) => openPicker(el, '.reference-input'),
 };
+
+function openPicker(el, selector) {
+  const scope = el.closest('.field') || el.closest('.sheet') || document;
+  const input = scope.querySelector(selector) || document.querySelector(selector);
+  if (input) input.click();
+}
 
 function findAction(target) {
   const el = target.closest('[data-act]');

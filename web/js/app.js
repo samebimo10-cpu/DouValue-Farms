@@ -5,7 +5,7 @@ import { can, createStore, setPractice } from './store.js';
 import { registerRoute, startShell } from './ui/shell.js';
 import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
-import { clinicView, diagnoseView, guideView, guideItemView } from './ui/clinic.js';
+import { clinicView, diagnoseView, guideView, guideItemView, photoDeskView } from './ui/clinic.js';
 import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
@@ -27,6 +27,7 @@ registerRoute('#/clinic', clinicView);
 registerRoute('#/diagnose', diagnoseView);
 registerRoute('#/guide', guideView);
 registerRoute('#/guide/item', guideItemView);
+registerRoute('#/guide/photos', photoDeskView);
 registerRoute('#/dashboard', dashboardView);
 registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);

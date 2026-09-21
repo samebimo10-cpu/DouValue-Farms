@@ -234,6 +234,16 @@ rules name (`FR-DOC-02`):
 | Fusarium vs bacterial wilt | cut the stem in clear water: milky ooze streams → bacterial wilt |
 | Thrips vs broad mite | 10× loupe on the youngest tips: glassy oval mites and eggs → broad mite |
 
+Every triage row and every diagnosis card has a slot for one **reference photo** — 45 in
+all, derived from the rules. The pictures are not: the rules JSON is the source of truth and
+the app never writes to it, so they are the farm's own, attached in the app by the Owner or
+the Farm Manager and carried in the event log to every phone. A row's picture is the thing
+as you first see it and shows beside the tick-list; a card's is the confirmed thing and sits
+next to its cause. An empty slot costs nothing — the rules' wording is what the app matches
+on and what the tick-list shows either way — and *Clinic → the guide → reference photos*
+lists every slot with the gaps first, so what is still missing is a screen rather than a
+memory.
+
 A recorded diagnosis carries the card, the triage row, the answers, the photos, the written
 reasoning and the person (`FR-DIAG-02`). A farm hand may start one; a Field Supervisor or
 Farm Manager performs the confirm test again and confirms it, and nobody confirms their own
@@ -507,7 +517,7 @@ npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
-294 tests covering the Farm Doctor against the rules JSON itself, pre-harvest and re-entry
+314 tests covering the Farm Doctor against the rules JSON itself, pre-harvest and re-entry
 blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
 planting-window optimiser, event-log replay including out-of-order merges, the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own

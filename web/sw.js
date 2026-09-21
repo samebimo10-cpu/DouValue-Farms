@@ -7,7 +7,7 @@
 // Bumped when the app moves: the app used to be served from /Stock-/farm/ and
 // now has its own site at /DouValue-Farms/. A phone that still holds the old
 // cache must discard it rather than keep serving the app from the old address.
-const CACHE = 'douvalue-v12';
+const CACHE = 'douvalue-v13';
 
 const SHELL = [
   './',

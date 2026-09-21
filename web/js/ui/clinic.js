@@ -6,9 +6,10 @@ import {
   openSheet, readForm, select, table, textarea, tick, toast,
 } from './kit.js';
 import {
-  canConfirm, cardFor, CARDS, CARD_TO_PROBLEM, CUES, FARM_DOCTOR_ROLE, lookalikesFor,
-  matchTriage, nameCause, namingGate, readDiagnosis, riskForecast, RISK_DRIVER_TEXT,
-  ROOT_READ, rowsForCard, RULES_VERSION, searchCards, separatingSymptom, TRIAGE_BY_N,
+  canConfirm, cardFor, cardPhoto, cardSlot, CARDS, CARD_TO_PROBLEM, CUES, FARM_DOCTOR_ROLE,
+  lookalikesFor, matchTriage, nameCause, namingGate, photoCoverage, photoCues,
+  PHOTO_SLOT_BY_ID, PHOTO_SLOTS, readDiagnosis, referencePhoto, riskForecast, RISK_DRIVER_TEXT, ROOT_READ,
+  rowPhoto, rowsForCard, rowSlot, RULES_VERSION, searchCards, separatingSymptom, TRIAGE_BY_N,
 } from '../domain/diagnose.js';
 import { PROBLEM_BY_ID, PROBLEM_TYPES } from '../domain/pests.js';
 import { discouragedFor, productsFor } from '../domain/safety.js';
@@ -16,7 +17,10 @@ import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
 import { activeCycles, can, cycleLabel, openReports } from '../store.js';
 import { t } from '../i18n.js';
 import { daysBetween, friendlyDate, isoDate, uid } from '../util.js';
-import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
+import {
+  bindPhoto, bindReferencePhoto, photoField, photoPayload, photoThumb, referencePhotoField,
+  referencePhotoPayload, resetPhoto,
+} from './photo.js';
 import { navigate, params } from './shell.js';
 
 // The guided flow, in the rules' own order: symptom -> triage rows -> card ->
@@ -220,6 +224,116 @@ async function saveConfirm(ctx, form) {
   toast('Confirmed — treatment can now be planned');
 }
 
+// --- Reference photos (FR-DIAG-01, UX-11) --------------------------------
+//
+// One slot per triage row and one per diagnosis card. The Owner and the Farm
+// Manager hold `settings`, and they are the only two who may fill one. Everyone
+// else sees the pictures; nobody is ever stopped by an empty slot, because the
+// rules' own wording is what the app matches on and what the tick-list shows.
+
+const canEditPhotos = (ctx) => can(ctx.user, 'settings');
+
+/** The picture for a slot, or the words and an invitation to add one. */
+function referenceBlock(ctx, slot, { title = 'Reference photo' } = {}) {
+  const meta = PHOTO_SLOT_BY_ID.get(slot);
+  if (!meta) return '';
+  const held = referencePhoto(ctx.state, slot);
+  const who = held && ctx.state.people[held.by];
+  const editor = canEditPhotos(ctx);
+
+  if (held) {
+    return `<div class="ref-shot"><img src="${held.photo.dataUrl}" `
+      + `alt="Reference photo: ${esc(meta.label)}" loading="lazy"></div>`
+      + `<p><small>${held.caption ? `${esc(held.caption)} — ` : ''}`
+      + `added by ${esc(who ? who.name : 'a manager')}, ${esc(friendlyDate((held.at || '').slice(0, 10)))}`
+      + '</small></p>'
+      + (editor
+        ? '<div class="row wrap">'
+          + button('Replace', 'open-reference', { cls: 'btn-sm btn-ghost', data: { slot } })
+          + button('Remove', 'remove-reference', { cls: 'btn-sm btn-quiet', data: { slot } })
+          + '</div>'
+        : '');
+  }
+
+  return note('info', `No ${title.toLowerCase()} yet`,
+    `<small>The words below are what the app matches on, so nothing is missing from the `
+    + `diagnosis. A picture would make it faster to recognise.</small>`)
+    + (editor
+      ? button('Add a reference photo', 'open-reference', { cls: 'btn-sm', data: { slot } })
+      : '');
+}
+
+/** Shared by every screen that can attach one. */
+const referenceActions = {
+  // 'pick-reference' is a shell action, alongside 'pick-photo'.
+  'open-reference': (ctx, el) => openReferenceSheet(ctx, el.dataset.slot),
+  'save-reference': (ctx, form) => saveReference(ctx, form),
+  'remove-reference': (ctx, el) => openRemoveReferenceSheet(ctx, el.dataset.slot),
+  'confirm-remove-reference': (ctx, form) => removeReference(ctx, form),
+};
+
+function openReferenceSheet(ctx, slot) {
+  const meta = PHOTO_SLOT_BY_ID.get(slot);
+  if (!meta) { toast('That slot is not in the rules', true); return; }
+  if (!canEditPhotos(ctx)) { toast('Only the Owner or the Farm Manager adds these', true); return; }
+  const held = referencePhoto(ctx.state, slot);
+
+  openSheet(`<h2>${held ? 'Replace' : 'Add'} a reference photo</h2>`
+    + `<p><small><b>${esc(meta.where)}</b><br>${esc(meta.label)}</small></p>`
+    + note('info', 'What this picture is for', `<small>${esc(meta.shows)}</small>`)
+    + '<form data-act="save-reference">'
+    + `<input type="hidden" name="slot" value="${esc(slot)}">`
+    + referencePhotoField(held ? 'Choose a new picture' : 'Choose a picture')
+    + field('Caption', input('caption', {
+      placeholder: 'e.g. GH-03, week 6 — the bronzing on the youngest tips',
+      value: held ? held.caption : '',
+    }), 'Optional. Say where and when it was taken, so people can judge it.')
+    + '<button class="btn-block btn-lg" type="submit">Save this picture</button></form>');
+  bindReferencePhoto(document);
+}
+
+async function saveReference(ctx, form) {
+  const data = readForm(form);
+  const photo = referencePhotoPayload();
+  if (!photo) { toast('Choose a picture first', true); return; }
+  await ctx.store.dispatch('reference.photo.set', {
+    slot: data.slot,
+    photo,
+    caption: (data.caption || '').trim(),
+  });
+  closeSheet();
+  toast('Reference photo saved — every phone gets it on the next sync');
+}
+
+function openRemoveReferenceSheet(ctx, slot) {
+  const meta = PHOTO_SLOT_BY_ID.get(slot);
+  if (!meta) return;
+  openSheet(`<h2>Remove this picture?</h2>`
+    + `<p><small>${esc(meta.where)} — ${esc(meta.label)}</small></p>`
+    + '<p><small>The words stay, so the diagnosis is unaffected. Say why it is coming off: '
+    + 'a reference photo that turns out to show the wrong thing is worth recording.</small></p>'
+    + '<form data-act="confirm-remove-reference">'
+    + `<input type="hidden" name="slot" value="${esc(slot)}">`
+    + field('Why?', input('reason', { placeholder: 'e.g. it was actually spider mite' }))
+    + '<button class="btn-block btn-lg" type="submit">Remove it</button></form>');
+}
+
+async function removeReference(ctx, form) {
+  const data = readForm(form);
+  if (String(data.reason || '').trim().length < 4) { toast('Say why it is coming off', true); return; }
+  await ctx.store.dispatch('reference.photo.clear', { slot: data.slot, reason: data.reason.trim() });
+  closeSheet();
+  toast('Picture removed');
+}
+
+/** "42 of 45 slots have a picture", with the gaps named. */
+function coverageLine(cov) {
+  return `<p><small><b>${cov.have} of ${cov.total}</b> slots have a reference photo `
+    + `— ${cov.cards.have}/${cov.cards.total} cards, ${cov.rows.have}/${cov.rows.total} triage rows`
+    + (cov.bytes ? ` · ${Math.round(cov.bytes / 1024)} KB carried by every phone` : '')
+    + '</small></p>' + bar(cov.percent);
+}
+
 // --- Diagnosis wizard -----------------------------------------------------
 //
 // FR-DOC-01: symptom -> matching triage rows -> card -> confirm test, and the
@@ -298,6 +412,7 @@ export const diagnoseView = {
     'save-diagnosis': (ctx) => saveDiagnosis(ctx),
     'make-task': (ctx, el) => openTaskSheet(ctx, el.dataset.id),
     'save-task': (ctx, form) => saveTask(ctx, form),
+    ...referenceActions,
   },
 
   mounted() {
@@ -359,19 +474,27 @@ function stepCrop(ctx) {
   );
 }
 
-/** Step 2 — what you can see, in the rules' own words. */
-function stepSeen() {
+/** Step 2 — what you can see, in the rules' own words, with the pictures we have. */
+function stepSeen(ctx) {
   const q = wiz.search.trim().toLowerCase();
-  const list = (q ? CUES.filter((c) => c.text.toLowerCase().includes(q)) : CUES);
+  // UX-11: photo cards or a searchable list by name, whichever the person
+  // prefers. Here it is both at once — a cue whose triage row has a reference
+  // photo shows it; a cue whose slot is empty is the same tick it always was.
+  const cues = photoCues(ctx.state);
+  const list = (q ? cues.filter((c) => c.text.toLowerCase().includes(q)) : cues);
+  const withPhotos = cues.filter((c) => c.photo).length;
   return card(
     cardHead('What can you see?')
     + `<p><small>Tick everything that matches, or write it in your own words. These are the `
-    + `${CUES.length} things the ${TRIAGE_BY_N.size} triage rows describe.</small></p>`
+    + `${CUES.length} things the ${TRIAGE_BY_N.size} triage rows describe`
+    + (withPhotos ? `, ${withPhotos} of them with a reference photo` : '')
+    + '.</small></p>'
     + `<div class="field">${input('cue-search', { placeholder: 'Search: galls, wilt, spots, curl...', value: wiz.search })}</div>`
     + (list.length
-      ? '<div class="ticks">' + list.map((c) =>
-        tick(c.id, c.text, '', wiz.cues.has(c.id))
-          .replace('data-act="toggle-tick"', 'data-act="toggle-cue"')).join('') + '</div>'
+      ? '<div class="ticks">' + list.map((c) => tick(
+        c.id, c.text, c.caption || '', wiz.cues.has(c.id),
+        { act: 'toggle-cue', img: c.photo ? c.photo.dataUrl : '' },
+      )).join('') + '</div>'
       : empty('🔎', 'No wording matched', 'Clear the search, or type what you see below.'))
     + field('In your own words', textarea('seen', {
       value: wiz.text, rows: 3, placeholder: 'e.g. stunted plants, no galls on the roots',
@@ -384,7 +507,7 @@ function stepSeen() {
 }
 
 /** Step 3 — the matching triage rows, the confirm test, the photos. No cause yet. */
-function stepTriage() {
+function stepTriage(ctx) {
   const match = wiz.match;
   const rows = match.rows;
   const chosen = TRIAGE_BY_N.get(wiz.rowN);
@@ -412,6 +535,7 @@ function stepTriage() {
   if (chosen) {
     out += card(
       cardHead('Now confirm it', badge(`Row ${chosen.n}`))
+      + referenceBlock(ctx, rowSlot(chosen.n), { title: 'Reference photo' })
       + note('warn', 'The Farm Doctor will not name a cause yet',
         '<small>Photos and the confirm test come first. That is the whole difference between a '
         + 'diagnosis and a guess.</small>')
@@ -456,6 +580,7 @@ function stepCard(ctx) {
   let out = card(
     `<div class="card-head"><h2>${esc(c.name)}</h2>${badge(esc(c.category))}</div>`
     + `<p><small>From triage row ${named.row.n}, confirmed by test. Rules ${esc(RULES_VERSION)}.</small></p>`
+    + referenceBlock(ctx, cardSlot(c.id))
     + `<h3>Cause</h3><p><small>${esc(c.cause)}</small></p>`
     + `<h3>How it shows</h3><p><small>${esc(c.detection)}</small></p>`
     + `<h3>Do this now</h3><p><small>${esc(named.firstAction)}</small></p>`
@@ -595,13 +720,16 @@ async function saveTask(ctx, form) {
 // entry in the local field guide (pests.js), that entry is shown underneath
 // for the product, PHI and weather detail the rules do not carry.
 
-let guideFilter = { category: '', query: '' };
+let guideFilter = { category: '', query: '', noPhoto: false };
 
 export const guideView = {
   perm: 'viewGuide',
-  render() {
+  render(ctx) {
+    const cov = photoCoverage(ctx.state);
+    const gaps = new Set(cov.cards.missing.map((m) => m.cardId));
     const list = searchCards(guideFilter.query)
-      .filter((c) => !guideFilter.category || c.category === guideFilter.category);
+      .filter((c) => !guideFilter.category || c.category === guideFilter.category)
+      .filter((c) => !guideFilter.noPhoto || gaps.has(c.id));
     const categories = [...new Set(CARDS.map((c) => c.category))].sort();
 
     return card(
@@ -610,24 +738,43 @@ export const guideView = {
       + `(${esc(RULES_VERSION)}). This is the same table the clinic diagnoses from.</small></p>`
       + `<div class="field">${input('q', { placeholder: 'Search: galls, wilt, borer, boron...', value: guideFilter.query })}</div>`
       + '<div class="row wrap">'
-      + `<button class="chip ${!guideFilter.category ? 'on' : ''}" data-act="guide-type" data-type="">All</button>`
+      + `<button class="chip ${!guideFilter.category && !guideFilter.noPhoto ? 'on' : ''}" data-act="guide-type" data-type="">All</button>`
       + categories.map((id) =>
         `<button class="chip ${guideFilter.category === id ? 'on' : ''}" data-act="guide-type" data-type="${esc(id)}">`
         + `${esc(id)}</button>`).join(' ')
+      + ` <button class="chip ${guideFilter.noPhoto ? 'on' : ''}" data-act="guide-nophoto">`
+      + `📷 No photo yet (${cov.cards.missing.length})</button>`
       + '</div>',
       { tight: true },
     ) + card(
+      cardHead('Reference photos')
+      + coverageLine(cov)
+      + `<div style="margin-top:10px">${button('See every slot', 'go',
+        { cls: 'btn-block btn-ghost', icon: '🖼', data: { to: '#/guide/photos' } })}</div>`,
+      { tight: true },
+    ) + card(
       list.length
-        ? '<ul class="list">' + list.map((c) => `<li><div class="grow">`
-          + `<b>${esc(c.name)}</b><small>${esc(c.category)} — from triage row${c.rows.length > 1 ? 's' : ''} `
-          + `${c.rows.join(', ')}</small></div>`
-          + `<a class="btn btn-sm btn-ghost" href="#/guide/item?id=${esc(c.id)}">Open</a></li>`).join('') + '</ul>'
+        ? '<ul class="list">' + list.map((c) => {
+          const held = cardPhoto(ctx.state, c.id);
+          return `<li>${held
+            ? `<span class="tick-img"><img src="${held.photo.dataUrl}" alt="" loading="lazy"></span>`
+            : ''}<div class="grow">`
+            + `<b>${esc(c.name)}</b><small>${esc(c.category)} — from triage row${c.rows.length > 1 ? 's' : ''} `
+            + `${c.rows.join(', ')}${held ? '' : ' · no photo yet'}</small></div>`
+            + `<a class="btn btn-sm btn-ghost" href="#/guide/item?id=${esc(c.id)}">Open</a></li>`;
+        }).join('') + '</ul>'
         : empty('🔎', 'Nothing matched', 'Try a different word, or browse by kind.'),
     );
   },
 
   actions: {
-    'guide-type': (ctx, el) => { guideFilter.category = el.dataset.type; guideFilter.query = ''; ctx.refresh(); },
+    'guide-type': (ctx, el) => {
+      guideFilter.category = el.dataset.type; guideFilter.query = ''; guideFilter.noPhoto = false;
+      ctx.refresh();
+    },
+    'guide-nophoto': (ctx) => {
+      guideFilter.noPhoto = !guideFilter.noPhoto; guideFilter.category = ''; ctx.refresh();
+    },
   },
 
   mounted() {
@@ -644,7 +791,7 @@ export const guideView = {
 
 export const guideItemView = {
   perm: 'viewGuide',
-  render() {
+  render(ctx) {
     const c = cardFor(params().id);
     if (!c) return card(empty('📖', 'Not in the rules', 'Go back and pick from the list.'));
     const rows = rowsForCard(c.id);
@@ -660,10 +807,18 @@ export const guideItemView = {
       + (c.status ? note('warn', 'Drafted, not yet reviewed', `<small>${esc(c.status)}</small>`) : ''),
       { tight: true },
     )
-    + card(cardHead('How it shows') + `<p>${esc(c.detection)}</p>`)
+    + card(cardHead('How it shows')
+      + referenceBlock(ctx, cardSlot(c.id))
+      + `<p>${esc(c.detection)}</p>`)
     + card(cardHead('Triage rows that reach this card')
-      + '<ul class="list">' + rows.map((r) => `<li><div class="grow"><b>${esc(r.see)}</b>`
-        + `<small>Row ${r.n} · confirm: ${esc(r.confirm)}</small></div></li>`).join('') + '</ul>')
+      + rows.map((r) => {
+        const held = rowPhoto(ctx.state, r.n);
+        return `<div class="${held ? '' : 'ref-missing'}" style="margin-bottom:14px">`
+          + `<b>${esc(r.see)}</b>`
+          + `<p><small>Row ${r.n} · confirm: ${esc(r.confirm)}</small></p>`
+          + referenceBlock(ctx, rowSlot(r.n), { title: 'Photo of this symptom' })
+          + '</div>';
+      }).join(''))
     + card(cardHead('Do this now')
       + '<ul>' + rows.map((r) => `<li>${esc(r.firstAction)}</li>`).join('') + '</ul>'
       + `<h3>Treatment</h3><p>${esc(c.treatment)}</p>`)
@@ -701,4 +856,73 @@ export const guideItemView = {
 
     return out + card(button('Back to the cards', 'go', { cls: 'btn-ghost', data: { to: '#/guide' } }), { tight: true });
   },
+
+  actions: { ...referenceActions },
+  mounted() { bindReferencePhoto(document); },
+};
+
+// --- Reference photo desk --------------------------------------------------
+//
+// Every slot in one place, gaps first, so "which cards still have no photo" is
+// a screen rather than a memory. Anyone may read it — a hand who can see what
+// is missing is a hand who can go and photograph it — but only the Owner and
+// the Farm Manager get the buttons.
+
+export const photoDeskView = {
+  perm: 'viewGuide',
+  render(ctx) {
+    const cov = photoCoverage(ctx.state);
+    const editor = canEditPhotos(ctx);
+    const row = (slot) => {
+      const held = referencePhoto(ctx.state, slot.slot);
+      return `<li class="${held ? '' : 'ref-missing'}">`
+        + (held ? `<span class="tick-img"><img src="${held.photo.dataUrl}" alt="" loading="lazy"></span>` : '')
+        + `<div class="grow"><b>${esc(slot.where)}</b>`
+        + `<small>${esc(slot.label)}</small></div>`
+        + (editor
+          ? button(held ? 'Replace' : 'Add', 'open-reference',
+            { cls: held ? 'btn-sm btn-ghost' : 'btn-sm', data: { slot: slot.slot } })
+          : badge(held ? 'has photo' : 'none', held ? 'ok' : ''))
+        + '</li>';
+    };
+
+    let out = card(
+      cardHead('Reference photos', badge(`${cov.have}/${cov.total}`, cov.have === cov.total ? 'ok' : 'warn'))
+      + coverageLine(cov)
+      + '<p><small>One slot for each triage row and each diagnosis card. The rules JSON is the '
+      + 'source of truth and the app never writes to it, so the pictures live in the farm\'s own '
+      + 'log and reach every phone on the next sync.</small></p>'
+      + (editor
+        ? ''
+        : '<p><small>The Owner and the Farm Manager add these. If you have a good picture of '
+          + 'one of the gaps below, show it to them.</small></p>'),
+      { tight: true },
+    );
+
+    if (cov.missing.length) {
+      out += card(
+        cardHead('Still missing', badge(`${cov.missing.length}`, 'warn'))
+        + '<p><small>Nothing here is broken. The app diagnoses from the words either way; '
+        + 'a picture just makes the row quicker to recognise in the house.</small></p>'
+        + '<ul class="list">' + cov.missing.map(row).join('') + '</ul>',
+      );
+    } else {
+      out += card(empty('✅', 'Every slot has a picture',
+        'All 23 triage rows and all 22 cards. Replace any that turn out to show the wrong thing.'));
+    }
+
+    const filled = PHOTO_SLOTS.filter((s) => referencePhoto(ctx.state, s.slot));
+    if (filled.length) {
+      out += card(
+        cardHead('Have a picture', badge(`${filled.length}`, 'ok'))
+        + '<ul class="list">' + filled.map(row).join('') + '</ul>',
+      );
+    }
+
+    return out + card(button('Back to the cards', 'go',
+      { cls: 'btn-ghost', data: { to: '#/guide' } }), { tight: true });
+  },
+
+  actions: { ...referenceActions },
+  mounted() { bindReferencePhoto(document); },
 };

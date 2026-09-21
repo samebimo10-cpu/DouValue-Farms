@@ -698,6 +698,108 @@ export function readDiagnosis(record) {
   };
 }
 
+// --- Reference photos (FR-DIAG-01, UX-11) --------------------------------
+//
+// Every triage row and every diagnosis card has a slot for one reference
+// photo: 23 + 22 = 45 slots, derived from the rules like everything else here.
+// The pictures themselves are not: the rules JSON is the source of truth and
+// the app never writes to it. A reference photo is the farm's own material,
+// taken or chosen by the Owner or the Farm Manager, and it travels with the
+// farm's other photos in the event log so every phone gets it on the next sync
+// and it still works with no signal (NFR-OFF-01).
+//
+// The two slots hold different pictures on purpose. A row's photo is the thing
+// as you first see it walking the house — that is what the tick-list is for. A
+// card's photo is the confirmed thing, next to its cause and its treatment. So
+// a row does not borrow its card's picture, or the wizard would be showing the
+// answer at the step that is supposed to be a question.
+//
+// An empty slot is not an error and never blocks anything. The rules' own
+// wording is the fallback, and the wording is what the engine matches on
+// either way.
+
+export const rowSlot = (n) => `row:${n}`;
+export const cardSlot = (cardId) => `card:${cardId}`;
+
+/** Every slot the app knows about, in the order the guide lists them. */
+export const PHOTO_SLOTS = [
+  ...TRIAGE.map((row) => ({
+    slot: rowSlot(row.n),
+    kind: 'row',
+    n: row.n,
+    cardId: row.cardId,
+    label: row.see,
+    where: `Triage row ${row.n}`,
+    shows: 'What you see in the house, before anything is confirmed.',
+  })),
+  ...CARDS.map((card) => ({
+    slot: cardSlot(card.id),
+    kind: 'card',
+    n: null,
+    cardId: card.id,
+    label: card.name,
+    where: `${card.name} card`,
+    shows: card.detection,
+  })),
+];
+
+export const PHOTO_SLOT_BY_ID = new Map(PHOTO_SLOTS.map((s) => [s.slot, s]));
+
+/** Guards the store and the server against a slot nothing in the rules has. */
+export const isPhotoSlot = (slot) => PHOTO_SLOT_BY_ID.has(slot);
+
+/** The photo held in a slot, or null when the slot is empty. */
+export function referencePhoto(state, slot) {
+  const held = (state && state.referencePhotos) || {};
+  const hit = held[slot];
+  return hit && hit.photo && hit.photo.dataUrl ? hit : null;
+}
+
+export const rowPhoto = (state, n) => referencePhoto(state, rowSlot(n));
+export const cardPhoto = (state, cardId) => referencePhoto(state, cardSlot(cardId));
+
+/**
+ * The tick-list, with each cue carrying its row's photo where there is one.
+ *
+ * Every cue keeps its words whether or not a picture turns up beside them, so
+ * an empty slot costs the person nothing: UX-11 offers photo cards OR a
+ * searchable list by name, and this is both at once.
+ */
+export function photoCues(state) {
+  return CUES.map((cue) => {
+    const n = cue.rows[0];
+    const held = n != null ? rowPhoto(state, n) : null;
+    return { ...cue, photo: held ? held.photo : null, caption: held ? held.caption : '' };
+  });
+}
+
+/**
+ * Which slots are filled and which are still empty — the answer to "show me
+ * the cards that still have no photo".
+ */
+export function photoCoverage(state) {
+  const filled = [];
+  const missing = [];
+  for (const slot of PHOTO_SLOTS) {
+    const held = referencePhoto(state, slot.slot);
+    (held ? filled : missing).push(held ? { ...slot, held } : slot);
+  }
+  const split = (kind) => {
+    const all = PHOTO_SLOTS.filter((s) => s.kind === kind);
+    const gaps = missing.filter((s) => s.kind === kind);
+    return { total: all.length, have: all.length - gaps.length, missing: gaps };
+  };
+  return {
+    cards: split('card'),
+    rows: split('row'),
+    total: PHOTO_SLOTS.length,
+    have: filled.length,
+    missing,
+    percent: PHOTO_SLOTS.length ? filled.length / PHOTO_SLOTS.length : 0,
+    bytes: filled.reduce((n, s) => n + ((s.held.photo || {}).bytes || 0), 0),
+  };
+}
+
 // --- Browsing -------------------------------------------------------------
 
 /** Search the 22 cards and the 23 rows by any word in them. */

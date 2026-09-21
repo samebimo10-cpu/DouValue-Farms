@@ -5,7 +5,7 @@
 // notification.
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
-import { confirmStepDone, isLegacyDiagnosis } from './domain/diagnose.js';
+import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
 /**
@@ -151,6 +151,8 @@ const EMPTY = () => ({
   sprays: [],
   scouts: [],
   diagnoses: [],
+  // Reference photos for the triage rows and diagnosis cards, keyed by slot.
+  referencePhotos: {},
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
@@ -433,6 +435,27 @@ export function reduce(events) {
         d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || '';
         break;
       }
+
+      // FR-DIAG-01 — the reference photo beside each triage row and card.
+      //
+      // Only a slot the rules actually have is accepted. The rules JSON is the
+      // source of truth and the app never writes to it, so the picture lives
+      // here in the log instead, and a slot that no longer exists after a rules
+      // change quietly stops being shown rather than inventing a row.
+      case 'reference.photo.set': {
+        if (!isPhotoSlot(p.slot) || !p.photo || !p.photo.dataUrl) break;
+        state.referencePhotos[p.slot] = {
+          slot: p.slot,
+          photo: p.photo,
+          caption: p.caption || '',
+          by: e.by,
+          at: e.at,
+        };
+        break;
+      }
+      case 'reference.photo.clear':
+        delete state.referencePhotos[p.slot];
+        break;
 
       case 'report.record':
         state.reports.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: 'open' });

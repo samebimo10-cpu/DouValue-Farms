@@ -102,6 +102,13 @@ export const EVENT_POLICY = {
   'input.issue':       { write: 'logInputs',     read: ANY },
   'weather.record':    { write: 'logWork',       read: ANY },
 
+  // FR-DIAG-01 — reference photos for the triage rows and diagnosis cards.
+  // `settings` is held by the Farm Manager and the CEO and nobody else, which
+  // is the Owner-or-Farm-Manager rule. Everyone reads them: a reference photo
+  // is worth nothing on the one phone that has it.
+  'reference.photo.set':   { write: 'settings', read: ANY, guard: guardReferencePhoto },
+  'reference.photo.clear': { write: 'settings', read: ANY, guard: guardReferenceClear },
+
   // Gates (requirements 6.2). These decide whether planting and spraying are
   // allowed at all, so who may write them matters more than most.
   //
@@ -519,6 +526,42 @@ function guardConfirmDiagnosis(event) {
   }
   if (!String(p.confirmResult || '').trim()) {
     return { ok: false, why: 'Say what the confirm test showed' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-DIAG-01 — a reference photo names the slot it fills and carries a picture.
+ *
+ * Which slots exist comes from the rules JSON, which this server does not read,
+ * so the check here is the shape and the size. The size is the point: these are
+ * the only pictures in the log that every phone downloads whether or not it
+ * ever opens them, so one oversized upload is a cost the whole farm pays on a
+ * metered bundle (FR-PROOF-04, NFR-DEV-01).
+ */
+const REFERENCE_PHOTO_MAX_BYTES = 200 * 1024;
+
+function guardReferencePhoto(event) {
+  const p = event.payload || {};
+  if (!/^(row|card):[A-Za-z0-9_]+$/.test(String(p.slot || ''))) {
+    return { ok: false, why: 'A reference photo must say which row or card it belongs to' };
+  }
+  const photo = p.photo || {};
+  if (!String(photo.dataUrl || '').startsWith('data:image/')) {
+    return { ok: false, why: 'A reference photo needs a picture' };
+  }
+  const bytes = Number(photo.bytes) || Math.round((String(photo.dataUrl).length * 3) / 4);
+  if (bytes > REFERENCE_PHOTO_MAX_BYTES) {
+    return { ok: false, why: 'That picture is too big to send to every phone on the farm' };
+  }
+  return { ok: true };
+}
+
+function guardReferenceClear(event) {
+  const p = event.payload || {};
+  if (!p.slot) return { ok: false, why: 'Say which reference photo is being removed' };
+  if (String(p.reason || '').trim().length < 4) {
+    return { ok: false, why: 'Say why the picture is coming off' };
   }
   return { ok: true };
 }

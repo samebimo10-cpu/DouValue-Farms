@@ -387,3 +387,163 @@ test('every triage row\'s likely name resolves to the card it reaches', () => {
     assert.equal(dx.cardFor(row.likely).id, row.cardId, `row ${row.n}`);
   }
 });
+
+// --- Reference photos (FR-DIAG-01, UX-11) --------------------------------
+//
+// FR-DIAG-01 asks for the triage rows and cards as guided questions "with
+// reference photos". The pictures are the farm's, not the rules': the rules
+// JSON is the source of truth and the app never writes to it. So the slots are
+// derived from the rules and the pictures live in the farm's own event log.
+
+test('there is one photo slot for every triage row and every card', () => {
+  assert.equal(dx.PHOTO_SLOTS.length, RULES.triage.length + RULES.diagnosis_cards.length);
+  assert.equal(dx.PHOTO_SLOTS.length, 45);
+  for (const row of dx.TRIAGE) {
+    assert.ok(dx.PHOTO_SLOT_BY_ID.has(dx.rowSlot(row.n)), `row ${row.n} has no slot`);
+  }
+  for (const card of dx.CARDS) {
+    assert.ok(dx.PHOTO_SLOT_BY_ID.has(dx.cardSlot(card.id)), `${card.id} has no slot`);
+  }
+  // Each slot says where it belongs and what the picture is meant to show, so
+  // whoever is holding the camera knows what to point it at.
+  for (const slot of dx.PHOTO_SLOTS) {
+    assert.ok(slot.where && slot.label && slot.shows, `${slot.slot} is not described`);
+  }
+});
+
+test('a slot the rules do not have is not a slot', () => {
+  assert.equal(dx.isPhotoSlot('card:thrips'), true);
+  assert.equal(dx.isPhotoSlot('row:23'), true);
+  assert.equal(dx.isPhotoSlot('row:99'), false);
+  assert.equal(dx.isPhotoSlot('card:cercospora_leaf_spot'), false);
+  assert.equal(dx.isPhotoSlot(''), false);
+});
+
+const shot = (bytes = 4000) => ({ dataUrl: 'data:image/jpeg;base64,abc', bytes });
+const withPhotos = (held) => ({ people: {}, referencePhotos: held });
+
+test('coverage counts the gaps, split into cards and rows', () => {
+  const bare = dx.photoCoverage({});
+  assert.equal(bare.total, 45);
+  assert.equal(bare.have, 0);
+  assert.equal(bare.cards.missing.length, 22);
+  assert.equal(bare.rows.missing.length, 23);
+  assert.equal(bare.percent, 0);
+
+  const some = dx.photoCoverage(withPhotos({
+    'card:thrips': { slot: 'card:thrips', photo: shot(5000) },
+    'row:23': { slot: 'row:23', photo: shot(3000) },
+  }));
+  assert.equal(some.have, 2);
+  assert.equal(some.cards.have, 1);
+  assert.equal(some.rows.have, 1);
+  assert.equal(some.missing.length, 43);
+  assert.equal(some.bytes, 8000, 'it says what every phone has to carry');
+  assert.ok(!some.cards.missing.some((m) => m.cardId === 'thrips'));
+});
+
+test('an empty slot leaves the tick-list exactly as it was', () => {
+  const bare = dx.photoCues({});
+  assert.equal(bare.length, dx.CUES.length);
+  for (const cue of bare) {
+    assert.equal(cue.photo, null);
+    assert.ok(cue.text, 'the words are still there, which is what the engine matches on');
+  }
+  // And the words are what matching uses, photo or no photo.
+  assert.equal(dx.matchTriage('stunted plants, no galls').rows[0].card.id, 'acid_soil');
+});
+
+test('a cue shows its own row\'s photo when the slot is filled', () => {
+  // One picture per row, so every clause of that row's wording carries it —
+  // whichever line the person is scanning, the picture is beside it.
+  const mine = dx.CUES.filter((c) => c.rows[0] === 23).map((c) => c.id);
+  assert.ok(mine.length > 1, 'row 23 is written as several clauses');
+  const cues = dx.photoCues(withPhotos({
+    'row:23': { slot: 'row:23', photo: shot(), caption: 'GH-03, week 6' },
+  }));
+  for (const id of mine) {
+    const filled = cues.find((c) => c.id === id);
+    assert.equal(filled.photo.dataUrl, 'data:image/jpeg;base64,abc');
+    assert.equal(filled.caption, 'GH-03, week 6');
+  }
+  // No cue belonging to any other row picked it up.
+  assert.deepEqual(cues.filter((c) => c.photo).map((c) => c.id).sort(), mine.slice().sort());
+});
+
+test('a card\'s photo is not shown as if it were the symptom', () => {
+  // The row picture is what you see walking the house; the card picture is the
+  // confirmed thing. Borrowing one for the other would show the answer at the
+  // step that is meant to be a question.
+  const state = withPhotos({ 'card:acid_soil': { slot: 'card:acid_soil', photo: shot() } });
+  assert.equal(dx.rowPhoto(state, 23), null);
+  assert.ok(dx.cardPhoto(state, 'acid_soil'));
+  assert.equal(dx.photoCues(state).filter((c) => c.photo).length, 0);
+});
+
+test('a slot with no picture in it reads as empty, not as a broken picture', () => {
+  assert.equal(dx.referencePhoto({}, 'card:thrips'), null);
+  assert.equal(dx.referencePhoto(withPhotos({ 'card:thrips': { slot: 'card:thrips' } }), 'card:thrips'), null);
+  assert.equal(dx.referencePhoto(withPhotos({ 'card:thrips': { photo: {} } }), 'card:thrips'), null);
+});
+
+test('the event log holds the pictures, and only for slots the rules have', () => {
+  const at = (n) => `2026-09-2${n}T08:00:00Z`;
+  const state = store.reduce([
+    { id: 'p1', type: 'reference.photo.set', at: at(1), by: 'u_mgr',
+      payload: { slot: 'card:thrips', photo: shot(), caption: 'GH-02 traps' } },
+    { id: 'p2', type: 'reference.photo.set', at: at(2), by: 'u_mgr',
+      payload: { slot: 'row:99', photo: shot() } },
+    { id: 'p3', type: 'reference.photo.set', at: at(3), by: 'u_mgr',
+      payload: { slot: 'row:23' } },
+  ]);
+  assert.equal(Object.keys(state.referencePhotos).length, 1);
+  assert.equal(state.referencePhotos['card:thrips'].caption, 'GH-02 traps');
+  assert.equal(state.referencePhotos['card:thrips'].by, 'u_mgr', 'who put it there is on the record');
+  assert.equal(state.referencePhotos['card:thrips'].at, at(1));
+  assert.equal(dx.photoCoverage(state).have, 1);
+});
+
+test('a picture can be taken back off, and the words carry on', () => {
+  const state = store.reduce([
+    { id: 'p1', type: 'reference.photo.set', at: '2026-09-21T08:00:00Z', by: 'u_mgr',
+      payload: { slot: 'card:thrips', photo: shot() } },
+    { id: 'p2', type: 'reference.photo.clear', at: '2026-09-22T08:00:00Z', by: 'u_mgr',
+      payload: { slot: 'card:thrips', reason: 'it was actually whitefly' } },
+  ]);
+  assert.equal(dx.cardPhoto(state, 'thrips'), null);
+  assert.equal(dx.photoCoverage(state).have, 0);
+  assert.equal(dx.matchTriage('silvery flecks on leaves and tips').rows[0].card.id, 'thrips');
+});
+
+test('only the Owner and the Farm Manager may fill a slot', () => {
+  for (const type of ['reference.photo.set', 'reference.photo.clear']) {
+    assert.equal(core.EVENT_POLICY[type].write, 'settings');
+  }
+  const may = (role) => store.can({ role }, 'settings');
+  assert.equal(may('ceo'), true, 'the Owner');
+  assert.equal(may('manager'), true, 'the Farm Manager');
+  assert.equal(may('supervisor'), false);
+  assert.equal(may('agronomist'), false);
+  assert.equal(may('hand'), false);
+  // Everyone reads them: a reference photo on one phone is worth nothing.
+  assert.equal(core.EVENT_POLICY['reference.photo.set'].read, core.EVENT_POLICY['scout.record'].read);
+});
+
+test('the server refuses a slot, a file or a size it should not carry', () => {
+  const guard = core.EVENT_POLICY['reference.photo.set'].guard;
+  const ok = { slot: 'card:thrips', photo: { dataUrl: 'data:image/jpeg;base64,abc', bytes: 40000 } };
+  assert.equal(guard({ payload: ok }).ok, true);
+  assert.equal(guard({ payload: { ...ok, slot: '' } }).ok, false);
+  assert.equal(guard({ payload: { ...ok, slot: 'zone:GH-01' } }).ok, false);
+  assert.equal(guard({ payload: { ...ok, photo: { dataUrl: 'data:text/html,<script>' } } }).ok, false);
+  // Every phone downloads these whether it opens them or not, so the size is
+  // the whole farm's bill, not the uploader's.
+  assert.equal(guard({ payload: { ...ok, photo: { ...ok.photo, bytes: 400000 } } }).ok, false);
+});
+
+test('taking a picture off the app is a decision with a reason on it', () => {
+  const guard = core.EVENT_POLICY['reference.photo.clear'].guard;
+  assert.equal(guard({ payload: { slot: 'card:thrips', reason: 'wrong pest' } }).ok, true);
+  assert.equal(guard({ payload: { slot: 'card:thrips' } }).ok, false);
+  assert.equal(guard({ payload: { reason: 'wrong pest' } }).ok, false);
+});
