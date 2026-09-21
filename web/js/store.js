@@ -5,6 +5,8 @@
 // notification.
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
+import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
+import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
 /**
@@ -145,14 +147,24 @@ const EMPTY = () => ({
   cycles: {},
   tasks: {},
   inputs: {},
+  actives: {},
+  labels: {},
   harvests: [],
   sales: [],
   sprays: [],
   scouts: [],
   diagnoses: [],
+  doctorOutputs: [],
+  // Reference photos for the triage rows and diagnosis cards, keyed by slot.
+  referencePhotos: {},
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
+  // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
+  // gates, and the samples that went to a lab.
+  doctorOutputs: [],
+  gateEvidence: [],
+  labSamples: [],
   alertAcks: [],
   alertDecisions: [],
   positions: {},
@@ -195,9 +207,12 @@ export function reduce(events) {
       case 'report.record': return `report:${p.id}`;
       case 'shift.record': return `shift:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
+      case 'label.add': return `label:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
+      case 'doctor.record': return `doctor:${p.id}`;
+      case 'lab.record': return `lab:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
@@ -215,11 +230,14 @@ export function reduce(events) {
       case 'report.resolve': return `report:${p.id}`;
       case 'shift.comment': return `shift:${p.shiftId}`;
       case 'input.receive': case 'input.issue': return `input:${p.itemId}`;
+      case 'label.retire': return `label:${p.id}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
+      case 'doctor.confirm': case 'doctor.approve': case 'doctor.owner-seen': return `doctor:${p.id}`;
+      case 'lab.send': case 'lab.result': return `lab:${p.id}`;
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
@@ -234,11 +252,14 @@ export function reduce(events) {
       case 'cycle': return !!state.cycles[id];
       case 'task': return !!state.tasks[id];
       case 'input': return !!state.inputs[id];
+      case 'label': return !!state.labels[id];
       case 'person': return !!state.people[id];
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
       case 'override': return state.gateOverrides.some((o) => o.id === id);
+      case 'doctor': return state.doctorOutputs.some((o) => o.id === id);
+      case 'lab': return state.labSamples.some((s) => s.id === id);
       case 'position': return !!state.positions[id];
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
@@ -282,6 +303,98 @@ export function reduce(events) {
       case 'gate.override.revoke': {
         const o = state.gateOverrides.find((x) => x.id === p.id);
         if (o) { o.revoked = true; o.revokedBy = e.by; o.revokedAt = e.at; }
+        break;
+      }
+
+      // --- The Farm Doctor (requirements 6.14) ---------------------------
+      //
+      // Every output the Doctor produces is saved with what it read, how sure
+      // it was and — later, by a separate record — who confirmed it
+      // (FR-DOC-10). The three FR-DOC-08 limits that matter here are enforced
+      // on the way in rather than trusted: whatever a payload claims, an
+      // output lands unconfirmed, unapproved and clearing nothing. The Farm
+      // Doctor cannot promote its own work by writing a field.
+      case 'doctor.record':
+        state.doctorOutputs.push({
+          ...p,
+          id: p.id || e.id,
+          by: DOCTOR.id,
+          savedBy: e.by,
+          at: p.at || e.at,
+          clears: false,
+          confirmedBy: null, confirmedAt: null,
+          approvedBy: null, approvedAt: null,
+        });
+        break;
+
+      // FR-DOC-08: a person confirms, and only one senior enough for that kind
+      // of output. A confirmation from the Doctor itself, or from someone
+      // junior, is not applied — the record stays unconfirmed, which is what
+      // every gate and every spray screen then reads.
+      case 'doctor.confirm': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (!o) break;
+        const person = state.people[e.by];
+        const spec = CONFIRMS[o.kind] || CONFIRMS.diagnosis;
+        if (e.by === DOCTOR.id || !person || roleRank(person) < spec.minRank) break;
+        o.confirmedBy = e.by;
+        o.confirmedRole = person.role;
+        o.confirmedAt = e.at;
+        o.confirmNote = p.note || '';
+        break;
+      }
+      // FR-GATE-00: the Owner approves Gate 0 and Gate 4 work; the Farm
+      // Manager approves a treatment plan. Approval never arrives before
+      // confirmation, because the two are different people saying different
+      // things.
+      case 'doctor.approve': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (!o || !o.confirmedBy) break;
+        const person = state.people[e.by];
+        const spec = CONFIRMS[o.kind] || CONFIRMS.plan;
+        const needed = spec.approver || spec.minRank;
+        if (e.by === DOCTOR.id || !person || roleRank(person) < needed) break;
+        o.approvedBy = e.by;
+        o.approvedAt = e.at;
+        o.approveNote = p.note || '';
+        break;
+      }
+      case 'doctor.owner-seen': {
+        const o = state.doctorOutputs.find((x) => x.id === p.id);
+        if (o) { o.ownerSeenAt = e.at; o.ownerSeenBy = e.by; }
+        break;
+      }
+
+      // FR-DOC-06: one line of a gate's evidence, recorded by whoever did it.
+      // Evidence is never a pass on its own — gates.js and doctor.js read it,
+      // and people still clear the gate.
+      case 'gate.evidence':
+        state.gateEvidence.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+
+      // FR-DIAG-05 / FR-DOC-09: a sample, from the day it was recommended to
+      // the day the result came back.
+      case 'lab.record':
+        state.labSamples.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: p.status || 'recommended' });
+        break;
+      case 'lab.send': {
+        const sample = state.labSamples.find((x) => x.id === p.id);
+        if (sample) {
+          sample.lab = p.lab || sample.lab;
+          sample.sentDate = p.sentDate || isoDate(new Date(e.at));
+          sample.sentBy = e.by;
+          sample.status = 'sent';
+        }
+        break;
+      }
+      case 'lab.result': {
+        const sample = state.labSamples.find((x) => x.id === p.id);
+        if (sample) {
+          sample.result = p.result || '';
+          sample.resultDate = p.resultDate || isoDate(new Date(e.at));
+          sample.resultNote = p.note || '';
+          sample.status = 'returned';
+        }
         break;
       }
 
@@ -419,11 +532,46 @@ export function reduce(events) {
         state.diagnoses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
 
+      // FR-DIAG-02 / FR-DOC-01 — a diagnosis the Farm Doctor produced cannot be
+      // confirmed until the card, the photos and the confirm test are all on
+      // the record. Replay enforces it as well as the screens do, because a
+      // phone that skipped the flow must not be able to sync its way past it.
+      //
+      // Records from before the rules engine carry no card and no confirm step.
+      // They are left exactly as they were confirmed at the time: the event log
+      // is a record of what people actually did, and rewriting history here
+      // would make every past treatment look ungated.
       case 'diagnosis.confirm': {
         const d = state.diagnoses.find((x) => x.id === p.id);
-        if (d) { d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || ''; }
+        if (!d) break;
+        if (!isLegacyDiagnosis(d) && !confirmStepDone(d)) {
+          d.confirmRefused = 'The confirm test and the photos were not on the record.';
+          break;
+        }
+        d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || '';
         break;
       }
+
+      // FR-DIAG-01 — the reference photo beside each triage row and card.
+      //
+      // Only a slot the rules actually have is accepted. The rules JSON is the
+      // source of truth and the app never writes to it, so the picture lives
+      // here in the log instead, and a slot that no longer exists after a rules
+      // change quietly stops being shown rather than inventing a row.
+      case 'reference.photo.set': {
+        if (!isPhotoSlot(p.slot) || !p.photo || !p.photo.dataUrl) break;
+        state.referencePhotos[p.slot] = {
+          slot: p.slot,
+          photo: p.photo,
+          caption: p.caption || '',
+          by: e.by,
+          at: e.at,
+        };
+        break;
+      }
+      case 'reference.photo.clear':
+        delete state.referencePhotos[p.slot];
+        break;
 
       case 'report.record':
         state.reports.push({ ...p, id: p.id || e.id, by: e.by, at: e.at, status: 'open' });
@@ -464,6 +612,27 @@ export function reduce(events) {
       case 'input.issue':
         state.inputs[p.itemId].qty = (Number(state.inputs[p.itemId].qty) || 0) - Number(p.qty || 0);
         state.stockMoves.push({ ...p, id: p.id || e.id, direction: 'out', by: e.by, at: e.at });
+        break;
+
+      // --- The chemical catalogue (requirements 6.8) --------------------
+      // The twenty actives and their IRAC/FRAC groups come from the rules file
+      // and are never written here. What the farm records is only what the
+      // rules leave to it: an active the Owner has added, with its group, and
+      // the brand labels a manager attaches to actives already in the
+      // catalogue. Both are read through domain/catalogue.js, which drops any
+      // banned active whatever the log says — so a bad merge cannot put
+      // carbofuran back on a spray screen.
+      case 'active.add':
+        state.actives[p.id] = { ...p, by: e.by, at: e.at };
+        break;
+      case 'label.add':
+        state.labels[p.id] = { ...(state.labels[p.id] || {}), ...p, by: e.by, at: e.at };
+        break;
+      case 'label.retire':
+        if (state.labels[p.id]) {
+          state.labels[p.id].retired = true;
+          state.labels[p.id].retiredBy = e.by;
+        }
         break;
 
       case 'weather.record':

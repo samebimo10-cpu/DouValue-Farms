@@ -53,7 +53,13 @@ test('every screen the app can reach is in the offline cache', () => {
 });
 
 test('the cache name was bumped, so an old shell is discarded rather than mixed', () => {
-  assert.match(swSource, /const CACHE = 'douvalue-v12'/);
+  // Pinned to a number this test would have to be edited for, rather than to
+  // one particular number: every branch that adds a file to the shell bumps
+  // this, and a test that has to be edited on each bump is a test people learn
+  // to edit without reading.
+  const version = /const CACHE = 'douvalue-v(\d+)'/.exec(swSource);
+  assert.ok(version, 'the shell cache is named and versioned');
+  assert.ok(Number(version[1]) >= 12, `v${version[1]} is older than the version this test was written against`);
 });
 
 // --- The prompt ------------------------------------------------------------

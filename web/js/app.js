@@ -5,19 +5,23 @@ import { can, createStore, setPractice } from './store.js';
 import { registerRoute, startShell } from './ui/shell.js';
 import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
-import { clinicView, diagnoseView, guideView, guideItemView } from './ui/clinic.js';
+import { clinicView, diagnoseView, guideView, guideItemView, photoDeskView } from './ui/clinic.js';
+import { doctorView } from './ui/doctor.js';
 import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
-import { adviserView } from './ui/adviser.js';
+import { doctorView } from './ui/doctor.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView, zoneCodesView } from './ui/zones.js';
 import { kpiView } from './ui/kpis.js';
 import { shiftView } from './ui/shift.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
+import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
 import { missingTasks } from './domain/schedule.js';
+import { missingFollowUps } from './domain/doctor.js';
+import { loadRules } from './rules.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
@@ -27,13 +31,19 @@ registerRoute('#/field', fieldView);
 registerRoute('#/field/cycle', cycleView);
 registerRoute('#/clinic', clinicView);
 registerRoute('#/diagnose', diagnoseView);
+registerRoute('#/doctor', doctorView);
 registerRoute('#/guide', guideView);
 registerRoute('#/guide/item', guideItemView);
+registerRoute('#/guide/photos', photoDeskView);
 registerRoute('#/dashboard', dashboardView);
 registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);
 registerRoute('#/audit', auditView);
-registerRoute('#/adviser', adviserView);
+// FR-DOC-11 — one entry point. The Farm Doctor and the farm adviser are tabs
+// on one screen, so nobody has to decide which of them their question is for
+// before they know what is wrong. Both addresses land in the same place.
+registerRoute('#/doctor', doctorView);
+registerRoute('#/adviser', doctorView);
 registerRoute('#/gates', gatesView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
@@ -79,7 +89,14 @@ async function warmWeather(ctx) {
  */
 async function generateToday(ctx) {
   if (!ctx.user || !can(ctx.user, 'assignTasks')) return;
-  const due = missingTasks(ctx.store.state, { date: isoDate() });
+  const today = isoDate();
+  // FR-DOC-07: the three-day check after every treatment is generated the same
+  // way, from the spray it belongs to, so it is on the board whether or not
+  // anybody remembered to write it down.
+  const due = [
+    ...missingTasks(ctx.store.state, { date: today }),
+    ...missingFollowUps(ctx.store.state, { today }),
+  ];
   if (!due.length) return;
 
   for (const task of due) {
@@ -88,12 +105,41 @@ async function generateToday(ctx) {
   ctx.refresh();
 }
 
+/**
+ * FR-STOCK-05 — put the store's existing items onto active ingredients.
+ *
+ * The farm has a store full of items typed in by name: "Mancozeb 80% WP",
+ * "Neem oil". The catalogue works on actives, so each item is matched to one
+ * and the match is recorded — as an `input.upsert` carrying the active id,
+ * because the log is append-only and nothing here rewrites history. Past
+ * treatments are not touched at all; they are read through the catalogue, so
+ * the count before and the count after are the same records.
+ *
+ * Runs on every open, writes only the first time: each event has a fixed id,
+ * so five phones produce the same events and the merge is a no-op.
+ */
+async function migrateCatalogue(ctx) {
+  if (!ctx.user || !can(ctx.user, 'logInputs')) return;
+  const result = await migrateStockToActives(ctx.store, buildCatalogue(ctx.store.state));
+  if (result.written) ctx.refresh();
+}
+
 async function main() {
   // UX-25 has to be decided before anything is loaded: a practice session must
   // never open the real log at all.
   let practising = false;
   try { practising = sessionStorage.getItem('douvalue.practice') === '1'; } catch { /* off */ }
   setPractice(practising);
+
+  // The rules file is the source of truth for the gates, the rotation, the
+  // catalogue and both calculators, so it is read before anything can ask
+  // about them. It is in the service-worker cache, so the second open needs no
+  // network; a first open with no signal still starts the app — every field
+  // task has to work with no signal (NFR-OFF-01) — and the Farm Doctor says
+  // plainly that it has no rule book rather than guessing at one (FR-DOC-08).
+  await loadRules().catch((err) => {
+    console.error('Could not read the rules file', err);
+  });
 
   const store = await createStore();
 
@@ -114,6 +160,13 @@ async function main() {
     // A farm that cannot generate its schedule still has to be usable: every
     // screen works on what is already recorded.
     console.error('Could not generate today\'s tasks', err);
+  });
+
+  // Practice included: in practice mode the events are applied to the screen
+  // and thrown away, so a trainee sees the store on its actives like everybody
+  // else and nothing is written.
+  await migrateCatalogue(ctx).catch((err) => {
+    console.error('Could not match the store to the catalogue', err);
   });
 
   warmWeather(ctx).catch(() => { /* climatology carries the app without it */ });

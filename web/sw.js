@@ -5,8 +5,11 @@
 // first. Network is only ever used to look for a newer copy in the background.
 
 // Bumped whenever the shell changes. A phone holding an older cache discards it
-// on activate rather than serving half of one version and half of another.
-const CACHE = 'douvalue-v12';
+// on activate rather than serving half of one version and half of another. The
+// rules file is cached with it: the plan checks, the gate checks and both
+// calculators are required to work with no signal (FR-DOC-03), and they cannot
+// do that if their own rule book needs a network.
+const CACHE = 'douvalue-v16';
 
 const SHELL = [
   './',
@@ -31,6 +34,8 @@ const SHELL = [
   './js/ui/field.js',
   './js/ui/audit.js',
   './js/ui/clinic.js',
+  './js/ui/doctor.js',
+  './js/ui/ppe.js',
   './js/ui/manage.js',
   './js/ui/photo.js',
   './js/ui/adviser.js',
@@ -43,7 +48,9 @@ const SHELL = [
   './js/ui/scan.js',
   './js/ui/shift.js',
   './js/ui/update.js',
+  './js/rules.js',
   './js/domain/adviser.js',
+  './js/domain/doctor.js',
   './js/domain/analysis.js',
   './js/domain/brief.js',
   './js/domain/gates.js',
@@ -57,7 +64,13 @@ const SHELL = [
   './js/domain/climate.js',
   './js/domain/pests.js',
   './js/domain/diagnose.js',
+  // The source of truth itself. NFR-OFF-01: the clinic has to work on a
+  // phone with no signal, and it cannot diagnose anything without this.
+  '../rules/douvalue_rules_rev5_1.json',
   './js/domain/safety.js',
+  './js/domain/catalogue.js',
+  './js/domain/rotation.js',
+  './js/domain/calc.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',
   './js/domain/qr.js',
@@ -74,8 +87,30 @@ const SHELL = [
 // reason they can see. So the new version installs, caches everything it needs,
 // and then sits still. The app notices it waiting and shows "New version — tap
 // to update"; the tap sends the message below, and only then does it take over.
+
+// The single copy of the rules, published beside the app by
+// scripts/assemble_site.sh. One file, one answer (CLAUDE.md).
+//
+// Two addresses, for the same reason web/js/rules.js tries two: on the
+// published site the app is at the root and the rules one level below it, and
+// in the repository the app is under web/ and the rules a level further up.
+// Cached apart from the shell on purpose — if it is missing the app must still
+// install and run, and the Farm Doctor says it has no rule book, which is a far
+// better failure than no offline app at all.
+const RULES = ['./rules/douvalue_rules_rev5_1.json', '../rules/douvalue_rules_rev5_1.json'];
+
+/** Cache the rules from whichever address answers. Never fails the install. */
+async function cacheRules(cache) {
+  for (const url of RULES) {
+    try {
+      await cache.add(url);
+      return;
+    } catch { /* try the other address */ }
+  }
+}
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL).then(() => cacheRules(cache))));
 });
 
 // The tap. Nothing else may trigger a takeover.

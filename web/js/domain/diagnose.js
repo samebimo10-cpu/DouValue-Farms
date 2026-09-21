@@ -1,220 +1,846 @@
-// Turns a tick-list of what a worker can see into a ranked, explained shortlist.
+// The Farm Doctor's diagnosis engine — FR-DIAG-01, FR-DIAG-02, FR-DOC-01, FR-DOC-02.
 //
-// The scoring is deliberately transparent. A farm hand should be able to see why
-// the app said what it said, and an agronomist should be able to argue with it.
+// Everything about a pest, a disease or a disorder in here is READ FROM
+// rules/douvalue_rules_rev5_1.json: the 23 triage rows, the 22 diagnosis cards,
+// the root read and the Farm Doctor's own limits. No symptom, weight, cause or
+// test is written down in this file, so a change to the rules changes the
+// diagnosis without anybody touching code. What this file holds is the method:
+//
+//   symptom  ->  matching triage rows  ->  card  ->  confirm test
+//
+// and the rule that gives the method its point (FR-DOC-01): the Farm Doctor
+// asks for photos and the confirm step BEFORE it names a cause. Season 1 was
+// lost partly to "treatment by guesswork"; naming a cause off a glance is how
+// guesswork gets a name and a spray.
+//
+// The matching itself is deliberately plain text-matching against the rules'
+// own wording, weighted by how much a word narrows the 23 rows down. Two
+// things make it work on real field words:
+//
+//   * Negation. "NO galls" in row 23 is the whole difference between acid soil
+//     and nematode. A worker who types "no galls" must be pushed towards acid
+//     soil and away from nematode, not merely fail to match "galls".
+//   * Contradiction. A word one row asserts and another denies is not noise:
+//     it is the separating test, and the engine reports it as one.
+//
+// riskForecast() at the foot of the file is the other half of the clinic — the
+// standing weather-and-stage risk board — and still reads the local field guide
+// in pests.js, which carries the product, PHI and weather data the rules do not.
 
-import { PROBLEMS, PROBLEM_BY_ID, SYMPTOM_BY_ID, SYMPTOMS } from './pests.js';
-import { stageAt } from './crops.js';
+// The rules file is read in one place for the whole app (web/js/rules.js).
+// This module needs the document at import time, because the 22 cards and the
+// 23 triage rows are built from it as ordinary constants; the loader caches,
+// so asking it here costs one read shared with everybody else rather than a
+// second copy of the file.
+import { loadRules, peekRules, rulesVersion } from '../rules.js';
+
+const RULES = peekRules() || await loadRules();
+
+/** rules-1.2 at the time of writing. Stamped onto everything the engine produces. */
+export const RULES_VERSION = rulesVersion(RULES) || 'unknown';
+import { PROBLEMS, PROBLEM_BY_ID } from './pests.js';
 import { wetnessIndex, drynessIndex, waterloggingIndex } from './climate.js';
 import { clamp } from '../util.js';
 
-/** A symptom with weight 5 is close to decisive for that problem. */
-const DECISIVE = 5;
+
+// --- Reading the rules' prose ---------------------------------------------
+
+const NEGATORS = new Set(['no', 'not', 'without', 'never', 'none', 'nothing', 'nor']);
+
+/** Words that appear everywhere and narrow nothing. */
+const STOP = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'on', 'in', 'to', 'with', 'at', 'by', 'for', 'from',
+  'then', 'that', 'than', 'is', 'are', 'was', 'were', 'be', 'it', 'its', 'this', 'these',
+  'those', 'but', 'also', 'still', 'over', 'under', 'per', 'if', 'any', 'all', 'one', 'two',
+  'three', 'into', 'out', 'up', 'down', 'when', 'while', 'after', 'before', 'very', 'more',
+  'most', 'less', 'only', 'same', 'other', 'others', 'each', 'every', 'look', 'looks', 'like',
+  'can', 'cannot', 'has', 'have', 'been', 'may', 'will', 'there', 'their', 'they', 'you', 'your',
+]);
 
 /**
- * How much a symptom narrows things down.
- *
- * "Started after heavy rain" fits a third of the guide and proves almost
- * nothing. "Cut stem oozes milky thread" fits one thing only. Without this,
- * a single vague tick can carry an unrelated problem to the top of the list
- * purely because that problem had nothing else to be judged on.
+ * Crude English plural folding, enough to make "galls" and "gall", "leaves"
+ * and "leaf" the same word. Anything cleverer would need a dictionary, and a
+ * dictionary is a second source of truth.
  */
-const SPECIFICITY = (() => {
-  const df = new Map();
-  for (const p of PROBLEMS) {
-    for (const sid of Object.keys(p.symptoms)) df.set(sid, (df.get(sid) || 0) + 1);
+function stem(word) {
+  if (word.length > 4 && word.endsWith('ves')) return `${word.slice(0, -3)}f`;
+  if (word.length > 3 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss') && !word.endsWith('us')) {
+    return word.slice(0, -1);
   }
-  const n = PROBLEMS.length;
-  const ceiling = Math.log(1 + n);
-  const out = {};
-  for (const [sid, count] of df) {
-    const info = Math.log(1 + n / count) / ceiling; // 1 for unique, low for common
-    out[sid] = 0.5 + 0.5 * info;
+  return word;
+}
+
+/** Negation runs to the end of its clause and no further. */
+function clausesOf(text) { return String(text == null ? '' : text).split(/[;,:.!?()]+/); }
+
+/**
+ * Text -> Map(term -> net polarity). A positive count means the text asserts
+ * the sign; a negative count means it denies it ("no insect visible").
+ */
+export function termsOf(text) {
+  const out = new Map();
+  for (const clause of clausesOf(text)) {
+    let negated = false;
+    for (const raw of clause.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (!raw) continue;
+      if (NEGATORS.has(raw)) { negated = true; continue; }
+      if (raw.length < 3 || STOP.has(raw)) continue;
+      const term = stem(raw);
+      out.set(term, (out.get(term) || 0) + (negated ? -1 : 1));
+    }
   }
   return out;
-})();
-
-function spec(sid) { return SPECIFICITY[sid] ?? 0.75; }
-
-function weatherFit(problem, date, observed) {
-  const c = problem.conditions || {};
-  const keys = Object.keys(c);
-  if (!keys.length) return 1;
-  const index = {
-    wetness: wetnessIndex(date, observed),
-    dryness: drynessIndex(date, observed),
-    waterlogging: waterloggingIndex(date, observed),
-  };
-  let weighted = 0, total = 0;
-  for (const k of keys) {
-    weighted += (c[k] || 0) * (index[k] ?? 0.5);
-    total += c[k] || 0;
-  }
-  const fit = total ? weighted / total : 0.5;
-  // Weather nudges the ranking; it never decides it on its own.
-  return 0.75 + 0.5 * fit;
 }
 
-function stageFit(problem, stageId) {
-  if (!problem.stages || !problem.stages.length) return 1;
-  if (!stageId) return 1;
-  return problem.stages.includes(stageId) ? 1 : 0.6;
+const polarity = (n) => (n < 0 ? -1 : 1);
+
+/** Inverse document frequency over a corpus of term maps: rare words carry more. */
+function idfIndex(corpus) {
+  const df = new Map();
+  for (const terms of corpus) for (const t of terms.keys()) df.set(t, (df.get(t) || 0) + 1);
+  const n = corpus.length;
+  const out = new Map();
+  for (const [t, count] of df) out.set(t, Math.log(1 + n / count));
+  return out;
 }
+
+// --- The cards ------------------------------------------------------------
+
+const segmentsOf = (id) => new Set(String(id).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+const subset = (a, b) => [...a].every((x) => b.has(x));
+
+/** "root_knot_nematode" -> "Root knot nematode". The rules give ids, not names. */
+function nameFromId(id) {
+  const words = String(id).replace(/_/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const RAW_CARDS = RULES.diagnosis_cards;
+const CARD_SEGMENTS = new Map(RAW_CARDS.map((c) => [c.id, segmentsOf(c.id)]));
 
 /**
- * Score every problem against the observations.
+ * Which card a triage row's `likely` names.
  *
- * ctx: { symptoms: string[], parts: string[], cropId, dat, date, observed }
- *  - parts is which parts of the plant the worker actually inspected. Only
- *    symptoms in those parts count against a problem, so a worker who never
- *    dug the roots is not penalised for missing root galls.
+ * Twenty-one of the 23 rows name a card id outright. The other two are
+ * sunscald and fruit_cracking, which the rules fold into one `sunscald_cracking`
+ * card — so a row also matches a card that shares a word with it, as long as
+ * exactly one card does. That is why 23 rows reach 22 cards.
  */
-export function diagnose(ctx = {}) {
-  const ticked = new Set(ctx.symptoms || []);
-  const inspected = new Set(ctx.parts && ctx.parts.length
-    ? ctx.parts
-    : [...ticked].map((s) => SYMPTOM_BY_ID[s]?.part).filter(Boolean));
-  const date = ctx.date || new Date();
-  const stageId = ctx.stage || (ctx.cropId != null && ctx.dat != null
-    ? stageAt(ctx.cropId, ctx.dat).id : null);
+function cardIdFor(likely) {
+  const key = String(likely || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (!key) return null;
+  if (CARD_SEGMENTS.has(key)) return key;
+  const want = segmentsOf(key);
+  let best = 0;
+  let hits = [];
+  for (const [id, have] of CARD_SEGMENTS) {
+    let overlap = 0;
+    for (const s of want) if (have.has(s)) overlap += 1;
+    if (overlap > best) { best = overlap; hits = [id]; } else if (overlap === best && overlap > 0) hits.push(id);
+  }
+  return best > 0 && hits.length === 1 ? hits[0] : null;
+}
 
-  if (!ticked.size) return { results: [], asked: 0, nextChecks: [] };
+// --- The triage table -----------------------------------------------------
 
-  const results = [];
-  for (const problem of PROBLEMS) {
-    if (ctx.cropId && problem.crops && !problem.crops.includes(ctx.cropId)) continue;
+const cardsById = new Map();
+for (const raw of RAW_CARDS) {
+  cardsById.set(raw.id, {
+    ...raw,
+    name: nameFromId(raw.id),
+    rows: [],          // filled in below
+    confirmTests: [],
+    firstActions: [],
+  });
+}
 
-    let matched = 0, possible = 0, total = 0, bestHit = 0;
-    const hits = [], misses = [];
-    for (const [sid, w] of Object.entries(problem.symptoms)) {
-      const sym = SYMPTOM_BY_ID[sid];
-      if (!sym) continue;
-      const weight = w * spec(sid);
-      total += weight;
-      if (ticked.has(sid)) {
-        matched += weight;
-        bestHit = Math.max(bestHit, w);
-        hits.push({ id: sid, weight: w });
-        continue;
-      }
-      if (inspected.has(sym.part)) {
-        possible += weight;
-        if (w >= DECISIVE) misses.push({ id: sid, weight: w });
+/** The 23 rows, each carrying the card it reaches and the words it is made of. */
+export const TRIAGE = RULES.triage.map((raw) => {
+  const cardId = cardIdFor(raw.likely);
+  const card = cardId ? cardsById.get(cardId) : null;
+  const signText = [raw.see, card && card.detection, card && card.cause].filter(Boolean).join('; ');
+  const row = {
+    n: raw.n,
+    see: raw.see,
+    likely: raw.likely,
+    confirm: raw.confirm,
+    firstAction: raw.first_action,
+    cardId,
+    cues: clausesOf(raw.see).map((c) => c.trim()).filter(Boolean),
+    signs: termsOf(signText),
+    confirmTerms: termsOf(raw.confirm),
+  };
+  if (card) {
+    card.rows.push(row.n);
+    if (!card.confirmTests.includes(raw.confirm)) card.confirmTests.push(raw.confirm);
+    if (!card.firstActions.includes(raw.first_action)) card.firstActions.push(raw.first_action);
+  }
+  return row;
+});
+
+export const TRIAGE_BY_N = new Map(TRIAGE.map((r) => [r.n, r]));
+
+/** The 22 cards, each knowing which triage rows reach it. */
+export const CARDS = [...cardsById.values()];
+export const CARD_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));
+
+/** The card categories the rules actually use: pest, disease, virus, disorder, soil. */
+export const CARD_CATEGORIES = [...new Set(CARDS.map((c) => c.category))].sort();
+
+/** The names the triage table uses for a card, e.g. "sunscald" -> sunscald_cracking. */
+const LIKELY_TO_CARD = new Map(TRIAGE.filter((r) => r.cardId).map((r) => [r.likely, r.cardId]));
+
+/**
+ * A card, from a card id, a triage row, a triage `likely` name, or an old
+ * field-guide problem id. Deliberately strict about the last one: it goes
+ * through LEGACY_CARD_MAP, which only maps where the match is clear, so
+ * "cercospora_leaf_spot" resolves to nothing rather than to the nearest card
+ * that happens to share the word "spot".
+ */
+export const cardFor = (idOrRow) => {
+  if (!idOrRow) return null;
+  if (typeof idOrRow === 'object') return idOrRow.cardId ? CARD_BY_ID[idOrRow.cardId] || null : idOrRow;
+  return CARD_BY_ID[idOrRow]
+    || CARD_BY_ID[LIKELY_TO_CARD.get(idOrRow)]
+    || CARD_BY_ID[LEGACY_CARD_MAP[idOrRow]]
+    || null;
+};
+
+export const rowsForCard = (cardId) => TRIAGE.filter((r) => r.cardId === cardId);
+
+const SIGN_IDF = idfIndex(TRIAGE.map((r) => r.signs));
+const CONFIRM_IDF = idfIndex(TRIAGE.map((r) => r.confirmTerms));
+const signWeight = (t) => SIGN_IDF.get(t) || 0;
+const confirmWeight = (t) => CONFIRM_IDF.get(t) || 0;
+const signMass = (row) => [...row.signs.keys()].reduce((a, t) => a + signWeight(t), 0);
+
+/** Every distinct observable phrase in the rules, for the tick-list in the wizard. */
+export const CUES = (() => {
+  const seen = new Map();
+  for (const row of TRIAGE) {
+    for (const text of row.cues) {
+      const key = text.toLowerCase();
+      const hit = seen.get(key) || { id: `cue_${seen.size + 1}`, text, rows: [] };
+      if (!hit.rows.includes(row.n)) hit.rows.push(row.n);
+      seen.set(key, hit);
+    }
+  }
+  return [...seen.values()];
+})();
+
+export const CUE_BY_ID = Object.fromEntries(CUES.map((c) => [c.id, c]));
+
+/** Free text plus ticked cues, as one observation. */
+export function observationText(observation) {
+  if (!observation) return '';
+  if (typeof observation === 'string') return observation;
+  if (Array.isArray(observation)) return observation.join('; ');
+  const cues = (observation.cues || []).map((id) => (CUE_BY_ID[id] || { text: id }).text);
+  return [...cues, observation.text || ''].filter(Boolean).join('; ');
+}
+
+// --- Step 1: symptom -> matching triage rows ------------------------------
+
+/**
+ * Score all 23 rows against what the worker says they can see.
+ *
+ * A word the row asserts and the observation asserts counts for it; a word one
+ * of them denies and the other asserts counts against. That single rule is what
+ * carries "stunted plants, no galls" past the nematode row (which needs galls)
+ * and onto the acid-soil row (which needs their absence).
+ */
+export function matchTriage(observation, { limit = 6, floor = 0.05 } = {}) {
+  const text = observationText(observation);
+  const obs = termsOf(text);
+  const known = [...obs.entries()].filter(([t]) => SIGN_IDF.has(t));
+  const unknown = [...obs.keys()].filter((t) => !SIGN_IDF.has(t));
+  const mass = known.reduce((a, [t]) => a + signWeight(t), 0);
+
+  if (!mass) {
+    return { observation: text, rows: [], unmatched: unknown, separator: null, asked: obs.size };
+  }
+
+  const scored = [];
+  for (const row of TRIAGE) {
+    let score = 0;
+    const matched = [];
+    const contradicted = [];
+    for (const [term, obsCount] of known) {
+      const rowCount = row.signs.get(term);
+      if (rowCount === undefined) continue;
+      const weight = signWeight(term);
+      if (polarity(rowCount) === polarity(obsCount)) {
+        score += weight;
+        matched.push({ term, denied: polarity(obsCount) < 0 });
+      } else {
+        score -= weight;
+        contradicted.push({ term, rowAsserts: polarity(rowCount) > 0 });
       }
     }
-    if (!matched) continue;
-    possible += matched;
-
-    let score = matched / possible;
-
-    // A decisive symptom seen is worth more than the same weight spread thin.
-    const sawDecisive = hits.some((h) => h.weight >= DECISIVE);
-    if (sawDecisive) score = clamp(score * 1.2, 0, 1);
-
-    // A decisive symptom looked for and not found argues against.
-    if (misses.length) score *= Math.max(0.55, 1 - 0.22 * misses.length);
-
-    // How much of this problem's evidence was even in view. A problem whose
-    // tell-tale signs are all on a part nobody looked at cannot be confirmed
-    // from here, however well the one tick that did land fits. It belongs in
-    // "go and check this next", not at the top of the answer.
-    const coverage = Math.sqrt(clamp(possible / Math.max(total, 0.001), 0.25, 1));
-    score *= coverage;
-
-    // Nothing but vague signs is not a diagnosis.
-    if (bestHit < 4) score *= 0.55;
-
-    score *= stageFit(problem, stageId);
-    score *= weatherFit(problem, date, ctx.observed);
-
-    // Breadth matters: two ticks out of two is weaker evidence than six out of seven.
-    const breadth = clamp(hits.length / 3, 0.55, 1);
-    score *= 0.7 + 0.3 * breadth;
-
-    results.push({
-      id: problem.id,
-      problem,
-      score: clamp(score, 0, 1),
-      matchedWeight: Math.round(matched * 10) / 10,
-      coverage: Math.round(coverage * 100) / 100,
-      hits: hits.sort((a, b) => b.weight - a.weight),
-      missedDecisive: misses,
-      urgency: clamp(score, 0, 1) * problem.severity,
-      confidence: confidenceLabel(clamp(score, 0, 1)),
+    if (score <= 0) continue;
+    scored.push({
+      row,
+      card: cardFor(row),
+      score: clamp(score / mass, 0, 1),
+      matched,
+      contradicted,
+      confidence: confidenceLabel(clamp(score / mass, 0, 1)),
     });
   }
 
-  results.sort((a, b) => b.score - a.score || b.problem.severity - a.problem.severity);
+  scored.sort((a, b) => b.score - a.score || a.row.n - b.row.n);
+  const rows = scored.filter((r) => r.score >= floor).slice(0, limit);
+
   return {
-    results,
-    asked: ticked.size,
-    inspected: [...inspected],
-    nextChecks: nextChecks(results, inspected, ticked),
-    separator: separatingSymptom(results),
+    observation: text,
+    asked: obs.size,
+    rows,
+    unmatched: unknown,
+    // Two candidates that close together is exactly when the confirm test has
+    // to be named rather than guessed between.
+    separator: rows.length > 1 && rows[0].score - rows[1].score < 0.3
+      ? separatingSymptom(rows[0].card, rows[1].card)
+      : null,
   };
 }
 
 export function confidenceLabel(score) {
-  if (score >= 0.6) return { id: 'strong', label: 'Strong match', hint: 'Act on this, and confirm as you go.' };
-  if (score >= 0.35) return { id: 'likely', label: 'Likely', hint: 'Do the confirming checks before you spend money.' };
-  if (score >= 0.18) return { id: 'possible', label: 'Possible', hint: 'Not enough to act on yet. Look again.' };
-  return { id: 'weak', label: 'Long shot', hint: 'Listed only so you do not miss it.' };
+  if (score >= 0.6) return { id: 'high', label: 'High', hint: 'Do the confirm test, then act on it.' };
+  if (score >= 0.3) return { id: 'medium', label: 'Medium', hint: 'The confirm test decides this one.' };
+  return { id: 'low', label: 'Low', hint: 'Not enough to name a cause. Look again, and send a sample.' };
+}
+
+// --- Look-alikes and the test that separates them (FR-DOC-02) -------------
+
+function rowSimilarity(a, b) {
+  let shared = 0;
+  let contra = 0;
+  const contradictions = [];
+  for (const [term, ca] of a.signs) {
+    const cb = b.signs.get(term);
+    if (cb === undefined) continue;
+    const weight = signWeight(term);
+    if (polarity(ca) === polarity(cb)) shared += weight;
+    else { contra += weight; contradictions.push({ term, asserts: polarity(ca) > 0 ? a.n : b.n }); }
+  }
+  const mass = Math.sqrt(Math.max(signMass(a), 0.001) * Math.max(signMass(b), 0.001));
+  return { score: (shared + contra) / mass, shared: shared / mass, contra: contra / mass, contradictions };
 }
 
 /**
- * What to go and look at next: decisive symptoms of the leading candidates that
- * sit in parts nobody has inspected yet. This is what turns a vague answer into
- * a sharp one on the second pass.
+ * Cards that look like this one in the field.
+ *
+ * Derived, not listed: two rows are look-alikes when they are built out of the
+ * same words. A word they disagree about — galls, or a visible insect — raises
+ * the score rather than lowering it, because that disagreement is the thing a
+ * person has to go and settle.
  */
-export function nextChecks(results, inspected, ticked, limit = 4) {
-  const top = results.slice(0, 4);
+export function lookalikesFor(cardId, { limit = 4, floor = 0.06, ratio = 0.5 } = {}) {
+  const card = cardFor(cardId);
+  if (!card) return [];
+  const mine = rowsForCard(card.id);
   const out = new Map();
-  for (const r of top) {
-    for (const [sid, w] of Object.entries(r.problem.symptoms)) {
-      if (ticked.has(sid) || w < 4) continue;
-      const sym = SYMPTOM_BY_ID[sid];
-      if (!sym || inspected.has(sym.part)) continue;
-      const prev = out.get(sid);
-      const value = w * r.score;
-      if (!prev || prev.value < value) {
-        out.set(sid, { symptom: sym, value, forProblem: r.problem.name, part: sym.part });
+  for (const row of mine) {
+    for (const other of TRIAGE) {
+      if (other.cardId === card.id || !other.cardId) continue;
+      const sim = rowSimilarity(row, other);
+      const prev = out.get(other.cardId);
+      if (!prev || prev.score < sim.score) {
+        out.set(other.cardId, { cardId: other.cardId, card: cardFor(other), row: other, ...sim });
       }
     }
   }
-  return [...out.values()].sort((a, b) => b.value - a.value).slice(0, limit);
+  const ranked = [...out.values()].sort((a, b) => b.score - a.score);
+  if (!ranked.length) return [];
+  // Relative as well as absolute: how alike two rows can look depends on how
+  // much the rules wrote about them, so a card with one strong look-alike must
+  // not also list four distant ones just because its own wording is long.
+  const cut = Math.max(floor, ratio * ranked[0].score);
+  return ranked.filter((x) => x.score >= cut).slice(0, limit);
+}
+
+// --- The root read --------------------------------------------------------
+
+/**
+ * The rules carry one named differential of their own: pull a plant and read
+ * the roots. Its four readings are plain words ("nematode", "acid soil"), so
+ * each is matched to a card whose id is made of those same words — and only
+ * where that is unambiguous, and only among the categories a root read can
+ * reach. "rot" and "water only" resolve to no card and stay as the rules wrote
+ * them, rather than being forced onto the nearest id that happens to contain
+ * the word "rot".
+ */
+const ROOT_CATEGORIES = new Set(['soil', 'disease']);
+
+function cardForReading(reading) {
+  const want = segmentsOf(reading);
+  if (!want.size) return null;
+  const hits = [];
+  for (const [id, have] of CARD_SEGMENTS) {
+    if (!ROOT_CATEGORIES.has(CARD_BY_ID[id].category)) continue;
+    if (subset(want, have)) hits.push(id);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export const ROOT_READ = (() => {
+  const raw = RULES.root_read || {};
+  const readings = Object.entries(raw)
+    .filter(([sign]) => sign !== 'when')
+    .map(([sign, reading]) => ({ sign, reading, cardId: cardForReading(reading) }));
+  return {
+    when: raw.when || '',
+    test: 'Pull a plant and read the roots',
+    readings,
+    cardIds: readings.map((r) => r.cardId).filter(Boolean),
+  };
+})();
+
+const rootReadCovers = (cardId) => ROOT_READ.cardIds.includes(cardId);
+
+// --- separatingSymptom ----------------------------------------------------
+
+/**
+ * How much a confirm test tells you that the OTHER candidate does not already
+ * show. The sharper test is the one that introduces new observations rather
+ * than restating signs both causes share — "cut the stem in clear water and
+ * watch for milky threads" against "cut the lower stem and look for a brown
+ * ring", where both causes already wilt and both tests already cut a stem.
+ */
+function testSharpness(row, otherRow) {
+  let sharp = 0;
+  for (const term of row.confirmTerms.keys()) {
+    if (otherRow.signs.has(term) || otherRow.confirmTerms.has(term)) continue;
+    sharp += confirmWeight(term);
+  }
+  return sharp;
+}
+
+function bestRowFor(cardId, against) {
+  const rows = rowsForCard(cardId);
+  if (rows.length < 2) return rows[0] || null;
+  return rows.slice().sort((a, b) => testSharpness(b, against) - testSharpness(a, against))[0];
 }
 
 /**
- * The single observation that would best separate the top two candidates.
- * "Do the streaming test" beats "gather more information".
+ * FR-DOC-02 — name the look-alike and the test that tells them apart.
+ *
+ * Accepts two cards (or card ids, or triage rows), or the `rows` array from
+ * matchTriage(), in which case it separates the top two. Every test it returns
+ * is a test the rules name: the root read, or a triage row's confirm step.
  */
-export function separatingSymptom(results) {
-  if (results.length < 2) return null;
-  const [a, b] = results;
-  if (a.score - b.score > 0.3) return null; // already clear enough
+export function separatingSymptom(a, b) {
+  if (Array.isArray(a)) {
+    if (a.length < 2) return null;
+    return separatingSymptom(a[0].card || a[0].row || a[0], a[1].card || a[1].row || a[1]);
+  }
+  const cardA = cardFor(a);
+  const cardB = cardFor(b);
+  if (!cardA || !cardB || cardA.id === cardB.id) return null;
+
+  // 1. The rules' own named differential, where it covers both.
+  if (rootReadCovers(cardA.id) && rootReadCovers(cardB.id)) {
+    const readingFor = (id) => ROOT_READ.readings.find((r) => r.cardId === id);
+    return {
+      kind: 'root_read',
+      test: ROOT_READ.test,
+      source: 'rules root_read',
+      when: ROOT_READ.when,
+      readings: ROOT_READ.readings,
+      discriminator: discriminatorBetween(cardA.id, cardB.id),
+      points_to: cardA,
+      away_from: cardB,
+      tests: [cardA, cardB].map((card) => ({
+        test: `${ROOT_READ.test}: ${(readingFor(card.id) || {}).sign || ''}`.trim(),
+        from: 'root_read',
+        points_to: card,
+      })),
+    };
+  }
+
+  // 2. Otherwise the confirm step on each one's triage row, sharper test first.
+  const rowA = bestRowFor(cardA.id, rowsForCard(cardB.id)[0] || TRIAGE[0]);
+  const rowB = bestRowFor(cardB.id, rowA || TRIAGE[0]);
+  if (!rowA || !rowB) return null;
+
+  const tests = [
+    { test: rowA.confirm, from: `triage row ${rowA.n}`, points_to: cardA, sharpness: testSharpness(rowA, rowB) },
+    { test: rowB.confirm, from: `triage row ${rowB.n}`, points_to: cardB, sharpness: testSharpness(rowB, rowA) },
+  ].sort((x, y) => y.sharpness - x.sharpness);
+
+  return {
+    kind: 'confirm_test',
+    test: tests[0].test,
+    source: tests[0].from,
+    points_to: tests[0].points_to,
+    away_from: tests[0].points_to.id === cardA.id ? cardB : cardA,
+    discriminator: discriminatorBetween(cardA.id, cardB.id),
+    tests,
+  };
+}
+
+/** The single sign one of them asserts and the other denies, if there is one. */
+function discriminatorBetween(idA, idB) {
+  const rowsA = rowsForCard(idA);
+  const rowsB = rowsForCard(idB);
   let best = null;
-  const all = new Set([...Object.keys(a.problem.symptoms), ...Object.keys(b.problem.symptoms)]);
-  for (const sid of all) {
-    const wa = a.problem.symptoms[sid] || 0;
-    const wb = b.problem.symptoms[sid] || 0;
-    const gap = Math.abs(wa - wb);
-    if (gap < 3) continue;
-    if (!best || gap > best.gap) {
-      best = {
-        gap,
-        symptom: SYMPTOM_BY_ID[sid],
-        points_to: wa > wb ? a.problem : b.problem,
-        away_from: wa > wb ? b.problem : a.problem,
-      };
+  for (const ra of rowsA) {
+    for (const rb of rowsB) {
+      for (const [term, ca] of ra.signs) {
+        const cb = rb.signs.get(term);
+        if (cb === undefined || polarity(ca) === polarity(cb)) continue;
+        const weight = signWeight(term);
+        if (!best || weight > best.weight) {
+          best = { term, weight, asserted_by: polarity(ca) > 0 ? idA : idB, denied_by: polarity(ca) > 0 ? idB : idA };
+        }
+      }
     }
   }
-  return best && best.symptom ? best : null;
+  return best;
 }
+
+// --- Step 2: the card, but only after photos and the confirm step ---------
+
+/**
+ * FR-DOC-01 — the Farm Doctor asks for photos and the confirm step before
+ * naming a cause. This is the gate that makes that true rather than advisory:
+ * until a draft carries both, nameCause() hands back what is missing instead of
+ * a card. FR-DOC-08 adds the second half: it never confirms its own answer.
+ */
+export function namingGate(draft = {}) {
+  const missing = [];
+  const row = draft.triageRow != null ? TRIAGE_BY_N.get(Number(draft.triageRow)) : null;
+  if (!row) missing.push({ id: 'row', need: 'Pick the triage row that matches what you can see' });
+  if (!((draft.photos || []).length)) {
+    missing.push({ id: 'photos', need: 'Take at least one photo of the affected plant' });
+  }
+  if (!String(draft.confirmTest || '').trim()) {
+    missing.push({ id: 'confirmTest', need: 'Do the confirm test the row names, and record which test you did' });
+  }
+  if (!String(draft.confirmResult || '').trim()) {
+    missing.push({ id: 'confirmResult', need: 'Say what the confirm test showed' });
+  }
+  return { ok: missing.length === 0, missing, row };
+}
+
+/**
+ * symptom -> row -> card -> confirm test, in one call.
+ *
+ * Returns the card only once the gate above is satisfied. The confirm test and
+ * the look-alikes come back either way, because those are what the person has
+ * to go and do.
+ */
+export function nameCause(draft = {}) {
+  const gate = namingGate(draft);
+  const row = gate.row;
+  const card = row ? cardFor(row) : null;
+  const lookalikes = card ? lookalikesFor(card.id) : [];
+  const out = {
+    ok: gate.ok,
+    missing: gate.missing,
+    row,
+    confirmTest: row ? row.confirm : null,
+    firstAction: row ? row.firstAction : null,
+    lookalikes,
+    separator: card && lookalikes.length ? separatingSymptom(card.id, lookalikes[0].cardId) : null,
+    labRecommended: card ? labRecommendedFor(card, draft) : false,
+    rulesVersion: RULES_VERSION,
+  };
+  // FR-DOC-01: no cause is named until the photos and the confirm step are in.
+  out.card = gate.ok ? card : null;
+  return out;
+}
+
+/**
+ * FR-DOC-09 / FR-DIAG-05 — when the rules say a lab has to settle it.
+ * The trigger list is the rules' own `farm_doctor.lab_required_for`, matched by
+ * the card's category and id rather than by a list kept here.
+ */
+export function labRecommendedFor(cardOrId, draft = {}) {
+  const card = cardFor(cardOrId);
+  if (!card) return false;
+  const triggers = (RULES.farm_doctor && RULES.farm_doctor.lab_required_for) || [];
+  const haystack = triggers.join(' ; ').toLowerCase();
+  const terms = termsOf(haystack);
+  const idHit = [...segmentsOf(card.id)].some((s) => terms.has(stem(s)));
+  const categoryHit = terms.has(stem(card.category));
+  const lowTwice = String(draft.confidence || '').toLowerCase() === 'low' && draft.secondLowConfidence === true;
+  return idHit || categoryHit || lowTwice;
+}
+
+/** The Farm Doctor's own limits, straight from the rules (FR-DOC-08). */
+export const FARM_DOCTOR = RULES.farm_doctor || {};
+export const FARM_DOCTOR_NEVER = FARM_DOCTOR.never || [];
+export const FARM_DOCTOR_ROLE = FARM_DOCTOR.role || '';
+
+// --- Step 3: who may confirm it (FR-DIAG-02, FR-DIAG-03, FR-DOC-10) -------
+
+/** A diagnosis this engine produced carries its stamp; older ones do not. */
+export const isLegacyDiagnosis = (d) => !d || (!d.cardId && !d.engine);
+
+/**
+ * The structural half of "no diagnosis is confirmed without the confirm step".
+ * store.js and server/core.mjs both enforce this; it lives here so there is one
+ * definition of what a finished diagnosis looks like.
+ */
+export function confirmStepDone(d) {
+  if (!d) return false;
+  return Boolean(d.cardId)
+    && Boolean(String(d.confirmTest || '').trim())
+    && Boolean(String(d.confirmResult || '').trim())
+    && (d.photos || []).length > 0;
+}
+
+/**
+ * FR-DIAG-03 — a hand may start a diagnosis; a Field Supervisor or Farm Manager
+ * performs the confirm test and confirms it. FR-DOC-08 — the Farm Doctor never
+ * confirms its own. And nobody signs off their own work.
+ */
+export function canConfirm(diagnosis, { by = null, senior = true } = {}) {
+  if (!diagnosis) return { ok: false, reason: 'missing', why: 'There is no such diagnosis.' };
+  if (isLegacyDiagnosis(diagnosis)) {
+    return {
+      ok: false,
+      reason: 'legacy',
+      why: 'This record predates the rules engine, so it has no card and no confirm step behind it.',
+      fix: 'Run the guided diagnosis again on the bed, then confirm that one.',
+    };
+  }
+  const gate = namingGate(diagnosis);
+  if (!confirmStepDone(diagnosis)) {
+    return {
+      ok: false,
+      reason: 'no-confirm-step',
+      why: 'The confirm test and the photos are what turn a match into a diagnosis.',
+      missing: gate.missing.length ? gate.missing : [{ id: 'confirmTest', need: 'Record the confirm test and what it showed' }],
+    };
+  }
+  if (by && diagnosis.by && by === diagnosis.by) {
+    return { ok: false, reason: 'self', why: 'The person who started a diagnosis does not confirm it.' };
+  }
+  if (!senior) {
+    return { ok: false, reason: 'rank', why: 'Only the Field Supervisor or the Farm Manager confirms a diagnosis.' };
+  }
+  return { ok: true };
+}
+
+// --- Old records ----------------------------------------------------------
+
+/**
+ * "Keep existing diagnosis records readable; map them to cards where the match
+ * is clear and mark the rest legacy."
+ *
+ * Clear means derivable, in two passes and no hand-written table:
+ *   1. the ids are made of the same words, one inside the other —
+ *      phytophthora_blight -> phytophthora, bacterial_leaf_spot ->
+ *      bacterial_spot, sunscald -> sunscald_cracking, red_spider_mite ->
+ *      spider_mite;
+ *   2. failing that, the old entry NAMES the card in its own text and sits in
+ *      the same family — "Helicoverpa armigera and Spodoptera species" is the
+ *      helicoverpa card; "Cucumber mosaic virus" is the mosaic_virus card.
+ *
+ * Everything else — Cercospora leaf spot, PVMV, leaf curl, fruit fly, the
+ * nutrient shortages — stays legacy and says so. Guessing a card for those
+ * would put a wrong cause on a real record, which is worse than leaving it.
+ */
+const FAMILY = {
+  fungal: 'disease', bacterial: 'disease', viral: 'virus', insect: 'pest',
+  mite: 'pest', nematode: 'soil', disorder: 'disorder', deficiency: 'disorder',
+};
+
+function mapLegacyId(problemId) {
+  const legacy = segmentsOf(problemId);
+  if (!legacy.size) return null;
+
+  const byWords = [];
+  for (const [id, have] of CARD_SEGMENTS) {
+    if (subset(have, legacy) || subset(legacy, have)) byWords.push(id);
+  }
+  if (byWords.length === 1) return byWords[0];
+  if (byWords.length > 1) return null;
+
+  const problem = PROBLEM_BY_ID[problemId];
+  if (!problem) return null;
+  const text = termsOf([problem.name, problem.local, problem.cause].filter(Boolean).join('; '));
+  const family = FAMILY[problem.type];
+  const byName = [];
+  for (const [id, have] of CARD_SEGMENTS) {
+    if (family && CARD_BY_ID[id].category !== family) continue;
+    if ([...have].every((s) => text.has(stem(s)))) byName.push(id);
+  }
+  return byName.length === 1 ? byName[0] : null;
+}
+
+/** problemId (old field-guide id) -> card id, for every old id that maps. */
+export const LEGACY_CARD_MAP = Object.freeze(Object.fromEntries(
+  PROBLEMS.map((p) => [p.id, mapLegacyId(p.id)]).filter(([, card]) => card),
+));
+
+/** card id -> the old field-guide entry behind it, where there is one. */
+export const CARD_TO_PROBLEM = Object.freeze(Object.fromEntries(
+  Object.entries(LEGACY_CARD_MAP).map(([problemId, cardId]) => [cardId, problemId]),
+));
+
+/**
+ * Read any diagnosis record, old or new, into one shape the screens can show.
+ * Old records keep their own wording; they are marked legacy rather than
+ * rewritten, because the event log is a record of what people actually did.
+ */
+export function readDiagnosis(record) {
+  if (!record) return null;
+  const direct = record.cardId ? CARD_BY_ID[record.cardId] : null;
+  const mapped = direct || (record.problemId ? CARD_BY_ID[LEGACY_CARD_MAP[record.problemId]] : null);
+  const problem = record.problemId ? PROBLEM_BY_ID[record.problemId] : null;
+  const legacy = !record.cardId;
+  return {
+    ...record,
+    card: mapped || null,
+    cardId: mapped ? mapped.id : null,
+    label: (mapped && mapped.name) || record.problemName || (problem && problem.name) || record.problemId || 'Unnamed',
+    legacy,
+    // A legacy record that maps cleanly is still a legacy record: nobody did the
+    // rules' confirm test on it. The card is shown as "read as", not as fact.
+    mapping: legacy ? (mapped ? 'mapped' : 'legacy') : 'rules',
+    confirmed: Boolean(record.confirmedBy),
+    confirmStep: confirmStepDone(record),
+  };
+}
+
+// --- Reference photos (FR-DIAG-01, UX-11) --------------------------------
+//
+// Every triage row and every diagnosis card has a slot for one reference
+// photo: 23 + 22 = 45 slots, derived from the rules like everything else here.
+// The pictures themselves are not: the rules JSON is the source of truth and
+// the app never writes to it. A reference photo is the farm's own material,
+// taken or chosen by the Owner or the Farm Manager, and it travels with the
+// farm's other photos in the event log so every phone gets it on the next sync
+// and it still works with no signal (NFR-OFF-01).
+//
+// The two slots hold different pictures on purpose. A row's photo is the thing
+// as you first see it walking the house — that is what the tick-list is for. A
+// card's photo is the confirmed thing, next to its cause and its treatment. So
+// a row does not borrow its card's picture, or the wizard would be showing the
+// answer at the step that is supposed to be a question.
+//
+// An empty slot is not an error and never blocks anything. The rules' own
+// wording is the fallback, and the wording is what the engine matches on
+// either way.
+
+export const rowSlot = (n) => `row:${n}`;
+export const cardSlot = (cardId) => `card:${cardId}`;
+
+/** Every slot the app knows about, in the order the guide lists them. */
+export const PHOTO_SLOTS = [
+  ...TRIAGE.map((row) => ({
+    slot: rowSlot(row.n),
+    kind: 'row',
+    n: row.n,
+    cardId: row.cardId,
+    label: row.see,
+    where: `Triage row ${row.n}`,
+    shows: 'What you see in the house, before anything is confirmed.',
+  })),
+  ...CARDS.map((card) => ({
+    slot: cardSlot(card.id),
+    kind: 'card',
+    n: null,
+    cardId: card.id,
+    label: card.name,
+    where: `${card.name} card`,
+    shows: card.detection,
+  })),
+];
+
+export const PHOTO_SLOT_BY_ID = new Map(PHOTO_SLOTS.map((s) => [s.slot, s]));
+
+/** Guards the store and the server against a slot nothing in the rules has. */
+export const isPhotoSlot = (slot) => PHOTO_SLOT_BY_ID.has(slot);
+
+/** The photo held in a slot, or null when the slot is empty. */
+export function referencePhoto(state, slot) {
+  const held = (state && state.referencePhotos) || {};
+  const hit = held[slot];
+  return hit && hit.photo && hit.photo.dataUrl ? hit : null;
+}
+
+export const rowPhoto = (state, n) => referencePhoto(state, rowSlot(n));
+export const cardPhoto = (state, cardId) => referencePhoto(state, cardSlot(cardId));
+
+/**
+ * The tick-list, with each cue carrying its row's photo where there is one.
+ *
+ * Every cue keeps its words whether or not a picture turns up beside them, so
+ * an empty slot costs the person nothing: UX-11 offers photo cards OR a
+ * searchable list by name, and this is both at once.
+ */
+export function photoCues(state) {
+  return CUES.map((cue) => {
+    const n = cue.rows[0];
+    const held = n != null ? rowPhoto(state, n) : null;
+    return { ...cue, photo: held ? held.photo : null, caption: held ? held.caption : '' };
+  });
+}
+
+/**
+ * Which slots are filled and which are still empty — the answer to "show me
+ * the cards that still have no photo".
+ */
+export function photoCoverage(state) {
+  const filled = [];
+  const missing = [];
+  for (const slot of PHOTO_SLOTS) {
+    const held = referencePhoto(state, slot.slot);
+    (held ? filled : missing).push(held ? { ...slot, held } : slot);
+  }
+  const split = (kind) => {
+    const all = PHOTO_SLOTS.filter((s) => s.kind === kind);
+    const gaps = missing.filter((s) => s.kind === kind);
+    return { total: all.length, have: all.length - gaps.length, missing: gaps };
+  };
+  return {
+    cards: split('card'),
+    rows: split('row'),
+    total: PHOTO_SLOTS.length,
+    have: filled.length,
+    missing,
+    percent: PHOTO_SLOTS.length ? filled.length / PHOTO_SLOTS.length : 0,
+    bytes: filled.reduce((n, s) => n + ((s.held.photo || {}).bytes || 0), 0),
+  };
+}
+
+// --- Browsing -------------------------------------------------------------
+
+/** Search the 22 cards and the 23 rows by any word in them. */
+export function searchCards(query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return CARDS;
+  return CARDS.filter((c) => {
+    const rows = rowsForCard(c.id);
+    const hay = [c.id, c.name, c.category, c.cause, c.prevention, c.detection, c.treatment,
+      ...rows.map((r) => `${r.see} ${r.confirm} ${r.firstAction}`)].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+/** The local field guide, kept for the product, PHI and weather detail. */
+export function searchProblems(query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  return PROBLEMS.filter((p) => {
+    const hay = [p.name, p.local, p.cause, p.type, ...(p.confirm || [])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+// --- The risk board -------------------------------------------------------
 
 /**
  * Standing risk board: what the weather and the crop stage make likely right
  * now, before anyone reports anything. This is the early-warning half of the
- * clinic, and it is what lets a manager spray before a problem, not after.
+ * clinic, and it is what lets a manager walk the right house first. It reads
+ * the local field guide rather than the rules, because the weather response of
+ * each problem is not in the rules JSON.
  */
 export function riskForecast(cycles, date = new Date(), observed = null) {
   const byProblem = new Map();
@@ -231,12 +857,14 @@ export function riskForecast(cycles, date = new Date(), observed = null) {
         dryness: drynessIndex(date, observed),
         waterlogging: waterloggingIndex(date, observed),
       };
-      let weighted = 0, total = 0;
+      let weighted = 0;
+      let total = 0;
       for (const k of keys) { weighted += conditions[k] * (idx[k] ?? 0.5); total += conditions[k]; }
       const pressure = total ? weighted / total : 0;
       const risk = clamp(pressure * (0.5 + 0.1 * problem.severity), 0, 1);
       const entry = byProblem.get(problem.id) || {
         problem, risk: 0, beds: [], driver: keys.sort((a, b) => conditions[b] - conditions[a])[0],
+        cardId: LEGACY_CARD_MAP[problem.id] || null,
       };
       entry.risk = Math.max(entry.risk, risk);
       entry.beds.push(cyc.label || cyc.id);
@@ -253,25 +881,5 @@ export const RISK_DRIVER_TEXT = {
   dryness: 'hot dry weather',
   waterlogging: 'water standing in the beds',
 };
-
-/** Free-text search across the guide, for when someone knows the name already. */
-export function searchProblems(query) {
-  const q = String(query || '').trim().toLowerCase();
-  if (!q) return [];
-  return PROBLEMS.filter((p) => {
-    const hay = [p.name, p.local, p.cause, p.type, ...(p.confirm || [])].join(' ').toLowerCase();
-    return hay.includes(q);
-  });
-}
-
-/** All symptoms grouped by part, for building the wizard. */
-export function symptomTree() {
-  const tree = new Map();
-  for (const s of SYMPTOMS) {
-    if (!tree.has(s.part)) tree.set(s.part, []);
-    tree.get(s.part).push(s);
-  }
-  return tree;
-}
 
 export { PROBLEM_BY_ID };
