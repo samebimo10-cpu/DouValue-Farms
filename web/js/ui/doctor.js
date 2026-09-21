@@ -1,476 +1,805 @@
-// The Farm Doctor screen — requirements 6.14.
+// The Farm Doctor — one screen, shared with the adviser (FR-DOC-11).
 //
-// Three jobs on one screen, because they are the three questions that used to
-// be answered by phoning somebody:
+// Staff should not have to decide, before they know what is wrong, whether
+// this is a question for "the adviser" or "the Doctor". So there is one
+// address with one set of tabs: ask, photos, gates, checks, lab, records. The
+// adviser's own screen is the first tab, unchanged, and #/adviser lands here.
 //
-//   Plan check   "we want to spray X on GH-01 tomorrow" -> every rule, in
-//                order, with the one that says no and what to use instead.
-//   Dose         "how much goes in the knapsack" -> 16 L, 500 L, 1,000 L.
-//   Lime         "the pH came back 5.3" -> a route and kilograms, or a date.
+// Two rules run through every panel below.
 //
-// The screen never approves anything. FR-DOC-08 is explicit: the Farm Doctor
-// does not clear a gate, confirm its own diagnosis or approve its own plan. So
-// a plan that passes every check ends on a line naming the person who has to
-// approve it, and a button that records the check — not one that sprays.
+//   Nothing here decides anything. Every output ends with the name of the
+//   person who has to confirm or approve it, and the button that does it is
+//   only shown to somebody senior enough to press it.
+//
+//   Every refusal says what would change it. "No spinosad in the store" is
+//   useful; "cannot recommend" is how people learn to ignore a screen.
 
 import {
-  badge, button, card, cardHead, empty, esc, field, input, note, readForm, select, table, toast,
+  badge, button, card, cardHead, empty, esc, field, input, note, readForm, select, table, textarea,
+  toast,
 } from './kit.js';
-import { rulesReady, rules } from '../domain/rules.js';
-import { activeByKey, catalogue } from '../domain/catalogue.js';
-import { dosePlan, limePlan, TANKS, TEXTURES } from '../domain/calc.js';
-import { checkPlan, cropWeek, ppeFor } from '../domain/doctor.js';
-import { KNAPSACK_L } from '../domain/safety.js';
-import { activeCycles, cycleLabel } from '../store.js';
-import { confirmPpe, ppeGrid } from './ppe.js';
-import { isoDate, uid } from '../util.js';
+import { adviserView } from './adviser.js';
+import { photoThumb } from './photo.js';
+import { captureEvidence } from '../db.js';
+import { dosePlan, limePlan, parseRate, TANKS, TEXTURES } from '../domain/calc.js';
+import { ppeIcon } from './ppe.js';
+import {
+  CONFIDENCE, LIMITS, WORKED, approvePlan, awaitingConfirmation, confirmOutput,
+  doctorRecords, draftCycleReview, followUpBoard, followUpRecord, gateEvidence, ppeFor,
+  labSamples, normalisePhotoReview, openLabSamples, ownerNotifications, photoReviewRequest,
+  treatmentPlan,
+} from '../domain/doctor.js';
+import { rulesLoaded } from '../rules.js';
+import { PROBLEM_BY_ID } from '../domain/pests.js';
+import { activeCycles, can, cycleLabel } from '../store.js';
+import { reviewPhotos } from '../sync.js';
+import { friendlyDate, isoDate, uid } from '../util.js';
+import { params } from './shell.js';
 
 const TABS = [
-  { id: 'plan', label: 'Check a plan', icon: '🧪' },
-  { id: 'dose', label: 'Dose', icon: '⚖️' },
-  { id: 'lime', label: 'Lime', icon: '🪨' },
+  { id: 'ask', label: 'Ask', icon: '🧠' },
+  { id: 'photo', label: 'Photos', icon: '📷' },
+  { id: 'plan', label: 'Plan', icon: '💊' },
+  { id: 'calc', label: 'Calculators', icon: '⚖️' },
+  { id: 'gates', label: 'Gates', icon: '🚧' },
+  { id: 'checks', label: 'Checks', icon: '🔁' },
+  { id: 'lab', label: 'Lab', icon: '🧪' },
+  { id: 'records', label: 'Records', icon: '📋' },
 ];
 
-let tab = 'plan';
-let planForm = null;
-let planResult = null;
-let doseForm = null;
+// Per-session working state. None of it is a record until somebody saves it.
+let tab = null;
+let photoShots = [];        // photos queued for review
+let evidenceShot = null;    // the one photo attached to a gate-evidence form
+let reviewing = false;
+let review = null;          // the last normalised photo review
+let reviewProblem = '';
+let gateZone = '';
+let doseForm = null;          // the rate typed into the dose calculator
+let limeForm = null;          // the three readings, the texture and the area
 let limeResult = null;
-let limeForm = null;
+let planFor = null;         // { cycleId, problemId, plan }
 
-function defaultPlan(ctx) {
-  const cycles = activeCycles(ctx.state);
-  return {
-    cycleId: cycles.length ? cycles[0].id : '',
-    activeKey: '',
-    targetPest: '',
-    at: `${isoDate()}T17:00`,
-    tankLitres: KNAPSACK_L,
-    loads: 1,
-    mixWith: '',
-    flowering: false,
-    openFlowers: false,
-    wind: false,
-    leavesWet: false,
-  };
+function currentTab() {
+  const wanted = params().tab || tab;
+  return TABS.some((t) => t.id === wanted) ? wanted : 'ask';
 }
 
 export const doctorView = {
-  perm: 'diagnose',
-
-  enter(ctx) {
-    if (!planForm) planForm = defaultPlan(ctx);
-  },
+  perm: 'viewGuide',
 
   render(ctx) {
-    if (!rulesReady()) {
-      return card(empty('📕', 'The rules file has not loaded',
-        'The Farm Doctor reads rules/douvalue_rules_rev5_1.json and will not guess without it. '
-        + 'Open the app once with a connection; after that it works offline.'));
+    const active = currentTab();
+    let body = head(ctx, active) + tabBar(active);
+
+    switch (active) {
+      case 'photo': body += photoPanel(ctx); break;
+      case 'plan': body += planPanel(ctx); break;
+      case 'calc': body += calcPanel(ctx); break;
+      case 'gates': body += gatePanel(ctx); break;
+      case 'checks': body += checksPanel(ctx); break;
+      case 'lab': body += labPanel(ctx); break;
+      case 'records': body += recordsPanel(ctx); break;
+      default: body += adviserView.render(ctx); break;
     }
+    return body;
+  },
 
-    const head = card(
-      cardHead('Farm Doctor', badge(rules().meta.version))
-      + `<p><small>${esc(rules().farm_doctor.role)}</small></p>`
-      + '<div class="row wrap">' + TABS.map((t) =>
-        `<button class="chip ${tab === t.id ? 'on' : ''}" data-act="doc-tab" data-id="${esc(t.id)}">`
-        + `${t.icon} ${esc(t.label)}</button>`).join(' ') + '</div>'
-      // FR-DOC-11: one entry point, so nobody has to decide whether their
-      // question is a diagnosis question or a farm question.
-      + `<div style="margin-top:10px">${button('Diagnose a sick plant', 'go',
-        { cls: 'btn-block btn-ghost', icon: '🔍', data: { to: '#/diagnose' } })}</div>`
-      + `<div style="margin-top:8px">${button('Ask the farm adviser', 'go',
-        { cls: 'btn-block btn-quiet', icon: '🧠', data: { to: '#/adviser' } })}</div>`,
-      { tight: true },
-    );
-
-    if (tab === 'dose') return head + doseTab(ctx);
-    if (tab === 'lime') return head + limeTab(ctx);
-    return head + planTab(ctx);
+  // The camera. Several forms on this screen can take a photo, so each file
+  // input is wired to the preview inside its own form rather than to a single
+  // one on the page (UX-13: one tap to the camera, wherever you are).
+  mounted(ctx) {
+    for (const el of document.querySelectorAll('.photo-input')) {
+      el.onchange = async () => {
+        const file = el.files && el.files[0];
+        if (!file) return;
+        try {
+          const shot = await captureEvidence(file);
+          if (el.dataset.role === 'evidence') {
+            evidenceShot = shot;
+            const preview = el.closest('form, .field').querySelector('.photo-preview');
+            if (preview) preview.innerHTML = photoThumb(shot, { small: true });
+          } else {
+            photoShots.push(shot);
+            ctx.refresh();
+          }
+        } catch (err) {
+          toast(err.message || 'Could not use that picture', true);
+        }
+      };
+    }
+    if (adviserView.mounted) adviserView.mounted(ctx);
   },
 
   actions: {
-    'doc-tab': (ctx, el) => { tab = el.dataset.id; ctx.refresh(); },
-    'doc-plan-check': (ctx, form) => runPlanCheck(ctx, form),
-    'doc-plan-swap': (ctx, el) => { planForm.activeKey = el.dataset.key; runPlanCheck(ctx, null); },
-    'doc-plan-reset': (ctx) => { planForm = defaultPlan(ctx); planResult = null; ctx.refresh(); },
-    'doc-plan-ppe': (ctx, el) => showPpe(ctx, el.dataset.key),
-    'doc-plan-record': (ctx) => recordPlan(ctx),
-    'doc-dose': (ctx, form) => { doseForm = readForm(form); ctx.refresh(); },
-    'doc-lime': (ctx, form) => runLime(ctx, form),
+    // The adviser's own buttons keep working, because its panel is its screen.
+    ...adviserView.actions,
+
+    'doctor-tab': (ctx, el) => { tab = el.dataset.tab; ctx.refresh(); },
+
+    // --- FR-DOC-03 ------------------------------------------------------
+    // The shared handler in worker.js reaches for an enclosing sheet; these
+    // forms sit on the page itself, so this screen opens its own camera.
+    'pick-photo': (ctx, el) => {
+      const file = el.closest('form, .field, .card').querySelector('input[type=file]');
+      if (file) file.click();
+    },
+    'doctor-drop-photo': (ctx, el) => {
+      photoShots.splice(Number(el.dataset.i), 1);
+      ctx.refresh();
+    },
+    'doctor-review': async (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      reviewProblem = data.problemId || '';
+      const cycleId = data.cycleId || '';
+      const cycle = ctx.state.cycles[cycleId];
+      const request = photoReviewRequest({
+        photos: photoShots.map((p) => p.dataUrl),
+        cycleId,
+        zoneId: cycle ? cycle.plotId : null,
+        problemShortlist: reviewProblem ? [{ id: reviewProblem }] : [],
+        note: data.note || '',
+        online: navigator.onLine,
+        today: isoDate(),
+      });
+      if (!request.ok || request.mode === 'offline') { review = request; ctx.refresh(); return; }
+
+      reviewing = true;
+      review = null;
+      ctx.refresh();
+      const answer = await reviewPhotos({ ...request.payload, note: data.note || '' });
+      reviewing = false;
+      review = answer && answer.ok
+        ? normalisePhotoReview(answer.review, {
+          state: ctx.state, cycleId, zoneId: cycle ? cycle.plotId : null,
+          photos: photoShots, today: isoDate(),
+        })
+        : { mode: 'failed', ...answer };
+      ctx.refresh();
+    },
+
+    // --- FR-DOC-04 / FR-DOC-08: the treatment plan ----------------------
+    'doctor-plan': (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      if (!data.problemId || !data.cycleId) { toast('Pick a bed and a problem', true); return; }
+      const cycle = ctx.state.cycles[data.cycleId];
+      planFor = {
+        cycleId: data.cycleId,
+        problemId: data.problemId,
+        plan: treatmentPlan(ctx.state, {
+          problemId: data.problemId,
+          cycleId: data.cycleId,
+          zoneId: cycle ? cycle.plotId : null,
+          diagnosisId: latestConfirmedDiagnosis(ctx.state, data.cycleId),
+          today: isoDate(),
+        }),
+      };
+      ctx.refresh();
+    },
+
+    // --- FR-DOC-05: the two calculators ---------------------------------
+    'doctor-dose': (ctx, form) => {
+      doseForm = form && form.tagName === 'FORM' ? readForm(form) : {};
+      ctx.refresh();
+    },
+    'doctor-lime': (ctx, form) => {
+      limeForm = form && form.tagName === 'FORM' ? readForm(form) : {};
+      limeResult = limePlan({
+        readings: [limeForm.ph1, limeForm.ph2, limeForm.ph3],
+        texture: limeForm.texture,
+        areaM2: Number(limeForm.areaM2) || 0,
+        zoneType: limeForm.zoneType,
+        solarised: !!limeForm.solarised,
+        transplantDate: limeForm.transplantDate || null,
+        holdSince: limeForm.holdSince || null,
+        limeDate: isoDate(),
+        today: isoDate(),
+      });
+      ctx.refresh();
+    },
+
+    // --- FR-DOC-10: saving an output ------------------------------------
+    'doctor-save': async (ctx, el) => {
+      const payload = pendingOutput(ctx, el.dataset.what);
+      if (!payload) { toast('Nothing to save', true); return; }
+      await ctx.store.dispatch('doctor.record', payload);
+      if (payload.lab) await recommendLab(ctx, payload);
+      toast('Saved. It is waiting for someone to confirm it.');
+      ctx.refresh();
+    },
+
+    'doctor-confirm': async (ctx, el) => {
+      const output = ctx.state.doctorOutputs.find((o) => o.id === el.dataset.id);
+      const verdict = confirmOutput(output, ctx.user);
+      if (!verdict.ok) { toast(verdict.why, true); return; }
+      await ctx.store.dispatch('doctor.confirm', { id: output.id, note: el.dataset.note || '' });
+      toast('Confirmed');
+    },
+
+    'doctor-approve': async (ctx, el) => {
+      const output = ctx.state.doctorOutputs.find((o) => o.id === el.dataset.id);
+      const verdict = approvePlan(output, ctx.user);
+      if (!verdict.ok) { toast(verdict.why, true); return; }
+      await ctx.store.dispatch('doctor.approve', { id: output.id });
+      toast('Approved');
+    },
+
+    // --- FR-DOC-06 ------------------------------------------------------
+    'doctor-zone': (ctx, el) => { gateZone = el.dataset.zone; ctx.refresh(); },
+    'doctor-evidence': async (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      if (!data.gate || !data.itemId || !data.zoneId) { toast('Say which gate line this is', true); return; }
+      await ctx.store.dispatch('gate.evidence', {
+        id: uid('ev'), gate: data.gate, itemId: data.itemId, zoneId: data.zoneId,
+        cycleId: data.cycleId || null, date: isoDate(), note: data.note || '',
+        count: data.count ? Number(data.count) : undefined,
+        batchId: data.batchId || undefined,
+        photo: evidenceShot,
+      });
+      evidenceShot = null;
+      toast('Evidence recorded');
+    },
+
+    // --- FR-DOC-07 ------------------------------------------------------
+    'doctor-followup': async (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      const spray = ctx.state.sprays.find((s) => s.id === data.sprayId);
+      if (!spray || !WORKED[data.worked]) { toast('Say whether it worked', true); return; }
+      const record = followUpRecord(ctx.state, {
+        spray, worked: data.worked, note: data.note || '', person: ctx.user,
+        pestId: spray.targetProblem || null, today: isoDate(),
+      });
+      await ctx.store.dispatch('doctor.record', record);
+      const task = ctx.state.tasks[`fd_follow_${spray.id}`];
+      if (task && task.status === 'open') {
+        await ctx.store.dispatch('task.complete', { id: task.id, note: record.summary });
+      }
+      toast('Check recorded');
+    },
+
+    'doctor-cycle-review': async (ctx, el) => {
+      const draft = draftCycleReview(ctx.state, el.dataset.cycle, { today: isoDate() });
+      await ctx.store.dispatch('doctor.record', draft);
+      toast('Draft saved for Gate 4');
+    },
+
+    // --- FR-DOC-09 / FR-DIAG-05 -----------------------------------------
+    'doctor-lab-send': async (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      if (!data.lab) { toast('Say which lab', true); return; }
+      await ctx.store.dispatch('lab.send', { id: data.id, lab: data.lab, sentDate: data.sentDate || isoDate() });
+      toast('Sample marked as sent');
+    },
+    'doctor-lab-result': async (ctx, form) => {
+      const data = form && form.tagName === 'FORM' ? readForm(form) : {};
+      if (!data.result) { toast('Say what the lab reported', true); return; }
+      await ctx.store.dispatch('lab.result', { id: data.id, result: data.result, resultDate: isoDate() });
+      toast('Result recorded');
+    },
+    'doctor-owner-seen': async (ctx, el) => {
+      await ctx.store.dispatch('doctor.owner-seen', { id: el.dataset.id });
+    },
   },
 };
 
-// --- Plan check -----------------------------------------------------------
+// --- Shared furniture -----------------------------------------------------
 
-function activeOptions() {
-  const groups = { insecticide: [], fungicide: [], other: [] };
-  for (const a of catalogue()) groups[a.kindOfProduct].push(a);
-  return Object.entries(groups).filter(([, list]) => list.length).map(([kind, list]) =>
-    `<optgroup label="${esc(kind)}">` + list.map((a) =>
-      `<option value="${esc(a.key)}" ${planForm.activeKey === a.key ? 'selected' : ''}>`
-      + `${esc(a.ai)} — ${esc(a.groupText)}${a.scheduleRate ? '' : ' (needs a label rate)'}</option>`).join('')
-    + '</optgroup>').join('');
-}
-
-function planTab(ctx) {
-  const cycles = activeCycles(ctx.state);
-  const week = planForm.cycleId ? cropWeek(ctx.state, planForm.cycleId, planForm.at.slice(0, 10)) : null;
-
-  const form = card(
-    cardHead('Check a treatment plan')
-    + '<p><small>Every rule the schedule sets, in order. Nothing is sprayed from this screen — '
-    + 'it says whether the plan would be allowed, and what to use instead if it would not.</small></p>'
-    + '<form data-act="doc-plan-check">'
-    + field('Which bed?', select('cycleId', cycles.map((c) =>
-      ({ value: c.id, label: cycleLabel(ctx.state, c.id) })), planForm.cycleId, { placeholder: 'Pick a bed' }))
-    + (week && week.week != null
-      ? note(week.week >= 10 ? 'warn' : 'info',
-        `Week ${week.week}, day ${week.day}`,
-        `<small>${week.week >= 10
-          ? 'From Week 10 it is organics only: neem oil, garlic-chilli, Copper Hydroxide (SR-08).'
-          : `The Week 10 organics rule starts on day 71, which is ${71 - week.day} day${71 - week.day === 1 ? '' : 's'} away.`}</small>`)
+function head(ctx, active) {
+  const owed = ownerNotifications(ctx.state, { today: isoDate() });
+  const waiting = awaitingConfirmation(ctx.state);
+  return card(
+    cardHead('Farm Doctor',
+      rulesLoaded() ? badge('rules loaded', 'ok') : badge('rules not loaded', 'warn'))
+    + '<p><small>Diagnosis, treatment plans, gate evidence and follow-up checks — and the '
+    + 'farm adviser, in the same place. It advises; people decide. It never clears a gate, '
+    + 'confirms its own diagnosis, approves its own plan, or names a product that is not in '
+    + 'the catalogue and in the store.</small></p>'
+    + (owed.length && can(ctx.user, 'viewReports')
+      ? note('warn', `${owed.length} thing${owed.length === 1 ? '' : 's'} for the Owner`,
+        `<small>${esc(owed.slice(0, 3).map((o) => o.why).join(' · '))}</small>`)
       : '')
-    + field('Active ingredient', `<select name="activeKey">`
-      + '<option value="">Pick an active ingredient</option>' + activeOptions() + '</select>',
-      'Chosen by active ingredient, not by brand. The group fills in from the catalogue (C-18).')
-    + field('What are you treating?', input('targetPest',
-      { value: planForm.targetPest, placeholder: 'e.g. thrips' }))
-    + field('When?', input('at', { type: 'datetime-local', value: planForm.at }),
-      'Spray window is 4-7 PM, and 5-7 PM once the crop is flowering.')
-    + '<div class="grid grid-2">'
-    + field('Tank size (L)', input('tankLitres', { type: 'number', min: 1, step: '1', value: planForm.tankLitres }))
-    + field('How many loads?', input('loads', { type: 'number', min: 1, step: '1', value: planForm.loads }))
-    + '</div>'
-    + field('Anything else in the tank?', input('mixWith',
-      { value: planForm.mixWith, placeholder: 'e.g. Calcium Nitrate, Borax' }),
-      'Separate with commas. The mixing rules are checked against whatever is listed.')
-    + '<div class="ticks">'
-    + checkbox('flowering', 'The crop is flowering', 'Closes the window until 5 PM (SR-02).')
-    + checkbox('openFlowers', 'There are open flowers now', 'Never sprayed onto open flowers.')
-    + checkbox('wind', 'Wind through the nets')
-    + checkbox('leavesWet', 'The leaves are wet', 'Mancozeb needs 2 dry hours to bind (SR-03).')
-    + '</div>'
-    + '<button class="btn-block btn-lg" type="submit">Check this plan</button></form>',
+    + (waiting.length
+      ? note('info', `${waiting.length} output${waiting.length === 1 ? '' : 's'} waiting to be confirmed`,
+        '<small>Nothing the Farm Doctor says takes effect until a person confirms it.</small>')
+      : ''),
+    { tight: true },
   );
-
-  return form + (planResult ? planVerdict(ctx, planResult) : '');
 }
 
-function checkbox(name, label, hint = '') {
-  return `<label class="tick ${planForm[name] ? 'on' : ''}">`
-    + `<input type="checkbox" name="${esc(name)}" ${planForm[name] ? 'checked' : ''} `
-    + 'style="width:24px;height:24px;margin-right:10px">'
-    + `<span class="txt"><b>${esc(label)}</b>${hint ? `<span class="pid">${esc(hint)}</span>` : ''}</span></label>`;
+function tabBar(active) {
+  return '<div class="card tight"><div class="row wrap">'
+    + TABS.map((t) => `<button class="chip ${t.id === active ? 'on' : ''}" data-act="doctor-tab" `
+      + `data-tab="${t.id}">${t.icon} ${esc(t.label)}</button>`).join(' ')
+    + '</div></div>';
 }
 
-const MARK = { pass: '✓', fail: '✕', warn: '!', 'n/a': '–' };
-const ROW_CLASS = { pass: 'pass', fail: 'fail', warn: 'warn', 'n/a': 'na' };
+function cyclePicker(state, name = 'cycleId', value = '') {
+  const options = activeCycles(state).map((c) => ({ value: c.id, label: cycleLabel(state, c.id) }));
+  if (!options.length) return note('warn', 'No bed has a crop in it', '<small>Start a cycle first.</small>');
+  return field('Which bed', select(name, options, value));
+}
 
-function planVerdict(ctx, verdict) {
-  const rows = '<ul class="check-list">' + verdict.checks.map((c) =>
-    `<li class="check-row ${ROW_CLASS[c.state]}"><span class="mark">${MARK[c.state]}</span>`
-    + `<span class="body"><b>${esc(c.name)}</b><small>${esc(c.why)}</small>`
-    + (c.fix ? `<small><b>${esc(c.fix)}</b></small>` : '')
-    + `<small class="ref">${esc(c.ref)}</small></span></li>`).join('') + '</ul>';
+function confidenceBadge(confidence) {
+  if (!confidence) return '';
+  const tone = confidence === 'high' ? 'ok' : confidence === 'medium' ? 'warn' : 'danger';
+  return badge(CONFIDENCE[confidence].label, tone);
+}
+
+/** Who still has to sign, said in the record's own words. */
+function signatureLine(output) {
+  const bits = [];
+  if (output.needsConfirming) bits.push(`${output.confirmedBy ? '✓ confirmed' : `waiting on the ${output.needsConfirming}`}`);
+  if (output.needsApproval) bits.push(`${output.approvedBy ? '✓ approved' : `waiting on the ${output.needsApproval}`}`);
+  return bits.length ? `<p><small>${esc(bits.join(' · '))}</small></p>` : '';
+}
+
+function readList(output) {
+  if (!output.read || !output.read.length) return '';
+  return '<details><summary><small>What it looked at</small></summary><ul class="list">'
+    + output.read.map((r) => `<li><small>${esc(r.what)}${r.id ? ` (${esc(r.id)})` : ''}</small></li>`).join('')
+    + '</ul></details>';
+}
+
+function limitNote(limitId) {
+  const limit = LIMITS[limitId];
+  if (!limit) return '';
+  return note('info', limit.rule, `<small>${esc(limit.who)}</small>`);
+}
+
+// --- FR-DOC-03: photos ----------------------------------------------------
+
+function photoPanel(ctx) {
+  const shots = photoShots.map((p, i) => '<div class="row">'
+    + photoThumb(p, { small: true })
+    + button('Remove', 'doctor-drop-photo', { cls: 'btn-sm btn-ghost', data: { i } })
+    + '</div>').join('');
 
   let out = card(
-    cardHead(verdict.ok ? 'This plan passes' : 'This plan is blocked',
-      badge(verdict.ok ? 'clear' : `${verdict.failed.length} blocked`, verdict.ok ? 'ok' : 'danger'))
-    + (verdict.ok
-      ? note('ok', `${verdict.active.ai} on ${cycleLabel(ctx.state, verdict.plan.cycleId)}`,
-        `<small>No picking until ${esc(verdict.safeToPickFrom)}. `
-        + `Nobody back in unprotected before ${esc(verdict.reentryAfter)}.</small>`)
-      : note('danger', verdict.firstFailure.name, `<small>${esc(verdict.firstFailure.why)}</small>`))
-    + rows,
+    cardHead('Photo review', navigator.onLine ? badge('online', 'ok') : badge('offline', 'warn'))
+    + '<p><small>Take a close photo of the damage and one of the whole plant. Online, the '
+    + 'photos are read and a confidence is stated. Offline, the guided diagnosis answers '
+    + 'instead — and it is the guided flow that names a cause either way.</small></p>'
+    + '<form data-act="doctor-review">'
+    + cyclePicker(ctx.state)
+    + field('What do you think it is (optional)', select('problemId',
+      [{ value: '', label: 'Not sure' },
+        ...Object.values(PROBLEM_BY_ID).map((p) => ({ value: p.id, label: p.name }))], reviewProblem))
+    + field('What you can see', textarea('note', { rows: 2, placeholder: 'e.g. tips curling on the end row since the rain' }))
+    + '<div class="field"><label>Photos</label>'
+    + '<input type="file" accept="image/*" capture="environment" name="photo" class="photo-input" data-role="review">'
+    + button('📷 Take a photo', 'pick-photo', { cls: 'btn-ghost btn-block' })
+    + '<div class="hint">Each photo is added as you take it. FR-PROOF-02: taken here, not from the gallery.</div>'
+    + '</div>'
+    + (shots || '')
+    + `<button class="btn-block btn-lg" type="submit"${reviewing || !photoShots.length ? ' disabled' : ''}>`
+    + `${reviewing ? 'Reading the photos…' : `Review ${photoShots.length || ''} photo${photoShots.length === 1 ? '' : 's'}`}</button>`
+    + '</form>',
   );
 
-  if (verdict.ok && verdict.dose.ok) {
-    out += card(
-      cardHead('Mix it')
-      + doseTable(dosePlan(verdict.dose.raw))
-      + note('info', 'Before you start',
-        `<small>${esc(verdict.ppe.rule)}</small>`)
-      + `<div style="margin-top:10px">${button('Show the gear', 'doc-plan-ppe',
-        { cls: 'btn-block', icon: '🧤', data: { key: verdict.active.key } })}</div>`,
-    );
-
-    // FR-DOC-08 and FR-DOC-10: the doctor's output is recorded and handed to a
-    // person. It never approves itself.
-    out += card(
-      note('warn', 'Who approves this', `<small>${esc(verdict.approval)}</small>`)
-      + `<div style="margin-top:10px">${button('Record this check', 'doc-plan-record',
-        { cls: 'btn-block btn-lg', icon: '📋' })}</div>`
-      + '<p style="margin:8px 0 0"><small>Saves what the Farm Doctor read and what it found, '
-      + 'so the approval and the spray both point back at it.</small></p>',
-      { tight: true },
-    );
-  }
-
-  if (!verdict.ok) {
-    out += card(
-      cardHead('Next valid option')
-      + ((verdict.alternatives || []).length
-        ? '<ul class="list">' + verdict.alternatives.map((alt) =>
-          `<li><div class="grow"><b>${esc(alt.active.ai)}</b><small>${esc(alt.why)}</small>`
-          + (alt.dose.ok ? `<small>${esc(alt.dose.tanks[0].text)}</small>` : '')
-          + '</div>'
-          + button('Use this', 'doc-plan-swap', { cls: 'btn-sm', data: { key: alt.active.key } })
-          + '</li>').join('') + '</ul>'
-        : note('danger', 'Nothing in the catalogue passes every rule today',
-          '<small>That is an answer, not a gap. Move the spray to a day inside the window, '
-          + 'clear the diagnosis, or buy in the product the rotation is asking for. The Farm Doctor '
-          + 'will not offer something that breaks a rule.</small>')),
-    );
-  }
-
+  if (reviewing) out += card(note('info', 'Reading', '<small>This needs a connection and can take a minute.</small>'));
+  if (review) out += reviewBlock(ctx, review);
   return out;
 }
 
-async function runPlanCheck(ctx, form) {
-  if (form) {
-    const data = readForm(form);
-    planForm = {
-      ...planForm,
-      ...data,
-      tankLitres: Number(data.tankLitres) || KNAPSACK_L,
-      loads: Number(data.loads) || 1,
-    };
+function reviewBlock(ctx, r) {
+  if (r.mode === 'offline') {
+    return card(
+      cardHead('No signal — the guided flow still works')
+      + note('info', r.why, `<small>${esc(r.fix)}</small>`)
+      + '<ul class="list">' + (r.stillWorks || []).map((s) => `<li><small>${esc(s)}</small></li>`).join('') + '</ul>'
+      + button('Open the guided diagnosis', 'go', { cls: 'btn-block btn-lg', data: { to: '#/diagnose' } }),
+    );
   }
-  if (!planForm.cycleId) { toast('Pick a bed first', true); return; }
-  if (!planForm.activeKey) { toast('Pick an active ingredient', true); return; }
-
-  planResult = checkPlan(ctx.state, {
-    ...planForm,
-    mixWith: String(planForm.mixWith || '').split(',').map((s) => s.trim()).filter(Boolean),
-  }, { today: isoDate() });
-
-  ctx.refresh();
-  window.scrollTo(0, document.body.scrollHeight);
-}
-
-async function showPpe(ctx, key) {
-  const kit = ppeFor({ active: activeByKey(key) });
-  const worn = await confirmPpe(kit);
-  if (worn) toast('Gear confirmed');
-}
-
-async function recordPlan(ctx) {
-  if (!planResult) return;
-  // FR-DOC-10: what it read, what it found, and who has to confirm it.
-  await ctx.store.dispatch('doctor.record', {
-    id: uid('doc'),
-    kind: 'treatment-plan',
-    cycleId: planResult.plan.cycleId,
-    activeKey: planResult.active.key,
-    activeName: planResult.active.ai,
-    group: planResult.active.groupText,
-    at: planResult.plan.at,
-    week: planResult.week.week,
-    ok: planResult.ok,
-    checks: planResult.checks.map((c) => ({ id: c.id, state: c.state, why: c.why, ref: c.ref })),
-    diagnosisId: (planResult.checks.find((c) => c.id === 'gate3') || {}).diagnosis?.id || null,
-    dose: planResult.dose.ok ? planResult.dose.raw : null,
-    safeToPickFrom: planResult.safeToPickFrom,
-    rulesVersion: rules().meta.version,
-    needsApproval: planResult.approval,
-    date: isoDate(),
-  });
-  toast('Recorded. The Farm Manager approves it.');
-}
-
-// --- Dose calculator ------------------------------------------------------
-
-function doseTab(ctx) {
-  const chosen = doseForm?.activeKey ? activeByKey(doseForm.activeKey) : null;
-  const entered = String(doseForm?.rate || '').trim();
-  const rate = entered || chosen?.scheduleRate || '';
-  const plan = rate ? dosePlan(rate) : null;
-
-  return card(
-    cardHead('Dose calculator')
-    + '<p><small>From the schedule rate on file, or from a rate you read off the label in front of '
-    + `you. Answers come back per ${KNAPSACK_L} L knapsack and per 500 L and 1,000 L tank.</small></p>`
-    + '<form data-act="doc-dose">'
-    + field('Active ingredient', `<select name="activeKey"><option value="">Pick one</option>`
-      + catalogue().map((a) => `<option value="${esc(a.key)}" ${doseForm?.activeKey === a.key ? 'selected' : ''}>`
-        + `${esc(a.ai)}${a.scheduleRate ? ` — ${esc(a.scheduleRate)}` : ' — no rate on file'}</option>`).join('')
-      + '</select>')
-    + field('Or a label rate', input('rate', { value: entered, placeholder: 'e.g. 2 ml/L, or 40 g / 16 L' }),
-      'What the container says. An entered label rate wins over the schedule rate for that formulation.')
-    + '<button class="btn-block btn-lg" type="submit">Work it out</button></form>',
-  ) + (plan ? doseResult(chosen, plan, entered) : '');
-}
-
-function doseResult(active, plan, entered) {
-  if (!plan.ok) {
-    return card(note('danger', 'No dose can be given', `<small>${esc(plan.why)} ${esc(plan.fix)}</small>`));
+  if (r.mode === 'failed' || r.ok === false) {
+    return card(
+      cardHead('Photo review could not answer')
+      + note('warn', r.message || 'It could not be reached.',
+        '<small>The guided diagnosis, the calculators and the plan checks all work with no signal.</small>')
+      + button('Open the guided diagnosis', 'go', { cls: 'btn-block btn-lg', data: { to: '#/diagnose' } }),
+    );
   }
 
-  const ppe = active ? ppeFor({ active }) : null;
-
+  const top = r.candidates && r.candidates[0];
   return card(
-    cardHead(active ? active.ai : 'Entered rate',
-      badge(entered ? 'from the label' : 'schedule rate', entered ? 'warn' : ''))
-    + `<p><small>Rate on file: <b>${esc(plan.raw)}</b>`
-    + (plan.formulation ? ` · formulation ${esc(plan.formulation)}` : '')
-    + (plan.timing ? ` · ${esc(plan.timing)}` : '')
-    + '</small></p>'
-    + doseTable(plan)
-    + (plan.variants.length
-      ? note('info', 'Other rates on the same line',
-        `<small>${plan.variants.map(esc).join(' · ')}</small>`) : '')
-    + (plan.components.some((c) => c.unit === 'g' || c.unit === 'kg')
-      ? note('warn', 'Weigh it', '<small>Powders are weighed on a scale. A cap of powder is not a '
-        + 'measurement, and the difference between 2 g/L and 3 g/L is a scorched crop.</small>') : '')
-    + note('info', 'The label beats this screen',
-      '<small>These are the rates on file for this farm. If the container in your hand says something '
-      + 'different, the container wins — and the Farm Manager enters it as a label so the app agrees '
-      + 'with it next time.</small>'),
-  ) + (ppe ? card(cardHead('Wear this') + ppeGrid(ppe)
-    + (ppe.after ? note('info', 'When you finish', `<small>${esc(ppe.after)}</small>`) : '')) : '');
-}
-
-function doseTable(plan) {
-  return table(
-    [{ label: 'Tank' }, { label: 'How much goes in', num: false }, { label: 'Practical measure' }],
-    dosePlan(plan.raw, { tanks: TANKS }).tanks.map((t) => [
-      t.label,
-      t.components.map((c) => c.text).join(' + '),
-      t.components.map((c) => c.capText || (c.weigh ? 'weigh it' : '')).filter(Boolean).join(' + ') || '—',
-    ]),
+    cardHead('What the photos suggest', confidenceBadge(r.confidence))
+    + (top
+      ? `<p><b>${esc(top.name)}</b> — <small>${esc(top.why || '')}</small></p>`
+      : '<p>Nothing could be named from these photos.</p>')
+    + (r.candidates.length > 1
+      ? '<ul class="list">' + r.candidates.slice(1).map((c) => `<li><small>${esc(c.name)} — `
+        + `${esc(CONFIDENCE[c.confidence].label.toLowerCase())}</small></li>`).join('') + '</ul>'
+      : '')
+    + `<p><small>${esc(CONFIDENCE[r.confidence].hint)}</small></p>`
+    + (r.photoAlone ? limitNote('photo') : '')
+    + (r.confirmTest.length
+      ? '<p><b>Confirm it like this:</b></p><ul class="list">'
+        + r.confirmTest.map((c) => `<li><small>${esc(c)}</small></li>`).join('') + '</ul>'
+      : '')
+    + (r.labAdvice && r.labAdvice.needed
+      ? note('warn', 'A sample should go to a lab',
+        `<small>${esc(r.labAdvice.reasons.join(' '))} The Owner is told.</small>`)
+      : '')
+    + (r.droppedActives && r.droppedActives.length
+      ? note('info', 'Products it mentioned that this farm cannot use',
+        `<small>${esc(r.droppedActives.map((d) => `${d.name}: ${d.violations[0].why}`).join(' · '))}</small>`)
+      : '')
+    + signatureLine(r)
+    + readList(r)
+    + button('Save this reading', 'doctor-save', { cls: 'btn-block', data: { what: 'photo' } }),
   );
 }
 
-// --- Lime calculator ------------------------------------------------------
+// --- FR-DOC-04 / FR-DOC-08: the treatment plan ----------------------------
 
-function limeTab(ctx) {
+function planPanel(ctx) {
+  let out = card(
+    cardHead('Treatment plan')
+    + '<p><small>Only what the rules and the store both allow: in the catalogue, in stock, not '
+    + 'banned, a dose on file, rotation respected, and after Week 10 organics only. Anything '
+    + 'that fails is listed with the reason, because "nothing you can use" is an answer the '
+    + 'manager has to act on.</small></p>'
+    + '<form data-act="doctor-plan">'
+    + cyclePicker(ctx.state, 'cycleId', planFor ? planFor.cycleId : '')
+    + field('What is wrong', select('problemId',
+      Object.values(PROBLEM_BY_ID).map((p) => ({ value: p.id, label: p.name })),
+      planFor ? planFor.problemId : ''))
+    + '<button class="btn-block btn-lg" type="submit">Work out the plan</button>'
+    + '</form>',
+    { tight: true },
+  );
+
+  if (!planFor) return out;
+  const plan = planFor.plan;
+
+  out += card(
+    cardHead(plan.problem ? plan.problem.name : 'Plan',
+      plan.options.length ? badge(`${plan.options.length} allowed`, 'ok') : badge('nothing allowed', 'danger'))
+    + `<p>${esc(plan.summary)}</p>`
+    + (plan.options.length
+      ? plan.options.map((o) => '<div class="rec">'
+        + `<b>${esc(o.entry.ai)}</b> ${badge(o.entry.group, '')}`
+        + `<p><small>${esc(o.dose.amounts.map((a) => a.text).join(' · '))} `
+        + `— from the ${esc(o.dose.source)}.</small></p>`
+        + `<p><small>In store: ${esc(String(o.stock.qty))} ${esc(o.stock.unit || '')}. `
+        + `No picking that bed until ${esc(o.harvestBlockedUntil)} (PHI ${o.phiDays} days), `
+        + `nobody back in for ${o.reiHours} hours.</small></p></div>`).join('')
+      : '')
+    + (plan.rejected.length
+      ? '<details><summary>What was ruled out, and why</summary><ul class="list">'
+        + plan.rejected.map((r) => `<li><div class="grow"><b>${esc(r.active.ai)}</b>`
+          + `<small>${esc(r.violations.map((v) => v.why).join(' '))}</small>`
+          + `<small>${esc(r.violations.map((v) => v.fix).filter(Boolean).join(' '))}</small>`
+          + '</div></li>').join('')
+        + '</ul></details>'
+      : '')
+    + limitNote('catalogue')
+    + signatureLine(plan)
+    + readList(plan)
+    + button('Save this plan', 'doctor-save', { cls: 'btn-block', data: { what: 'plan' } }),
+  );
+  return out;
+}
+
+/** The confirmed diagnosis a plan hangs off — Gate 3 (FR-GATE-04). */
+function latestConfirmedDiagnosis(state, cycleId) {
+  const found = state.diagnoses
+    .filter((d) => d.cycleId === cycleId && d.confirmedBy)
+    .sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))[0];
+  return found ? found.id : null;
+}
+
+// --- FR-DOC-05: the dose and lime calculators -----------------------------
+
+function calcPanel(ctx) {
+  return doseCard(ctx) + limeCard(ctx) + ppeCard(ctx);
+}
+
+/**
+ * The dose, per knapsack and per tank.
+ *
+ * A rate is a number the rules or a label gives. This does the arithmetic and
+ * nothing else — it will not invent a rate it was not given (FR-DOC-08), which
+ * is why the only input is the rate itself.
+ */
+function doseCard(ctx) {
+  const typed = (doseForm && doseForm.rate) || '';
+  const rate = typed ? parseRate(typed) : null;
+  const plan = rate && rate.ok !== false ? dosePlan(rate) : null;
+
+  return card(
+    cardHead('Dose calculator')
+    + '<p><small>Type the rate off the label or the schedule — "0.3 ml/L", "2.5 g/L", '
+    + '"150 ml / 16 L". The calculator does the arithmetic for the knapsack and both tanks. '
+    + 'It will not make up a rate it was not given.</small></p>'
+    + '<form data-act="doctor-dose">'
+    + field('Rate', input('rate', { value: typed, placeholder: 'e.g. 2.5 g/L' }))
+    + '<button class="btn-block btn-lg" type="submit">Work out the dose</button>'
+    + '</form>'
+    + (typed && !plan
+      ? note('warn', 'That is not a rate the app can read',
+        '<small>A rate looks like "2.5 g/L" or "150 ml / 16 L". Words like "per label" are a '
+        + 'pointer, not a dose.</small>')
+      : '')
+    + (plan
+      ? table([{ label: 'Tank' }, { label: 'Product', num: true }],
+        plan.tanks.map((t) => [t.label, t.text || `${t.amount} ${t.unit}`]))
+      : ''),
+  );
+}
+
+/**
+ * FR-DOC-05 — three pH readings, a texture and a bed area, and out comes a
+ * route, a product and kilograms. Or, just as often, "hold and re-test in ten
+ * days", which is the rules refusing to let a block be limed twice off one
+ * reading.
+ */
+function limeCard(ctx) {
+  const f = limeForm || {};
   return card(
     cardHead('Lime calculator')
-    + '<p><small>Three pH readings from the same block, the soil texture and the area. Out comes '
-    + 'Route A or Route B, the product, and the kilograms — or, between 5.2 and 5.49, a date instead '
-    + 'of a dose.</small></p>'
-    + '<form data-act="doc-lime">'
-    + '<div class="grid grid-2">'
-    + field('Point 1', input('ph1', { type: 'number', step: '0.01', min: 3, max: 9,
-      value: limeForm?.ph1, required: true, inputmode: 'decimal' }))
-    + field('Point 2', input('ph2', { type: 'number', step: '0.01', min: 3, max: 9,
-      value: limeForm?.ph2, required: true, inputmode: 'decimal' }))
+    + '<p><small>Three points per block, a calibrated meter, and the texture of the soil. '
+    + 'The route and the rate come from the rules.</small></p>'
+    + '<form data-act="doctor-lime">'
+    + '<div class="row wrap">'
+    + field('pH point 1', input('ph1', { type: 'number', step: '0.1', value: f.ph1 || '' }))
+    + field('pH point 2', input('ph2', { type: 'number', step: '0.1', value: f.ph2 || '' }))
+    + field('pH point 3', input('ph3', { type: 'number', step: '0.1', value: f.ph3 || '' }))
     + '</div>'
-    + '<div class="grid grid-2">'
-    + field('Point 3', input('ph3', { type: 'number', step: '0.01', min: 3, max: 9,
-      value: limeForm?.ph3, required: true, inputmode: 'decimal' }))
-    + field('Bed area (m²)', input('areaM2', { type: 'number', step: '1', min: 1,
-      value: limeForm?.areaM2 || '', required: true, inputmode: 'numeric' }))
-    + '</div>'
-    + field('Soil texture', select('texture', TEXTURES.map((t) =>
-      ({ value: t.id, label: `${t.name} — ${t.hint}` })), limeForm?.texture || 'sandy_loam'))
-    + field('Zone', select('zoneType', [
+    + field('Soil texture', select('texture',
+      TEXTURES.map((t) => ({ value: t.id, label: t.label || t.name || t.id })), f.texture || ''))
+    + field('Area to treat (m²)', input('areaM2', { type: 'number', value: f.areaM2 || '' }),
+      'Greenhouse: the bed area only. Open field: the full cropped area.')
+    + field('Where', select('zoneType', [
       { value: 'greenhouse', label: 'Greenhouse — bed area only' },
       { value: 'field', label: 'Open field — full cropped area' },
-    ], limeForm?.zoneType || 'greenhouse'))
-    + `<label class="tick ${limeForm?.solarised ? 'on' : ''}">`
-    + `<input type="checkbox" name="solarised" ${limeForm?.solarised ? 'checked' : ''} `
+    ], f.zoneType || 'greenhouse'))
+    + `<label class="tick ${f.solarised ? 'on' : ''}">`
+    + `<input type="checkbox" name="solarised" ${f.solarised ? 'checked' : ''} `
     + 'style="width:24px;height:24px;margin-right:10px">'
     + '<span class="txt"><b>Already under solarisation plastic</b>'
     + '<span class="pid">Route B and hydrated lime. Unticked means Route A, at T-35 to T-28.</span></span></label>'
     + field('Transplant date, if it is set', input('transplantDate',
-      { type: 'date', value: limeForm?.transplantDate || '' }))
+      { type: 'date', value: f.transplantDate || '' }))
     + field('Date the block went on hold, if it did', input('holdSince',
-      { type: 'date', value: limeForm?.holdSince || '' }),
+      { type: 'date', value: f.holdSince || '' }),
       'Only for a block already held between 5.2 and 5.49. Leaves the 10-day clock where it is.')
-    + '<button class="btn-block btn-lg" type="submit">Work out the lime</button></form>',
+    + '<button class="btn-block btn-lg" type="submit">Work out the lime</button>'
+    + '</form>',
   ) + (limeResult ? limeOut(limeResult) : '');
-}
-
-function runLime(ctx, form) {
-  limeForm = readForm(form);
-  limeResult = limePlan({
-    readings: [limeForm.ph1, limeForm.ph2, limeForm.ph3],
-    texture: limeForm.texture,
-    areaM2: Number(limeForm.areaM2) || 0,
-    zoneType: limeForm.zoneType,
-    solarised: !!limeForm.solarised,
-    transplantDate: limeForm.transplantDate || null,
-    holdSince: limeForm.holdSince || null,
-    limeDate: isoDate(),
-    today: isoDate(),
-  });
-  ctx.refresh();
-  window.scrollTo(0, document.body.scrollHeight);
 }
 
 function limeOut(result) {
   if (!result.ok) {
-    return card(note('danger', result.why, `<small>${esc(result.fix)}</small>`));
+    return card(note('danger', result.why, `<small>${esc(result.fix || '')}</small>`));
   }
-
   const tone = result.band === 'in-range' ? 'ok' : result.band === 'hold' ? 'warn' : 'danger';
+  return card(
+    cardHead('What to do', badge(
+      result.band === 'hold' ? 'held' : result.band === 'in-range' ? 'clear' : `Route ${result.route || '—'}`,
+      tone))
+    + note(tone, result.headline || '', `<small>${esc(result.detail || '')}</small>`)
+    + (result.reading
+      ? `<p><small>Three points: ${esc(result.reading.points.join(', '))} — average `
+        + `<b>${esc(String(result.reading.mean))}</b>, spread ${esc(String(result.reading.spread))}. `
+        + `Gate is ${esc(String(result.gateMin))}–${esc(String(result.gateMax))}.</small></p>`
+      : '')
+    + (result.kgText ? `<div class="dose-big">${esc(result.kgText)}</div>` : '')
+    + (result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
+    + ((result.locks || []).length
+      ? '<ul class="list">' + result.locks.map((l) => `<li><div class="grow"><b>${esc(l.what || l.label || '')}</b>`
+        + `<small>${esc(l.why || l.detail || '')}</small></div></li>`).join('') + '</ul>'
+      : ''),
+  );
+}
+
+/** FR-TREAT-04 — the gear, as pictures, before anyone opens a container. */
+function ppeCard(ctx) {
+  const kit = rulesLoaded() ? ppeFor({ task: 'spray' }) : null;
+  const lime = rulesLoaded() ? ppeFor({ task: 'lime' }) : null;
+  if (!kit) return '';
+  const row = (k) => '<div class="row wrap">' + k.items.map((i) => '<div class="ppe-item">'
+    + ppeIcon(i.id) + `<b>${esc(i.label)}</b><small>${esc(i.why)}</small></div>`).join('') + '</div>';
+  return card(
+    cardHead('The gear')
+    + '<p><small>Shown before the task starts, and confirmed with a tap on the spray screen. '
+    + `${esc(kit.rule || '')}</small></p>`
+    + '<h3>Any spray</h3>' + row(kit)
+    + (kit.after ? `<p><small>${esc(kit.after)}</small></p>` : '')
+    + '<h3>Hydrated lime</h3>' + row(lime)
+    + (lime.briefing ? note('warn', 'And a briefing', `<small>${esc(lime.briefingText)}</small>`) : ''),
+  );
+}
+
+// --- FR-DOC-06: gates -----------------------------------------------------
+
+function gatePanel(ctx) {
+  const zones = Object.values(ctx.state.plots).filter((z) => !z.retired);
+  if (!zones.length) return card(empty('🚧', 'No zones yet', 'Add a zone before checking its gates.'));
+  const zoneId = gateZone || zones[0].id;
+  const cycle = Object.values(ctx.state.cycles).find((c) => c.plotId === zoneId && c.status === 'active');
+  const reviewOut = gateEvidence(ctx.state, { zoneId, cycleId: cycle ? cycle.id : null, today: isoDate() });
 
   let out = card(
-    cardHead('What to do',
-      badge(result.band === 'hold' ? 'held' : result.band === 'in-range' ? 'clear' : `Route ${result.route || '—'}`,
-        tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'danger'))
-    + note(tone, result.headline, `<small>${esc(result.detail || '')}</small>`)
-    + `<p><small>Three points: ${result.reading.points.join(', ')} — average `
-    + `<b>${result.reading.mean}</b>, spread ${result.reading.spread}. `
-    + `Gate is ${result.gateMin}–${result.gateMax}.</small></p>`
-    + (result.kgText
-      ? `<div class="dose-big">${esc(result.kgText)}</div>`
-        + `<p><small>of ${esc(result.product)} over ${result.areaM2} m² `
-        + `(${result.ratePer100Low}–${result.ratePer100High} kg per 100 m²). ${esc(result.treatArea)}</small></p>`
-      : '')
-    + (result.approval ? note('warn', 'Not the app\'s decision', `<small>${esc(result.approval)}</small>`) : '')
-    + (result.blocksTransplant
-      ? note('danger', 'Transplant stays blocked',
-        '<small>The pH gate does not open until a corrected three-point reading of 5.5 or better is '
-        + 'on file, with the meter photo (FR-GATE-01).</small>') : ''),
+    cardHead('Gate evidence', reviewOut.complete ? badge('nothing missing', 'ok') : badge(`${reviewOut.missing.length} missing`, 'danger'))
+    + '<div class="row wrap">' + zones.map((z) => `<button class="chip ${z.id === zoneId ? 'on' : ''}" `
+      + `data-act="doctor-zone" data-zone="${esc(z.id)}">${esc(z.name)}</button>`).join(' ') + '</div>'
+    + limitNote('gate'),
+    { tight: true },
   );
 
-  if (result.steps?.length) {
-    out += card(cardHead('Steps') + '<ol>' + result.steps.map((s) => `<li>${esc(s)}</li>`).join('') + '</ol>');
-  }
-
-  if (result.locks?.length) {
+  for (const gate of reviewOut.gates) {
     out += card(
-      cardHead('Timing locks')
-      + '<ul class="list">' + result.locks.map((l) =>
-        `<li><div class="grow"><b>${esc(l.id.replace('-', ' '))}</b><small>${esc(l.text)}</small></div>`
-        + badge(`not before ${l.notBefore}`, l.clashesWithTransplant ? 'danger' : '')
-        + '</li>').join('') + '</ul>'
-      + (result.locks.some((l) => l.clashesWithTransplant)
-        ? note('danger', 'This clashes with the transplant date',
-          '<small>One of these locks runs past the day the seedlings are due to go in. Move the '
-          + 'transplant, or the lock is going to be broken quietly on the day.</small>') : ''),
-    );
-  }
-
-  if (result.warnings?.length) {
-    out += card(cardHead('Worth knowing')
-      + result.warnings.map((w) => note('warn', '', `<small>${esc(w)}</small>`)).join(''));
-  }
-
-  if (result.route) {
-    // SR-06 writes the briefing requirement against hydrated lime, which is
-    // Route B. The gear covers both routes because agricultural lime raises
-    // the same dust, and being stricter than the rule is always allowed.
-    const kit = ppeFor({ task: 'lime' });
-    out += card(
-      cardHead(`Handling ${result.route === 'B' ? 'hydrated lime' : 'agricultural lime'}`)
-      + ppeGrid(kit)
-      + (result.route === 'B'
-        ? note('danger', 'Team briefing first', `<small>${esc(kit.briefingText)}</small>`)
-        : note('warn', 'Keep it out of eyes and lungs',
-          '<small>Agricultural lime is a dust, and a bag of it empties into the wind. '
-          + 'Same gear as hydrated lime.</small>')),
+      cardHead(`${gate.id} — ${gate.name}`, gate.complete ? badge('complete', 'ok') : badge(`${gate.missing.length} missing`, 'warn'))
+      + (gate.when ? `<p><small>${esc(gate.when)}${gate.blocksAction ? ` · blocks ${esc(gate.blocksAction)}` : ''}</small></p>` : '')
+      + '<ul class="list">' + gate.items.map((it) => '<li><div class="grow">'
+        + `<b>${it.state === 'have' ? '✓' : '✕'} ${esc(it.label)}</b>`
+        + `<small>${esc(it.why || it.fix || '')}</small></div></li>`).join('') + '</ul>'
+      + (gate.missing.length ? evidenceForm(gate, zoneId, cycle) : ''),
     );
   }
 
   out += card(
-    cardHead('Do not buy these')
-    + `<ul>${result.doNotBuy.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`
-    + note('info', 'If there is no lime to be had', `<small>${esc(result.fallback)}</small>`),
+    signatureLine(reviewOut)
+    + readList(reviewOut)
+    + button('Save this gate check', 'doctor-save', { cls: 'btn-block', data: { what: 'gates' } }),
+    { tight: true },
+  );
+  return out;
+}
+
+function evidenceForm(gate, zoneId, cycle) {
+  return '<details><summary>Record one of these</summary>'
+    + '<form data-act="doctor-evidence">'
+    + `<input type="hidden" name="gate" value="${esc(gate.id)}">`
+    + `<input type="hidden" name="zoneId" value="${esc(zoneId)}">`
+    + `<input type="hidden" name="cycleId" value="${esc(cycle ? cycle.id : '')}">`
+    + field('Which line', select('itemId', gate.missing.map((m) => ({ value: m.id, label: m.label }))))
+    + field('What was done', textarea('note', { rows: 2, placeholder: 'e.g. drip run at 1.2 bar, no blocked emitters' }))
+    + field('Count, if it is a count', input('count', { type: 'number', inputmode: 'numeric' }),
+      'Traps, for instance. Leave blank otherwise.')
+    + field('Batch ID, for a seedling release', input('batchId'))
+    + '<input type="file" accept="image/*" capture="environment" name="photo" class="photo-input" data-role="evidence">'
+    + button('📷 Photo', 'pick-photo', { cls: 'btn-ghost btn-block' })
+    + '<div class="photo-preview"></div>'
+    + '<button class="btn-block" type="submit">Record this evidence</button>'
+    + '</form></details>';
+}
+
+// --- FR-DOC-07: follow-up checks and the cycle review ---------------------
+
+function checksPanel(ctx) {
+  const board = followUpBoard(ctx.state, { today: isoDate() });
+  let out = card(
+    cardHead('Three-day checks', board.some((b) => b.overdue) ? badge('some overdue', 'danger') : '')
+    + '<p><small>Every treatment gets a check three days later, and the answer is kept. '
+    + 'A treatment nobody checked is one nobody can learn from.</small></p>',
+    { tight: true },
   );
 
+  if (!board.length) {
+    out += card(empty('🔁', 'No treatments yet', 'Checks appear here three days after a spray is logged.'));
+  }
+
+  for (const row of board.slice(0, 12)) {
+    out += card(
+      cardHead(row.spray.productName || 'Treatment',
+        row.answered
+          ? badge(WORKED[row.worked] ? WORKED[row.worked].label : 'answered', WORKED[row.worked] ? WORKED[row.worked].tone : '')
+          : row.overdue ? badge(`${row.daysLate} days late`, 'danger') : badge(`due ${row.due}`, 'warn'))
+      + `<p><small>Sprayed ${esc(friendlyDate(row.spray.date))} on ${esc(cycleLabel(ctx.state, row.spray.cycleId))}.</small></p>`
+      + (row.answered
+        ? `<p><small>${esc(row.record.summary)}${row.record.nextStep ? ` — ${esc(row.record.nextStep)}` : ''}</small></p>`
+        : '<form data-act="doctor-followup">'
+          + `<input type="hidden" name="sprayId" value="${esc(row.spray.id)}">`
+          + field('Did it work', select('worked', Object.values(WORKED).map((w) => ({ value: w.id, label: w.label }))))
+          + field('What you saw', textarea('note', { rows: 2, placeholder: 'Counted the same ten plants…' }))
+          + '<button class="btn-block" type="submit">Record the check</button>'
+          + '</form>'),
+    );
+  }
+
+  const cycles = activeCycles(ctx.state);
+  if (cycles.length && can(ctx.user, 'manageCycles')) {
+    out += card(
+      cardHead('Gate 4 cycle review')
+      + '<p><small>Drafted from this season\'s own records — yield, treatments, what worked, what '
+      + 'was never checked. A draft only: the Farm Manager confirms it and the Owner approves.</small></p>'
+      + cycles.map((c) => button(`Draft for ${cycleLabel(ctx.state, c.id)}`, 'doctor-cycle-review',
+        { cls: 'btn-block btn-ghost', data: { cycle: c.id } })).join(''),
+    );
+  }
   return out;
+}
+
+// --- FR-DOC-09 / FR-DIAG-05: the lab --------------------------------------
+
+function labPanel(ctx) {
+  const samples = labSamples(ctx.state);
+  const open = openLabSamples(ctx.state);
+  let out = card(
+    cardHead('Lab samples', open.length ? badge(`${open.length} waiting`, 'warn') : badge('none open', 'ok'))
+    + '<p><small>A sample goes off for a suspected virus, bacterial wilt, nematodes, or a second '
+    + 'low-confidence reading. The Owner is told at the same time.</small></p>',
+    { tight: true },
+  );
+
+  if (!samples.length) {
+    out += card(empty('🧪', 'No samples yet',
+      'The Farm Doctor recommends one when a photo or a guided diagnosis cannot settle it.'));
+  }
+
+  for (const sample of samples.slice(0, 12)) {
+    const problem = PROBLEM_BY_ID[sample.problemId];
+    out += card(
+      cardHead(problem ? problem.name : 'Sample',
+        sample.result ? badge('result in', 'ok') : sample.sentDate ? badge('sent', 'warn') : badge('recommended', 'danger'))
+      + `<p><small>${esc(sample.reason || '')}</small></p>`
+      + (sample.sentDate ? `<p><small>Sent ${esc(sample.sentDate)} to ${esc(sample.lab || 'a lab')}.</small></p>` : '')
+      + (sample.result ? `<p><b>${esc(sample.result)}</b> <small>${esc(sample.resultDate || '')}</small></p>` : '')
+      + (!sample.sentDate
+        ? '<form data-act="doctor-lab-send">'
+          + `<input type="hidden" name="id" value="${esc(sample.id)}">`
+          + field('Which lab', input('lab', { placeholder: 'e.g. NRCRI Umudike' }))
+          + field('Date sent', input('sentDate', { type: 'date', value: isoDate() }))
+          + '<button class="btn-block" type="submit">Mark as sent</button></form>'
+        : !sample.result
+          ? '<form data-act="doctor-lab-result">'
+            + `<input type="hidden" name="id" value="${esc(sample.id)}">`
+            + field('What came back', textarea('result', { rows: 2 }))
+            + '<button class="btn-block" type="submit">Record the result</button></form>'
+          : ''),
+    );
+  }
+  return out;
+}
+
+// --- FR-DOC-10: the records -----------------------------------------------
+
+function recordsPanel(ctx) {
+  const records = doctorRecords(ctx.state, { limit: 40 });
+  if (!records.length) {
+    return card(empty('📋', 'Nothing saved yet',
+      'Every Farm Doctor output is saved here with what it read, how sure it was, and who confirmed it.'));
+  }
+  return records.map((o) => card(
+    cardHead(`${kindLabel(o.kind)} — ${esc(friendlyDate((o.at || '').slice(0, 10)))}`, confidenceBadge(o.confidence))
+    + `<p>${esc(o.summary || '')}</p>`
+    + `<p><small>${o.confirmedBy
+      ? `Confirmed by ${esc((ctx.state.people[o.confirmedBy] || {}).name || o.confirmedBy)}`
+      : `Not confirmed — waiting on the ${esc(o.needsConfirming || 'Field Supervisor or Farm Manager')}`}`
+    + `${o.approvedBy ? `, approved by ${esc((ctx.state.people[o.approvedBy] || {}).name || o.approvedBy)}` : ''}`
+    + '</small></p>'
+    + readList(o)
+    + (!o.confirmedBy && can(ctx.user, 'verifyHarvest')
+      ? button('Confirm this', 'doctor-confirm', { cls: 'btn-block', data: { id: o.id } }) : '')
+    + (o.confirmedBy && !o.approvedBy && can(ctx.user, 'prescribe')
+      ? button('Approve this', 'doctor-approve', { cls: 'btn-block btn-ghost', data: { id: o.id } }) : ''),
+  )).join('');
+}
+
+const kindLabel = (kind) => ({
+  photo: 'Photo review', plan: 'Treatment plan', 'gate-review': 'Gate check',
+  'cycle-review': 'Cycle review', followup: 'Three-day check', diagnosis: 'Diagnosis',
+}[kind] || kind);
+
+/** The thing on screen that the save button is about. */
+function pendingOutput(ctx, what) {
+  if (what === 'photo') return review && review.kind ? review : null;
+  if (what === 'gates') {
+    const zones = Object.values(ctx.state.plots).filter((z) => !z.retired);
+    const zoneId = gateZone || (zones[0] && zones[0].id);
+    if (!zoneId) return null;
+    const cycle = Object.values(ctx.state.cycles).find((c) => c.plotId === zoneId && c.status === 'active');
+    return gateEvidence(ctx.state, { zoneId, cycleId: cycle ? cycle.id : null, today: isoDate() });
+  }
+  if (what === 'plan' && planFor) return planFor.plan;
+  return null;
+}
+
+/** FR-DOC-09 — a recommended sample becomes a tracked one the moment it is saved. */
+async function recommendLab(ctx, output) {
+  const existing = openLabSamples(ctx.state).some((s) => s.problemId === (output.subject || {}).problemId
+    && s.cycleId === (output.subject || {}).cycleId);
+  if (existing) return;
+  await ctx.store.dispatch('lab.record', { id: uid('lab'), ...output.lab, fromOutput: output.id });
 }

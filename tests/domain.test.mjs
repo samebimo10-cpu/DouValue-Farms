@@ -121,85 +121,16 @@ test('every symptom belongs to a part the wizard asks about', () => {
   }
 });
 
-// --- Diagnosis ------------------------------------------------------------
+// --- Diagnosis -----------------------------------------------------------
+//
+// The engine itself is covered in tests/diagnose.test.mjs, against the rules
+// JSON. What belongs here is the seam: the clinic's two halves must agree
+// about which problems exist.
 
-function top(ctx) {
-  const r = diagnose.diagnose(ctx);
-  return r.results[0];
-}
-
-test('the streaming test points at bacterial wilt', () => {
-  const best = top({ symptoms: ['wilt_sudden_green', 'stem_ooze_white'], parts: ['whole', 'stem'],
-    cropId: 'habanero', dat: 60, date: '2026-08-10' });
-  assert.equal(best.id, 'bacterial_wilt');
-  assert.equal(best.confidence.id, 'strong');
-});
-
-test('a wet low corner with a stem lesion points at Phytophthora', () => {
-  const best = top({ symptoms: ['wilt_sudden_green', 'stem_lesion_soil', 'pattern_low_wet', 'pattern_after_rain'],
-    parts: ['whole', 'stem', 'pattern'], cropId: 'habanero', dat: 60, date: '2026-08-10' });
-  assert.equal(best.id, 'phytophthora_blight');
-});
-
-test('a sunken fruit lesion in the rains is anthracnose', () => {
-  const best = top({ symptoms: ['fruit_sunken_lesion', 'pattern_after_rain'], parts: ['fruit', 'pattern'],
-    cropId: 'bell', dat: 85, date: '2026-07-20' });
-  assert.equal(best.id, 'anthracnose');
-});
-
-test('webbing in the dry season is spider mite, not a disease', () => {
-  const best = top({ symptoms: ['leaf_webbing', 'leaf_stipple', 'pattern_after_dry'], parts: ['leaf', 'pattern'],
-    cropId: 'chili', dat: 90, date: '2026-01-15' });
-  assert.equal(best.id, 'red_spider_mite');
-});
-
-test('vein banding and stunting point at virus', () => {
-  const best = top({ symptoms: ['leaf_vein_banding', 'leaf_mosaic', 'stunted', 'pattern_field_edge'],
-    parts: ['leaf', 'whole', 'pattern'], cropId: 'habanero', dat: 50, date: '2026-05-01' });
-  assert.equal(best.id, 'pvmv');
-});
-
-test('a black blossom end is a disorder, not something to spray', () => {
-  const best = top({ symptoms: ['fruit_black_end'], parts: ['fruit'], cropId: 'bell', dat: 80, date: '2026-02-10' });
-  assert.equal(best.id, 'blossom_end_rot');
-  assert.equal(best.problem.type, 'disorder');
-});
-
-test('toppling seedlings in the nursery are damping-off', () => {
-  const best = top({ symptoms: ['seedling_topple', 'pattern_patches'], parts: ['seedling', 'pattern'],
-    cropId: 'bell', dat: -20, date: '2026-06-01' });
-  assert.equal(best.id, 'damping_off');
-});
-
-test('one vague observation never produces a confident answer', () => {
-  const r = diagnose.diagnose({ symptoms: ['pattern_after_rain'], parts: ['pattern'],
-    cropId: 'bell', dat: 60, date: '2026-07-20' });
-  assert.ok(r.results.length, 'it still offers candidates');
-  for (const hit of r.results) {
-    assert.notEqual(hit.confidence.id, 'strong', `${hit.id} should not be a strong match on one vague tick`);
-  }
-  assert.ok(r.nextChecks.length, 'it says what to go and look at');
-});
-
-test('evidence in a part nobody inspected does not win the ranking', () => {
-  // Cercospora lives on leaves. Report a stem and pattern problem without ever
-  // looking at a leaf, and it must not come top on a shared generic symptom.
-  const r = diagnose.diagnose({ symptoms: ['wilt_sudden_green', 'stem_lesion_soil', 'pattern_after_rain'],
-    parts: ['whole', 'stem', 'pattern'], cropId: 'bell', dat: 60, date: '2026-08-01' });
-  assert.notEqual(r.results[0].id, 'cercospora_leaf_spot');
-});
-
-test('nothing ticked means nothing claimed', () => {
-  const r = diagnose.diagnose({ symptoms: [], parts: ['leaf'], cropId: 'bell' });
-  assert.equal(r.results.length, 0);
-});
-
-test('the separating question distinguishes the top two', () => {
-  const r = diagnose.diagnose({ symptoms: ['wilt_sudden_green', 'pattern_patches'], parts: ['whole', 'pattern'],
-    cropId: 'habanero', dat: 60, date: '2026-08-10' });
-  if (r.separator) {
-    assert.notEqual(r.separator.points_to.id, r.separator.away_from.id);
-    assert.ok(r.separator.symptom.label);
+test('the risk board and the rules agree on the problems they share', () => {
+  for (const [problemId, cardId] of Object.entries(diagnose.LEGACY_CARD_MAP)) {
+    assert.ok(pests.PROBLEM_BY_ID[problemId], `${problemId} is in the local field guide`);
+    assert.ok(diagnose.CARD_BY_ID[cardId], `${cardId} is a card in the rules`);
   }
 });
 
@@ -275,8 +206,14 @@ test('recommended products exclude the ones flagged as unsafe', () => {
       assert.notEqual(p.hazard, 'avoid', `${p.name} should not be recommended`);
     }
   }
-  const nematode = safety.discouragedFor('root_knot_nematode');
-  assert.ok(nematode.some((p) => p.id === 'carbofuran'), 'carbofuran is called out, not recommended');
+  // FR-STOCK-09, and the rules' own banned list: carbofuran must not ship at
+  // all, "not even flagged as 'avoid'". It used to sit here as a discouraged
+  // product; a greyed-out row is still a row, so it is gone from every product
+  // list in the app and refused by name in domain/catalogue.js.
+  for (const p of safety.PRODUCTS) {
+    assert.ok(!/carbofuran|furadan/i.test(`${p.id} ${p.name} ${p.examples}`),
+      'no product list in the app carries a banned active');
+  }
 });
 
 test('every product carries the numbers the app relies on', () => {

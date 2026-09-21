@@ -230,7 +230,14 @@ small { font-size: .875rem; color: var(--ink-2); }
 .syncbar.danger { background: var(--danger-bg); color: var(--danger); }
 .syncbar.info { background: var(--info-bg); color: var(--info); }
 
-.photo-input { display: none; }
+.photo-input, .reference-input { display: none; }
+
+/* A reference picture inside a tick. It sits beside the words, never instead
+   of them: a slot with no photo must read exactly as well as one with. */
+.tick-img { flex: 0 0 auto; }
+.tick-img img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; display: block; }
+.ref-shot img { max-width: 100%; border-radius: 12px; display: block; }
+.ref-missing { opacity: 0.72; }
 .photo-shot { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; }
 .photo-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 

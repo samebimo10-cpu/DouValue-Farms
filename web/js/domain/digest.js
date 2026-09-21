@@ -18,6 +18,7 @@
 
 import { isoDate } from '../util.js';
 import { alerts, kpis, risingWarnings } from './alerts.js';
+import { ownerNotifications } from './doctor.js';
 import { gateBoard } from './gates.js';
 import { sampleDataCheck } from './readiness.js';
 import { uncoveredToday } from './positions.js';
@@ -45,15 +46,23 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
 
   // 1. Suspected virus. FR-DIAG-04 sends this straight to the Owner, and it
   //    outranks everything because by the time it is certain it is too late.
+  //    FR-DOC-09 widens it: the Farm Doctor also notifies the Owner for
+  //    bacterial wilt, nematodes and a second low-confidence result, and marks
+  //    those records as needing a lab when it names them.
   for (const d of state.diagnoses || []) {
     if ((d.date || '') !== today) continue;
-    const problem = String(d.problemId || '');
-    if (!/virus|tospo|pvmv|cmv|leaf_curl/i.test(problem)) continue;
+    const problem = String(d.cardId || d.problemId || '');
+    const virus = /virus|tospo|pvmv|cmv|leaf_curl/i.test(problem);
+    if (!virus && !d.labRecommended) continue;
     out.push({
       severity: 'critical',
-      line: `VIRUS SUSPECTED: ${d.problemName || problem} on ${zoneOf(state, d.cycleId)}`,
-      detail: 'Isolate those plants, do not move tools or hands between houses, pull and burn '
-        + 'the affected ones. Confirm before replanting.',
+      line: `${virus ? 'VIRUS SUSPECTED' : 'LAB SAMPLE NEEDED'}: ${d.problemName || problem} `
+        + `on ${zoneOf(state, d.cycleId)}`,
+      detail: virus
+        ? 'Isolate those plants, do not move tools or hands between houses, pull and burn '
+          + 'the affected ones. Confirm before replanting.'
+        : 'The rules require a lab result for this one before it is treated as settled '
+          + '(FR-DOC-09). Send the sample and tell the Owner.',
     });
   }
 
@@ -104,6 +113,24 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
       severity: 'critical',
       line: `Nobody on ${gap.zone ? gap.zone.name : gap.position.title} today`,
       detail: gap.why || 'The holder is not in and there is no backup for that zone.',
+    });
+  }
+
+  // 3c. FR-DOC-09 — what the Farm Doctor says the Owner has to hear now: a
+  //     suspected virus, bacterial wilt, nematodes, a second low-confidence
+  //     reading, or a sample that went to a lab and never came back. These are
+  //     the cases where the app has stopped being able to answer, and the
+  //     whole point of saying so is that it reaches the one person who can
+  //     decide to spend money on a lab.
+  for (const owed of ownerNotifications(state, { today })) {
+    out.push({
+      severity: owed.kind === 'lab' ? 'warn' : 'critical',
+      line: owed.kind === 'lab'
+        ? `Lab sample with no result: ${owed.why}`
+        : `Farm Doctor: ${owed.why}`,
+      detail: owed.lab && owed.lab.reason
+        ? `${owed.lab.reason} A sample should go off and the result recorded against the zone.`
+        : 'Open the Farm Doctor to see what it read and confirm or overrule it.',
     });
   }
 

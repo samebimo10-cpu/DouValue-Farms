@@ -4,11 +4,11 @@
 // so every file it needs is cached on first visit and served from the cache
 // first. Network is only ever used to look for a newer copy in the background.
 
-// Bumped when the app moves or when the shell gains a file. v12 adds the Farm
-// Doctor and, with it, the rules file itself: the plan checks and both
-// calculators are required to work with no signal (FR-DOC-03), and they cannot
-// do that if their own rule book needs a network.
-const CACHE = 'douvalue-v12';
+// Bumped when the app moves or when the shell gains a file. The rules file is
+// cached with it: the plan checks, the gate checks and both calculators are
+// required to work with no signal (FR-DOC-03), and they cannot do that if
+// their own rule book needs a network.
+const CACHE = 'douvalue-v15';
 
 const SHELL = [
   './',
@@ -42,7 +42,9 @@ const SHELL = [
   './js/ui/alerts.js',
   './js/ui/zones.js',
   './js/ui/field-kit.js',
+  './js/rules.js',
   './js/domain/adviser.js',
+  './js/domain/doctor.js',
   './js/domain/analysis.js',
   './js/domain/brief.js',
   './js/domain/gates.js',
@@ -56,27 +58,42 @@ const SHELL = [
   './js/domain/climate.js',
   './js/domain/pests.js',
   './js/domain/diagnose.js',
+  // The source of truth itself. NFR-OFF-01: the clinic has to work on a
+  // phone with no signal, and it cannot diagnose anything without this.
+  '../rules/douvalue_rules_rev5_1.json',
   './js/domain/safety.js',
-  './js/domain/rules.js',
   './js/domain/catalogue.js',
+  './js/domain/rotation.js',
   './js/domain/calc.js',
-  './js/domain/doctor.js',
   './js/domain/integrity.js',
   './js/domain/predict.js',
 ];
 
 // The single copy of the rules, published beside the app by
-// scripts/assemble_site.sh. One file, one answer (CLAUDE.md). Cached apart
-// from the shell on purpose: if it is missing the app must still install and
-// run — the Farm Doctor says it has no rule book, which is a far better
-// failure than no offline app at all.
-const RULES = './rules/douvalue_rules_rev5_1.json';
+// scripts/assemble_site.sh. One file, one answer (CLAUDE.md).
+//
+// Two addresses, for the same reason web/js/rules.js tries two: on the
+// published site the app is at the root and the rules one level below it, and
+// in the repository the app is under web/ and the rules a level further up.
+// Cached apart from the shell on purpose — if it is missing the app must still
+// install and run, and the Farm Doctor says it has no rule book, which is a far
+// better failure than no offline app at all.
+const RULES = ['./rules/douvalue_rules_rev5_1.json', '../rules/douvalue_rules_rev5_1.json'];
+
+/** Cache the rules from whichever address answers. Never fails the install. */
+async function cacheRules(cache) {
+  for (const url of RULES) {
+    try {
+      await cache.add(url);
+      return;
+    } catch { /* try the other address */ }
+  }
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL)
-        .then(() => cache.add(RULES).catch(() => { /* offline rules unavailable */ })))
+      .then((cache) => cache.addAll(SHELL).then(() => cacheRules(cache)))
       .then(() => self.skipWaiting()),
   );
 });

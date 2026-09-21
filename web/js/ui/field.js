@@ -7,7 +7,9 @@ import {
 import { activeCycles, can, closedCycles, cycleLabel, spraysForCycle } from '../store.js';
 import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, waterDemandMmPerDay } from '../domain/crops.js';
 import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../domain/predict.js';
-import { harvestClearance, PRODUCTS, PRODUCT_BY_ID, reentryClearance, resistanceWarnings, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
+import { harvestClearance, reentryClearance, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
+import { buildCatalogue, canUseActive, rateFor, resolveActive, usableActives } from '../domain/catalogue.js';
+import { cropWeek, rotationVerdict, WEEK_10, week10Actives } from '../domain/rotation.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
 import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
@@ -17,8 +19,8 @@ import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, ro
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { confirmPpe } from './ppe.js';
-import { rulesReady } from '../domain/rules.js';
-import { followUpTask, ppeFor } from '../domain/doctor.js';
+import { rulesLoaded } from '../rules.js';
+import { followUpTaskFor, ppeFor } from '../domain/doctor.js';
 import { getLang } from '../i18n.js';
 
 /**
@@ -295,9 +297,12 @@ export const cycleView = {
       + (sprays.length
         ? table([{ label: 'Date' }, { label: 'Product' }, { label: 'Safe to pick' }, { label: 'Recorded' }, { label: 'Label photo' }],
           [...sprays].reverse().slice(0, 10).map((s) => {
-            const product = PRODUCT_BY_ID[s.productId];
-            return [s.date, product ? product.name : s.productName || '—',
-              isoDate(addDays(s.date, product ? product.phiDays : 0)),
+            // A spray is read back through the catalogue, so records made
+            // before it existed still name their active and their group.
+            const active = resolveActive(buildCatalogue(ctx.state), s.activeId || s.productId);
+            const phi = s.phiDays ?? (active ? active.phiDays : 0);
+            return [s.date, active ? active.name : s.productName || s.productId || '—',
+              isoDate(addDays(s.date, phi)),
               stampOf(s), s.photo ? 'yes' : 'no'];
           }))
         : '<p><small>Nothing sprayed on this bed yet.</small></p>'),
@@ -552,6 +557,9 @@ async function saveScout(ctx, form) {
 
 // --- Spray ----------------------------------------------------------------
 
+/** One heading per kind, from the catalogue's own wording ("insecticide/miticide"). */
+const bucket = (active) => String(active.type || 'other').split('/')[0].trim() || 'other';
+
 /** When the gear was confirmed, so it lands on the spray record with the rest. */
 let ppeConfirmedAt = null;
 
@@ -563,7 +571,7 @@ let ppeConfirmedAt = null;
  * it stops the task, which is the whole point of asking.
  */
 async function openSpraySheet(ctx, cycleId) {
-  const kit = rulesReady() ? ppeFor({ active: null }) : null;
+  const kit = rulesLoaded() ? ppeFor({ active: null }) : null;
   if (kit) {
     const worn = await confirmPpe(kit, { title: 'Before you spray, put this on' });
     if (!worn) {
@@ -576,55 +584,80 @@ async function openSpraySheet(ctx, cycleId) {
 }
 
 function openSprayForm(ctx, cycleId) {
-  const usable = PRODUCTS.filter((p) => p.hazard !== 'avoid');
+  // FR-STOCK-05 — the picker is the active-ingredient catalogue, not a list of
+  // brands. An active with no rate is not offered at all (FR-STOCK-08): there
+  // is no dose for it, and the rules forbid inventing one.
+  const catalogue = buildCatalogue(ctx.state);
+  const usable = usableActives(catalogue);
+  const waiting = catalogue.actives.filter((a) => !usable.includes(a));
+  // The group goes in the name, because the group is what the rotation reads
+  // and the person choosing should see the same thing the gate will.
+  const groupsOf = (a) => `${a.name} — ${a.group}`;
+
   const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
     + '<form data-act="save-spray">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
-    + field('Product', `<select name="productId" data-act="spray-product-change">`
-      + ['fungicide', 'insecticide', 'miticide', 'biological', 'nutrient'].map((kind) => {
-        const items = usable.filter((p) => p.kind === kind);
-        if (!items.length) return '';
-        return `<optgroup label="${esc(kind)}">`
-          + items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('') + '</optgroup>';
-      }).join('') + '</select>')
+    + field('Active ingredient', `<select name="activeId" data-act="spray-product-change">`
+      + [...new Set(usable.map(bucket))].map((kind) => `<optgroup label="${esc(kind)}">`
+        + usable.filter((p) => bucket(p) === kind)
+          .map((p) => `<option value="${esc(p.id)}">${esc(groupsOf(p))}</option>`).join('')
+        + '</optgroup>').join('') + '</select>')
+    + field('Brand used, if any', `<select name="labelId"><option value="">Not recorded</option>`
+      + catalogue.labels.map((l) => `<option value="${esc(l.id)}">${esc(l.brand)}${l.formulation ? ` ${esc(l.formulation)}` : ''}</option>`).join('')
+      + '</select>')
     + field('Date', input('date', { type: 'date', value: isoDate() }))
-    + field('What were you treating?', input('targetProblem', { placeholder: 'e.g. anthracnose' }))
+    + field('What were you treating?', input('targetProblem', { placeholder: 'e.g. thrips' }))
     + field('Who sprayed?', input('operator', { value: ctx.user.name }))
     + '<div id="spray-hint"></div>'
     + field('Note', textarea('note', { placeholder: 'Rate used, weather, anything unusual' }))
     + photoField('Photo of the container',
       'The label carries the real waiting period and the real rate. A picture of it is the record '
       + 'that settles any question about what actually went on the crop.')
-    + '<button class="btn-block btn-lg" type="submit">Save spray</button></form>');
+    + '<button class="btn-block btn-lg" type="submit">Save spray</button></form>'
+    + (waiting.length
+      ? `<p><small>Not offered, because no rate has been entered yet: ${esc(waiting.map((a) => a.name).join(', '))}. `
+        + 'The Farm Manager adds a brand label with the rate off the container to bring one back.</small></p>'
+      : ''));
   bindPhoto(el);
-  const sel = document.querySelector('.sheet select[name=productId]');
+  const sel = document.querySelector('.sheet select[name=activeId]');
   if (sel) updateSprayHints(ctx, sel);
 }
 
 function updateSprayHints(ctx, el) {
   const sheet = el.closest('.sheet');
   const hint = sheet.querySelector('#spray-hint');
-  const product = PRODUCT_BY_ID[sheet.querySelector('select[name=productId]').value];
+  const catalogue = buildCatalogue(ctx.state);
+  const active = catalogue.byId[sheet.querySelector('select[name=activeId]').value];
   const cycleId = sheet.querySelector('input[name=cycleId]').value;
   const cycle = ctx.state.cycles[cycleId];
-  if (!hint || !product) return;
+  if (!hint || !active) return;
 
   const area = cycle ? (cycle.areaM2 || 0) : 0;
   const plan = knapsackPlan(area);
-  const warnings = resistanceWarnings([...spraysForCycle(ctx.state, cycleId), { productId: product.id, date: isoDate() }]);
+  const rate = rateFor(catalogue, active.id);
+  const week = cropWeek(cycle);
+  // The same check the save will run, shown before the person fills the rest of
+  // the form in. Being refused after typing everything is how a gate earns a
+  // reputation for being in the way.
+  const rotation = rotationVerdict(ctx.state, cycleId, active.id, { catalogue, today: isoDate() });
 
   hint.innerHTML =
-    note(product.phiDays >= 7 ? 'warn' : 'info',
-      `Waiting period: ${product.phiDays} day${product.phiDays === 1 ? '' : 's'} before picking`,
-      `<small>Fruit from this bed will be safe to pick from <b>${isoDate(addDays(isoDate(), product.phiDays))}</b>. `
-      + `Nobody goes back in without protective gear for ${product.reiHours} hours. `
-      + `Resistance group ${esc(product.group)}.${product.note ? ' ' + esc(product.note) : ''}</small>`)
-    + (product.bee === 'very high' || product.bee === 'high'
-      ? note('warn', 'Hard on bees', '<small>Do not spray while flowers are open, or spray at dusk once the bees have gone in. '
-        + 'Pepper sets more fruit when bees work it.</small>') : '')
-    + warnings.map((w) => note('warn', 'Resistance warning',
-      `<small>${esc(w.message)} Try instead: ${esc(w.alternatives.join(', '))}.</small>`)).join('')
+    note(active.phiDays >= 7 ? 'warn' : 'info',
+      `Waiting period: ${active.phiDays} day${active.phiDays === 1 ? '' : 's'} before picking`,
+      `<small>Fruit from this bed will be safe to pick from <b>${isoDate(addDays(isoDate(), active.phiDays))}</b>. `
+      + `Nobody goes back in without protective gear for ${active.reiHours} hours. `
+      + `Resistance group ${esc(active.group)}.</small>`)
+    + note('info', `Rate: ${esc(rate.rate)}`,
+      `<small>${rate.from === 'schedule' ? 'From the operations schedule for this active.'
+        : `From the label entered for ${esc((rate.label && rate.label.brand) || 'this product')}.`}</small>`)
+    + (week != null && week >= WEEK_10
+      ? note('warn', `The crop is in Week ${week}`,
+        `<small>From Week 10 the rules allow organics only: `
+        + `${esc(week10Actives(catalogue).actives.map((a) => a.name).join(', '))}. Anything else is refused.</small>`)
+      : '')
+    + (rotation.ok ? '' : note('danger', rotation.why,
+      `<small>${esc(rotation.fix || '')} Read from ${esc((rotation.sources || []).join(', '))}.</small>`))
     + (area ? note('info', 'Mixing', `<small>${esc(plan.text)} Check the label: it beats this estimate.</small>`) : '')
     + '<details><summary><small>Spray safety rules</small></summary><ul>'
     + SPRAY_RULES.map((r) => `<li><small>${esc(r)}</small></li>`).join('') + '</ul></details>';
@@ -632,19 +665,34 @@ function updateSprayHints(ctx, el) {
 
 async function saveSpray(ctx, form) {
   const data = readForm(form);
-  const product = PRODUCT_BY_ID[data.productId];
+  const catalogue = buildCatalogue(ctx.state);
+  const active = catalogue.byId[data.activeId];
+  const label = catalogue.labels.find((l) => l.id === data.labelId) || null;
+
+  // FR-STOCK-07 — the label is used only where it is stricter. A brand that
+  // claims a shorter waiting period than the default does not get one.
+  const phiDays = label ? Math.max(label.phiDays, active ? active.phiDays : 0) : (active ? active.phiDays : 14);
+  const reiHours = label ? Math.max(label.reiHours, active ? active.reiHours : 0) : (active ? active.reiHours : 24);
 
   // FR-GATE-04 and FR-GATE-05. "Treatment by guesswork" is a named cause of
-  // Season 1, so a spray needs a confirmed diagnosis behind it, and it must not
-  // be the third from one resistance group.
-  const allowed = canTreat(ctx.state, data.cycleId, { today: isoDate(), productId: data.productId });
+  // Season 1, so a spray needs a confirmed diagnosis behind it; and the product
+  // must pass the rotation, the thrips programme and the Week 10 rule, all of
+  // which are read out of the rules file by resistance group.
+  const allowed = canTreat(ctx.state, data.cycleId, {
+    today: isoDate(), activeId: data.activeId, catalogue, target: data.targetProblem,
+  });
   if (!allowed.ok) {
     closeSheet();
-    openSheet(`<h2>${allowed.reason === 'rotation' ? 'Not this product' : 'Diagnose it first'}</h2>`
-      + note('danger', allowed.why, `<small>${esc(allowed.fix)}</small>`)
+    const refusedOnProduct = ['rotation', 'week-10', 'thrips-programme', 'no-rate', 'interval',
+      'metalaxyl-interval', 'not-in-catalogue'].includes(allowed.reason);
+    openSheet(`<h2>${refusedOnProduct ? 'Not this product' : 'Diagnose it first'}</h2>`
+      + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
       + (allowed.reason === 'rotation'
         ? '<p><small>Resistance does not wear off. A group used past its limit stops working on this '
           + 'farm for good, usually in the season that needs it most.</small></p>'
+        : '')
+      + (refusedOnProduct
+        ? `<p><small>Read from ${esc((allowed.sources || []).join(', ') || 'the rules file')}.</small></p>`
         : `<div style="margin-top:12px">${button('Check the plant now', 'go',
           { cls: 'btn-block btn-lg', icon: '🔍', data: { to: '#/diagnose' } })}</div>`));
     return;
@@ -655,26 +703,34 @@ async function saveSpray(ctx, form) {
   // three consequences worth one screen of confirmation.
   const cycle = ctx.state.cycles[data.cycleId];
   const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
+  const rate = rateFor(catalogue, data.activeId);
   const goAhead = await confirmSheet('Record this spray?',
     confirmSummary([
       ['Zone', zone ? zone.name : 'not named'],
       ['Against', allowed.diagnosis
         ? (PROBLEM_BY_ID[allowed.diagnosis.problemId] || {}).name || allowed.diagnosis.problemId
         : data.targetProblem],
-      ['Product', product ? product.name : data.productId],
-      ['Resistance group', product ? product.group : null],
-      ['No picking until', product && product.phiDays
-        ? isoDate(addDays(new Date(data.date || isoDate()), product.phiDays)) : 'no waiting period'],
-      ['Keep people out for', product && product.reiHours ? `${product.reiHours} hours` : 'no re-entry period'],
+      ['Active ingredient', active ? active.name : data.activeId],
+      ['Brand', label ? `${label.brand} ${label.formulation || ''}`.trim() : 'not recorded'],
+      ['Resistance group', active ? active.group : null],
+      ['Rate', rate.ok ? rate.rate : null],
+      ['No picking until', phiDays
+        ? isoDate(addDays(new Date(data.date || isoDate()), phiDays)) : 'no waiting period'],
+      ['Keep people out for', reiHours ? `${reiHours} hours` : 'no re-entry period'],
     ]), 'Yes, record it');
   if (!goAhead) return;
 
   const sprayId = uid('sp');
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
-    id: sprayId, cycleId: data.cycleId, productId: data.productId,
-    productName: product ? product.name : '', phiDays: product ? product.phiDays : 0,
-    reiHours: product ? product.reiHours : 24, targetProblem: data.targetProblem || '',
+    id: sprayId, cycleId: data.cycleId,
+    // Both are written: the active is what every check reads, and productId
+    // keeps one shape of record across the whole log, old and new.
+    activeId: data.activeId, productId: data.activeId,
+    labelId: label ? label.id : null,
+    productName: active ? active.name : '', group: active ? active.group : '',
+    rate: rate.ok ? rate.rate : '', phiDays, reiHours,
+    targetProblem: data.targetProblem || '',
     operator: data.operator || '', note: data.note || '', date: data.date || isoDate(),
     // FR-TREAT-04: the confirmation is part of the record, not a screen that
     // flashed past. Who sprayed and whether they said they had the gear on.
@@ -686,15 +742,18 @@ async function saveSpray(ctx, form) {
   // FR-TREAT-05 and FR-DOC-07: go back in three days and find out whether it
   // worked, because a treatment nobody checked is the reason the same product
   // gets sprayed four more times.
-  const followUp = followUpTask(
-    { id: sprayId, cycleId: data.cycleId, zoneId: cycle ? cycle.plotId : null, date: data.date || isoDate() },
-    { zoneName: zone ? zone.name : '' },
-  );
+  const followUp = followUpTaskFor(ctx.state, {
+    id: sprayId,
+    cycleId: data.cycleId,
+    date: data.date || isoDate(),
+    productName: active ? active.name : '',
+    targetProblem: data.targetProblem || '',
+  });
   await ctx.store.dispatch('task.create', followUp, { eventId: `ev_${followUp.id}` });
 
   resetPhoto();
   closeSheet();
-  toast(product && product.phiDays > 0
-    ? `Logged. No picking on that bed until ${isoDate(addDays(data.date || isoDate(), product.phiDays))}`
+  toast(phiDays > 0
+    ? `Logged. No picking on that bed until ${isoDate(addDays(data.date || isoDate(), phiDays))}`
     : 'Spray logged');
 }

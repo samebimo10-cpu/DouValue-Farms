@@ -14,7 +14,7 @@
 
 import { addDays, daysBetween, isoDate, round } from '../util.js';
 import { KNAPSACK_L } from './safety.js';
-import { rules } from './rules.js';
+import { getRules as rules } from '../rules.js';
 
 /** The three vessels FR-DOC-05 names, smallest first. */
 export const TANKS = [

@@ -160,10 +160,7 @@ export const todayView = {
     'save-harvest': (ctx, form) => saveHarvest(ctx, form),
     'save-report': (ctx, form) => saveReport(ctx, form),
     'save-work': (ctx, form) => saveWork(ctx, form),
-    'pick-photo': (ctx, el) => {
-      const fileInput = el.closest('.sheet').querySelector('input[type=file]');
-      if (fileInput) fileInput.click();
-    },
+    // 'pick-photo' is a shell action now, so every screen gets it.
   },
 };
 

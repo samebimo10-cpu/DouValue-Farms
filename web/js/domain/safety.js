@@ -113,11 +113,14 @@ export const PRODUCTS = [
     targets: ['magnesium_deficiency'], note: '' },
 
   // --- Products to keep off this farm ---
-  { id: 'carbofuran', name: 'Carbofuran', examples: 'Furadan', kind: 'insecticide',
-    group: 'IRAC 1A', phiDays: 60, reiHours: 48, hazard: 'avoid', bee: 'very high',
-    targets: ['root_knot_nematode'],
-    note: 'Banned across the EU and much of Africa. It has killed farm workers and poisoned whole flocks of birds. '
-      + 'Residues in pepper will fail any buyer test. Rotation with maize and marigold does the same job safely.' },
+  //
+  // Carbofuran (Furadan) is not here, and its absence is the requirement.
+  // FR-STOCK-09 and rules labels.banned say a banned active must not ship in
+  // the catalogue at all, "not even flagged as 'avoid'" — a greyed-out row is
+  // still a row somebody can ask about, and the rules' answer is that this
+  // farm does not hold the product. domain/catalogue.js refuses it by name on
+  // the way in, for every role including the Owner. The nematode guidance in
+  // domain/pests.js still says plainly why nobody should go looking for it.
   { id: 'paraquat', name: 'Paraquat', examples: 'Gramoxone', kind: 'herbicide',
     group: 'HRAC D', phiDays: 60, reiHours: 48, hazard: 'avoid', bee: 'low',
     targets: [],
