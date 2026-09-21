@@ -20,11 +20,16 @@ import {
 } from '../domain/predict.js';
 import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
-import { harvestClearance, PRODUCTS } from '../domain/safety.js';
+import { harvestClearance } from '../domain/safety.js';
+import {
+  buildCatalogue, canUseActive, checkAddActive, checkAddLabel, migrateStockToActives,
+  planStockMigration, rateFor,
+} from '../domain/catalogue.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
 import { spraysForCycle } from '../store.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { hashPin } from './shell.js';
+import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -616,14 +621,17 @@ export const storeView = {
     const { state } = ctx;
     const items = inputsList(state);
     const usage = inputUsage(state);
+    const catalogue = buildCatalogue(state);
 
     return card(
       cardHead('Store', button('Add item', 'open-input', { cls: 'btn-sm' }))
       + (items.length
         ? '<ul class="list">' + items.map((item) => {
           const f = stockForecast(item, usage);
+          const active = item.activeId ? catalogue.byId[item.activeId] : null;
           return `<li><div class="grow"><b>${esc(item.name)}</b>`
-            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}</small></div>`
+            + `<small>${esc(round(item.qty, 2))} ${esc(item.unit)} in stock — ${esc(f.text)}`
+            + (active ? ` · ${esc(active.name)} (${esc(active.group)})` : '') + '</small></div>'
             + badge(f.status === 'critical' ? 'order now' : f.status === 'low' ? 'low' : 'ok',
               f.status === 'critical' ? 'danger' : f.status === 'low' ? 'warn' : 'ok')
             + button('Move', 'open-move', { cls: 'btn-sm btn-ghost', data: { id: item.id } })
@@ -639,7 +647,8 @@ export const storeView = {
             state.inputs[m.itemId]?.name || m.itemId,
             m.direction === 'in' ? 'received' : 'issued',
             round(m.qty, 2)]))
-        : '<p><small>Nothing moved yet.</small></p>'));
+        : '<p><small>Nothing moved yet.</small></p>'))
+    + catalogueCard(ctx, catalogue);
   },
 
   actions: {
@@ -647,14 +656,145 @@ export const storeView = {
     'save-input': (ctx, form) => saveInput(ctx, form),
     'open-move': (ctx, el) => openMoveSheet(ctx, el.dataset.id),
     'save-move': (ctx, form) => saveMove(ctx, form),
+    'open-label': (ctx) => openLabelSheet(ctx),
+    'save-label': (ctx, form) => saveLabel(ctx, form),
+    'open-active': (ctx) => openActiveSheet(ctx),
+    'save-active': (ctx, form) => saveActive(ctx, form),
+    'match-stock': (ctx) => matchStock(ctx),
   },
 };
+
+/**
+ * The active-ingredient catalogue — FR-STOCK-05, 06, 08 and 09.
+ *
+ * Twenty actives with their IRAC/FRAC groups, straight out of the rules file.
+ * What the farm adds is only what the rules leave to it: brand labels, and (for
+ * the Owner alone) an active the rules do not list. Nothing here is typed twice
+ * — the group on a label is the group of its active.
+ */
+function catalogueCard(ctx, catalogue) {
+  const plan = planStockMigration(ctx.state, catalogue);
+  const mayLabel = can(ctx.user, 'settings');
+  const mayActive = can(ctx.user, 'manageOwners');
+
+  const rows = catalogue.actives.map((a) => {
+    const usable = canUseActive(catalogue, a.id);
+    const rate = rateFor(catalogue, a.id);
+    return [
+      a.name,
+      a.group,
+      usable.ok ? rate.rate : 'no rate — needs a label',
+      a.labels.length ? a.labels.map((l) => l.brand).join(', ') : '—',
+    ];
+  });
+
+  return card(cardHead('Chemical catalogue',
+    (mayLabel ? button('Add brand label', 'open-label', { cls: 'btn-sm' }) : '')
+    + (mayActive ? button('Add active', 'open-active', { cls: 'btn-sm btn-ghost' }) : ''))
+    + (plan.matched.length
+      ? note('info', `${plan.matched.length} store item${plan.matched.length === 1 ? '' : 's'} `
+        + 'can be put onto an active ingredient',
+        `<small>${esc(plan.matched.map((r) => `${r.name} → ${r.active.name}`).join(', '))}. `
+        + 'Nothing is rewritten: the match is recorded against the item, and every past treatment '
+        + `stays exactly as it was (${plan.treatmentsBefore} on record).</small>`)
+        + button('Match them', 'match-stock', { cls: 'btn-block' })
+      : '')
+    + '<p><small>Treatments are chosen by active ingredient, and the resistance group comes with it. '
+    + 'A brand is a label attached to an active, never a product of its own.</small></p>'
+    + table([{ label: 'Active ingredient' }, { label: 'Group' }, { label: 'Rate' }, { label: 'Brands' }], rows)
+    + (plan.unmatchedChemicals.length
+      ? note('warn', 'Store items with no active ingredient yet',
+        `<small>${esc(plan.unmatchedChemicals.map((r) => r.name).join(', '))}. `
+        + 'Until one is attached they cannot be sprayed, because the rotation gate has no group to read.</small>')
+      : '')
+    + (mayActive ? '' : '<p><small>Only the Owner can add a new active ingredient, and must give its '
+      + 'IRAC or FRAC group.</small></p>'));
+}
+
+/** FR-STOCK-05 — the one-tap version of the boot-time migration, for a manager. */
+async function matchStock(ctx) {
+  const before = (ctx.state.sprays || []).length;
+  const result = await migrateStockToActives(ctx.store, buildCatalogue(ctx.state));
+  const after = (ctx.store.state.sprays || []).length;
+  toast(`${result.written} item${result.written === 1 ? '' : 's'} matched · `
+    + `${after} treatment${after === 1 ? '' : 's'} on record, ${before === after ? 'unchanged' : 'CHANGED'}`);
+}
+
+function openLabelSheet(ctx) {
+  const catalogue = buildCatalogue(ctx.state);
+  const el = openSheet('<h2>Add a brand label</h2>'
+    + '<p><small>The group fills in from the active ingredient, so it cannot be mistyped.</small></p>'
+    + '<form data-act="save-label">'
+    + field('Brand name', input('brand', { required: true, placeholder: 'e.g. Punch' }))
+    + field('Active ingredient or ingredients',
+      `<select name="activeIds" multiple size="8">`
+      + catalogue.actives.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.group)}</option>`).join('')
+      + '</select>')
+    + field('Formulation', input('formulation', { placeholder: 'e.g. 45SC, 80WP' }))
+    + field('Concentration', input('concentration', { placeholder: 'e.g. 45 g/L' }))
+    + field('Label rate', input('rate', { placeholder: 'e.g. 0.3 ml/L' }))
+    + field('Label PHI, in days', input('phiDays', { type: 'number', min: 0, placeholder: 'blank uses the default' }))
+    + field('Label REI, in hours', input('reiHours', { type: 'number', min: 0, placeholder: 'blank uses the default' }))
+    + '<p><small>Leave PHI or REI blank and the default applies: 24 hours before re-entry, 14 days before '
+    + 'picking for a synthetic. A figure off the label is used only if it is longer.</small></p>'
+    + photoField('Photo of the label',
+      'The container is the record. A photo of the label settles any later argument about the rate, '
+      + 'the concentration and the waiting periods.')
+    + '<button class="btn-block btn-lg" type="submit">Save label</button></form>');
+  bindPhoto(el);
+}
+
+async function saveLabel(ctx, form) {
+  const data = readForm(form);
+  const selected = [...form.querySelectorAll('select[name=activeIds] option:checked')].map((o) => o.value);
+  const catalogue = buildCatalogue(ctx.state);
+  const check = checkAddLabel(ctx.user,
+    { ...data, activeIds: selected, id: uid('lbl'), photo: photoPayload() }, catalogue);
+  if (!check.ok) { toast(check.why, true); return; }
+
+  await ctx.store.dispatch('label.add', check.payload);
+  resetPhoto();
+  closeSheet();
+  toast('Label saved');
+}
+
+function openActiveSheet(ctx) {
+  if (!can(ctx.user, 'manageOwners')) { toast('Only the Owner can add an active ingredient', true); return; }
+  openSheet('<h2>Add an active ingredient</h2>'
+    + '<p><small>Only the Owner does this, and the IRAC or FRAC group is required: without a group the '
+    + 'rotation gate cannot see the product, and a product the gate cannot see cannot be sprayed.</small></p>'
+    + '<form data-act="save-active">'
+    + field('Active ingredient', input('name', { required: true, placeholder: 'as printed on the label' }))
+    + field('IRAC or FRAC group', input('group', { required: true, placeholder: 'e.g. IRAC 4A, FRAC M3' }))
+    + field('Kind', select('type', ['insecticide', 'fungicide', 'miticide', 'bactericide', 'botanical',
+      'biological'], 'insecticide'))
+    + field('Schedule rate, if the farm has one', input('scheduleRate', { placeholder: 'e.g. 0.5 ml/L' }))
+    + '<button class="btn-block btn-lg" type="submit">Add to the catalogue</button></form>');
+}
+
+async function saveActive(ctx, form) {
+  const data = readForm(form);
+  const catalogue = buildCatalogue(ctx.state);
+  const check = checkAddActive(ctx.user, data, catalogue);
+  if (!check.ok) {
+    // A banned product is not a validation message in the corner of a form.
+    openSheet('<h2>Refused</h2>' + note('danger', check.why, `<small>${esc(check.fix || '')}</small>`));
+    return;
+  }
+  await ctx.store.dispatch('active.add', check.payload);
+  closeSheet();
+  toast(`${check.payload.name} added to the catalogue`);
+}
 
 function openInputSheet(ctx) {
   openSheet('<h2>Add a store item</h2>'
     + '<form data-act="save-input">'
     + field('Name', `<input name="name" list="product-list" required placeholder="e.g. Mancozeb 80% WP">`
-      + `<datalist id="product-list">${PRODUCTS.map((p) => `<option value="${esc(p.name)}">`).join('')}</datalist>`)
+      + `<datalist id="product-list">${buildCatalogue(ctx.state).actives
+        .map((a) => `<option value="${esc(a.name)}">`).join('')}</datalist>`)
+    + field('Active ingredient, if it is a chemical',
+      select('activeId', buildCatalogue(ctx.state).actives.map((a) => ({ value: a.id, label: `${a.name} — ${a.group}` })),
+        '', { placeholder: 'Work it out from the name' }))
     + field('Kind', select('kind', [
       { value: 'chemical', label: 'Pesticide or fungicide' },
       { value: 'fertiliser', label: 'Fertiliser or lime' },
@@ -670,9 +810,12 @@ function openInputSheet(ctx) {
 async function saveInput(ctx, form) {
   const data = readForm(form);
   if (!data.name) { toast('Name is needed', true); return; }
+  // An item typed in without an active is matched by name on the next open, so
+  // nobody has to know the catalogue to add a bag of something to the store.
   await ctx.store.dispatch('input.upsert', {
     id: uid('item'), name: data.name, kind: data.kind, unit: data.unit,
     qty: Number(data.qty) || 0, unitCost: Number(data.unitCost) || 0,
+    activeId: data.activeId || null,
   });
   closeSheet();
   toast('Added to the store');

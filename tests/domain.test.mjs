@@ -206,8 +206,14 @@ test('recommended products exclude the ones flagged as unsafe', () => {
       assert.notEqual(p.hazard, 'avoid', `${p.name} should not be recommended`);
     }
   }
-  const nematode = safety.discouragedFor('root_knot_nematode');
-  assert.ok(nematode.some((p) => p.id === 'carbofuran'), 'carbofuran is called out, not recommended');
+  // FR-STOCK-09, and the rules' own banned list: carbofuran must not ship at
+  // all, "not even flagged as 'avoid'". It used to sit here as a discouraged
+  // product; a greyed-out row is still a row, so it is gone from every product
+  // list in the app and refused by name in domain/catalogue.js.
+  for (const p of safety.PRODUCTS) {
+    assert.ok(!/carbofuran|furadan/i.test(`${p.id} ${p.name} ${p.examples}`),
+      'no product list in the app carries a banned active');
+  }
 });
 
 test('every product carries the numbers the app relies on', () => {

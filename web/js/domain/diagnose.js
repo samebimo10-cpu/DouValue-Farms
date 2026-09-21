@@ -27,12 +27,21 @@
 // standing weather-and-stage risk board — and still reads the local field guide
 // in pests.js, which carries the product, PHI and weather data the rules do not.
 
-import { RULES, RULES_VERSION } from './rules.js';
+// The rules file is read in one place for the whole app (web/js/rules.js).
+// This module needs the document at import time, because the 22 cards and the
+// 23 triage rows are built from it as ordinary constants; the loader caches,
+// so asking it here costs one read shared with everybody else rather than a
+// second copy of the file.
+import { loadRules, peekRules, rulesVersion } from '../rules.js';
+
+const RULES = peekRules() || await loadRules();
+
+/** rules-1.2 at the time of writing. Stamped onto everything the engine produces. */
+export const RULES_VERSION = rulesVersion(RULES) || 'unknown';
 import { PROBLEMS, PROBLEM_BY_ID } from './pests.js';
 import { wetnessIndex, drynessIndex, waterloggingIndex } from './climate.js';
 import { clamp } from '../util.js';
 
-export { RULES_VERSION };
 
 // --- Reading the rules' prose ---------------------------------------------
 

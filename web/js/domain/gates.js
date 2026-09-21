@@ -21,7 +21,7 @@
 //      make it yes gets overridden, and then gates stop meaning anything.
 
 import { daysBetween, isoDate } from '../util.js';
-import { PRODUCT_BY_ID } from './safety.js';
+import { rotationVerdict } from './rotation.js';
 
 /**
  * Gate thresholds.
@@ -282,7 +282,8 @@ export function canPlant(state, zoneId, opts = {}) {
  * is recent enough to still describe it, and — FR-DIAG-03 — was confirmed by
  * somebody senior to the person who started it.
  */
-export function canTreat(state, cycleId, { today = isoDate(), productId = null, maxAgeDays = 14 } = {}) {
+export function canTreat(state, cycleId, opts = {}) {
+  const { today = isoDate(), productId = null, activeId = null, maxAgeDays = 14 } = opts;
   const recent = (state.diagnoses || [])
     .filter((d) => d.cycleId === cycleId)
     .filter((d) => d.date && d.date <= today && daysBetween(d.date, today) <= maxAgeDays)
@@ -312,52 +313,26 @@ export function canTreat(state, cycleId, { today = isoDate(), productId = null, 
   }
 
   const diagnosis = confirmed[0];
-  const rotation = rotationCheck(state, cycleId, productId, { today, diagnosis });
+  const rotation = rotationCheck(state, cycleId, activeId || productId, { ...opts, today, diagnosis });
   if (!rotation.ok) return rotation;
 
   return { ok: true, diagnosis };
 }
 
 /**
- * FR-GATE-05 — spray rotation.
+ * FR-GATE-05 — spray rotation, by resistance group.
  *
- * This is the one gate that protects a future season rather than this one.
- * Two consecutive applications from one resistance group is the limit both
- * FRAC and IRAC publish; the third is what breeds a population the product no
- * longer touches.
+ * The check itself lives in rotation.js, on the rules file's own IRAC and FRAC
+ * sequences, the thrips programme and the Week 10 rule. This is the door it
+ * comes through, kept here because the treatment gate and the spray screen both
+ * ask the same question: may this go on this zone today?
+ *
+ * `productRef` is an active-ingredient id, and — because the log is
+ * append-only and the farm's history predates the catalogue — also accepts the
+ * product id a spray was recorded with before the catalogue existed.
  */
-export function rotationCheck(state, cycleId, productId, { today = isoDate(), windowDays = 60 } = {}) {
-  if (!productId) return { ok: true };
-  const product = PRODUCT_BY_ID[productId];
-  if (!product || product.group === '-') return { ok: true };
-
-  const sameGroup = (state.sprays || [])
-    .filter((s) => s.cycleId === cycleId)
-    .filter((s) => s.date && daysBetween(s.date, today) <= windowDays)
-    .filter((s) => {
-      const p = PRODUCT_BY_ID[s.productId];
-      return p && p.group === product.group;
-    })
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  // Two in a row is the limit, so this one — the third — is the one to stop.
-  if (sameGroup.length >= 2) {
-    const alternatives = Object.values(PRODUCT_BY_ID)
-      .filter((p) => p.kind === product.kind && p.group !== product.group && p.hazard !== 'avoid')
-      .slice(0, 3).map((p) => p.name);
-    return {
-      ok: false,
-      reason: 'rotation',
-      why: `${product.name} is resistance group ${product.group}, and that group has already gone on `
-        + `this zone ${sameGroup.length} times in ${windowDays} days.`,
-      fix: alternatives.length
-        ? `Use a different group this time — ${alternatives.join(' or ')}.`
-        : 'Use a product from a different resistance group this time.',
-      group: product.group,
-      alternatives,
-    };
-  }
-  return { ok: true };
+export function rotationCheck(state, cycleId, productRef, opts = {}) {
+  return rotationVerdict(state, cycleId, productRef, opts);
 }
 
 /**

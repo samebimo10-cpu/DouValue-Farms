@@ -13,6 +13,7 @@ import {
 } from '../domain/diagnose.js';
 import { PROBLEM_BY_ID, PROBLEM_TYPES } from '../domain/pests.js';
 import { discouragedFor, productsFor } from '../domain/safety.js';
+import { buildCatalogue, canUseActive, resolveActive } from '../domain/catalogue.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
 import { activeCycles, can, cycleLabel, openReports } from '../store.js';
 import { t } from '../i18n.js';
@@ -81,15 +82,17 @@ export const clinicView = {
       + button('Check a sick plant', 'go', { cls: 'btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
       + button('Browse the guide', 'go', { cls: 'btn-lg btn-ghost', icon: '📖', data: { to: '#/guide' } })
       + '</div>'
-      // The clinic answers "what is wrong with this plant". The adviser answers
-      // "what should the farm do this week", which is the question people ask
-      // next, so it belongs one tap from here.
+      // The clinic answers "what is wrong with this plant". The Farm Doctor
+      // answers what to do about it and what the gates are still missing, and
+      // the adviser answers "what should the farm do this week" — FR-DOC-11
+      // puts those two behind one door, so this is one button, not two.
       + `<div style="margin-top:10px">${button('Alerts', 'go',
         { cls: 'btn-block', icon: '🚨', data: { to: '#/alerts' } })}</div>`
-      + `<div style="margin-top:10px">${button('Ask the farm adviser', 'go',
-        { cls: 'btn-block btn-ghost', icon: '🧠', data: { to: '#/adviser' } })}</div>`
-      + '<p style="margin:8px 0 0"><small>Reads your own records and says what to do about '
-      + 'them — beds, water, sprays, stock and money. Works with no network.</small></p>',
+      + `<div style="margin-top:10px">${button('Farm Doctor and adviser', 'go',
+        { cls: 'btn-block btn-ghost', icon: '🩺', data: { to: '#/doctor' } })}</div>`
+      + '<p style="margin:8px 0 0"><small>Photo review, treatment plans that already pass the '
+      + 'rules, gate evidence, the three-day check after a spray — and the adviser that reads '
+      + 'your own records. The rules-based half works with no network.</small></p>',
       { tight: true },
     );
 
@@ -789,6 +792,21 @@ export const guideView = {
   },
 };
 
+/**
+ * What the guide suggests, checked against what the farm can actually spray.
+ *
+ * The guide is written for pepper anywhere; the catalogue is this farm's, out
+ * of the rules file. Saying which is which here stops the clinic recommending
+ * something the spray screen will then refuse to offer.
+ */
+function catalogueStanding(state, product) {
+  const catalogue = buildCatalogue(state);
+  const active = resolveActive(catalogue, product.id) || resolveActive(catalogue, product.name);
+  if (!active) return 'not in the catalogue';
+  const usable = canUseActive(catalogue, active.id);
+  return usable.ok ? `${active.group}` : 'needs a label rate';
+}
+
 export const guideItemView = {
   perm: 'viewGuide',
   render(ctx) {
@@ -836,8 +854,9 @@ export const guideItemView = {
 
     if (safe.length) {
       out += card(cardHead('If you spray')
-        + table([{ label: 'Product' }, { label: 'Example' }, { label: 'Wait', num: true }, { label: 'Group' }],
-          safe.map((x) => [x.name, x.examples, `${x.phiDays} d`, x.group]))
+        + table([{ label: 'Product' }, { label: 'Example' }, { label: 'Wait', num: true },
+          { label: 'On this farm' }],
+          safe.map((x) => [x.name, x.examples, `${x.phiDays} d`, catalogueStanding(ctx.state, x)]))
         + '<p><small>The wait is the days between spraying and picking. Rotate groups so the product keeps '
         + 'working. The label on the container beats anything written here.</small></p>');
     }
