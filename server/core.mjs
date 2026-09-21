@@ -119,6 +119,22 @@ export const EVENT_POLICY = {
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
   'gate.override.revoke': { write: 'manageOwners', read: ANY },
 
+  // The Farm Doctor (requirements 6.14). It is not a person and holds no
+  // account, so every one of its outputs is filed by whoever was holding the
+  // phone — and confirmed, separately, by somebody senior enough to be worth
+  // asking. FR-DOC-08 is the reason confirm and approve are three different
+  // record types rather than three fields on one.
+  'doctor.record':     { write: 'diagnose',      read: ANY },
+  'doctor.confirm':    { write: 'verifyHarvest', read: ANY, guard: guardDoctorConfirm },
+  'doctor.approve':    { write: 'prescribe',     read: ANY, guard: guardDoctorConfirm },
+  'doctor.owner-seen': { write: 'viewReports',   read: ANY },
+  // FR-DOC-06: one line of a gate's evidence, recorded by whoever did the work.
+  'gate.evidence':     { write: 'scout',         read: ANY, guard: guardGateEvidence },
+  // FR-DIAG-05: a sample, from recommendation to result.
+  'lab.record':        { write: 'scout',         read: ANY },
+  'lab.send':          { write: 'scout',         read: ANY, guard: guardLabSend },
+  'lab.result':        { write: 'verifyHarvest', read: ANY, guard: guardLabResult },
+
   // Alerts (requirements 6.5). Anyone in the field may say they have picked
   // one up; deciding NOT to treat is a management call and needs a reason,
   // because "we looked at it and left it" is what Season 1 was made of.
@@ -385,6 +401,7 @@ async function readJson(req) {
  *   GET  /api/farms/:id/events      everything this role may see since a cursor
  *   POST /api/farms/:id/events      file records, each checked against the author
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
+ *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
  */
 export async function handleRequest(req, store) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -429,6 +446,9 @@ export async function handleRequest(req, store) {
   if (action === 'events' && req.method === 'GET') return readEvents(farmId, url, me, store);
   if (action === 'events' && req.method === 'POST') return writeEvents(farmId, body, me, store);
   if (action === 'advise' && req.method === 'POST') return advise(farmId, body, me, store);
+  // FR-DOC-03: photo review. Online only, by design — the app's guided
+  // diagnosis is what answers when this cannot be reached.
+  if (action === 'photo-review' && req.method === 'POST') return photoReview(farmId, body, me, store);
 
   return json({ error: 'Not found' }, 404);
 }
@@ -486,6 +506,47 @@ function guardOverride(event, author) {
   if (reason.length < 10) {
     return { ok: false, why: 'An override needs a reason saying why it is safe to go ahead' };
   }
+  return { ok: true };
+}
+
+/**
+ * FR-DOC-08 — the Farm Doctor never confirms its own diagnosis or approves its
+ * own plan.
+ *
+ * The app enforces this too, and the app's copy is the one people see. This is
+ * the one that holds when the record arrives from something that is not the
+ * app: a replayed request, another phone's queue, a curl command.
+ */
+function guardDoctorConfirm(event, author) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which Farm Doctor output this is about' };
+  const who = author.memberId || author.id;
+  if (who === 'farm-doctor') {
+    return { ok: false, why: 'The Farm Doctor does not confirm or approve its own work (FR-DOC-08)' };
+  }
+  return { ok: true };
+}
+
+/** FR-DOC-06 — evidence has to say which gate and which line of it. */
+function guardGateEvidence(event) {
+  const p = event.payload || {};
+  if (!p.gate || !p.itemId) return { ok: false, why: 'Evidence must name the gate and which line of it' };
+  if (!p.zoneId) return { ok: false, why: 'Evidence must name the zone it is about' };
+  return { ok: true };
+}
+
+/** FR-DIAG-05 — a sample is tracked by where it went and when. */
+function guardLabSend(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which sample' };
+  if (!String(p.lab || '').trim()) return { ok: false, why: 'Say which lab it went to' };
+  return { ok: true };
+}
+
+function guardLabResult(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which sample' };
+  if (!String(p.result || '').trim()) return { ok: false, why: 'Say what the lab reported' };
   return { ok: true };
 }
 
@@ -923,6 +984,153 @@ async function advise(farmId, body, me, store) {
       ok: false, reason: 'timeout', weather,
       message: 'The wider adviser took too long to answer. Try again when the signal is better.',
       detail: String(err && err.message || err).slice(0, 200),
+    }, 504);
+  }
+}
+
+// --- The Farm Doctor's photo review (FR-DOC-03) ----------------------------
+//
+// The one thing the offline app cannot do: look at a picture. Everything else
+// the Farm Doctor does — guided diagnosis, the calculators, the plan and gate
+// checks — runs on the phone with no signal, and this is added to that rather
+// than depended on by it.
+//
+// The limits in FR-DOC-08 are stated in the prompt AND applied again by the
+// app when the answer lands (normalisePhotoReview in web/js/domain/doctor.js).
+// Asking a model to be careful is not a control. The app rebuilding the answer
+// from fields it decides the meaning of is.
+
+const PHOTO_MAX = 4;
+const PHOTO_TIMEOUT_MS = 60_000;
+
+const PHOTO_BRIEF = `You are the Farm Doctor for a pepper farm in Port Harcourt, Nigeria. You are
+looking at photos taken in a greenhouse or open field, with a phone, in bad light, by a farm hand.
+
+You take the place of a visiting agronomist for day-to-day decisions. You advise; people decide.
+
+Hard limits, which the app enforces again after you answer:
+1. You never call a virus or a bacterial disease confirmed from a photo. You may say it is
+   suspected, and then the sample goes to a lab.
+2. You never name a product. The app chooses products from the farm's own catalogue and store.
+3. You state a confidence of exactly "high", "medium" or "low", and you are honest about it. Low
+   is the right answer for a blurred photo of a leaf with no context.
+
+Answer with JSON only, no prose around it:
+{"confidence":"high|medium|low",
+ "candidates":[{"problemId":"<id from the shortlist if it fits>","name":"...","confidence":"...","why":"what in the photo"}],
+ "whatYouSee":"one or two plain sentences",
+ "nextCheck":"the single test that would settle it in the field"}`;
+
+function imageBlocks(photos) {
+  const out = [];
+  for (const photo of photos.slice(0, PHOTO_MAX)) {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(photo || ''));
+    if (!m) continue;
+    if (m[2].length > 2_000_000) continue;              // a photo nobody compressed
+    out.push({ type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } });
+  }
+  return out;
+}
+
+/** Pull the JSON object out of an answer, without trusting it to be the whole reply. */
+function firstJsonObject(text) {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+}
+
+async function photoReview(farmId, body, me, store) {
+  const key = envVar('ANTHROPIC_API_KEY');
+  if (!key) {
+    return json({
+      ok: false, reason: 'no-key',
+      message: 'Photo review is not switched on for this farm. The guided diagnosis, the '
+        + 'calculators and the plan checks all still work without it.',
+    });
+  }
+
+  const images = imageBlocks(Array.isArray(body.photos) ? body.photos : []);
+  if (!images.length) {
+    return json({ ok: false, reason: 'no-photos', message: 'No usable photos came through.' }, 400);
+  }
+
+  const budget = await spendAdviceBudget(farmId, me, store);
+  if (!budget.ok) {
+    return json({
+      ok: false, reason: 'daily-limit',
+      message: `That is ${ADVICE_PER_DAY} questions today on this account. It resets at midnight.`,
+    }, 429);
+  }
+
+  const shortlist = Array.isArray(body.shortlist) ? body.shortlist.slice(0, 12) : [];
+  const context = [
+    body.zoneId ? `Zone: ${String(body.zoneId).slice(0, 40)}` : '',
+    body.date ? `Date: ${String(body.date).slice(0, 10)}` : '',
+    body.note ? `What the person wrote: ${String(body.note).slice(0, 600)}` : '',
+    Array.isArray(body.symptoms) && body.symptoms.length
+      ? `Ticked in the guided flow: ${body.symptoms.map((x) => String(x).slice(0, 40)).join(', ')}`
+      : '',
+    shortlist.length
+      ? `The app's own shortlist (use these ids where one fits): ${shortlist.map((p) => `${p.id} (${p.name})`).join(', ')}`
+      : '',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+      },
+      signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        max_tokens: 4000,
+        system: PHOTO_BRIEF,
+        messages: [{
+          role: 'user',
+          content: [...images, { type: 'text', text: context || 'No extra context was given.' }],
+        }],
+      }),
+    });
+
+    if (!res.ok) {
+      return json({
+        ok: false, reason: 'upstream',
+        message: res.status === 401
+          ? 'The farm server\'s ANTHROPIC_API_KEY was refused. Check it in the Deno dashboard.'
+          : 'Photo review could not be reached. Use the guided diagnosis; it needs no signal.',
+      }, 502);
+    }
+
+    const answer = await res.json();
+    if (answer.stop_reason === 'refusal') {
+      return json({ ok: false, reason: 'declined', message: 'Photo review would not answer that one.' });
+    }
+    const text = (answer.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    const parsed = firstJsonObject(text) || {};
+
+    // Deliberately thin: the app applies FR-DOC-08 to whatever comes back, so
+    // the server's job is to pass it on honestly rather than to interpret it.
+    return json({
+      ok: true,
+      review: {
+        confidence: parsed.confidence || 'low',
+        candidates: Array.isArray(parsed.candidates) ? parsed.candidates.slice(0, 5) : [],
+        text: String(parsed.whatYouSee || text || '').slice(0, 2000),
+        nextCheck: String(parsed.nextCheck || '').slice(0, 500),
+        photoCount: images.length,
+      },
+      askedAt: new Date().toISOString(),
+      questionsLeftToday: budget.left,
+    });
+  } catch (err) {
+    return json({
+      ok: false, reason: 'timeout',
+      message: 'Photo review took too long. The guided diagnosis works with no signal at all.',
+      detail: String((err && err.message) || err).slice(0, 200),
     }, 504);
   }
 }
