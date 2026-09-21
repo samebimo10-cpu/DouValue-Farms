@@ -10,12 +10,14 @@ import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
-import { adviserView } from './ui/adviser.js';
+import { doctorView } from './ui/doctor.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { missingTasks } from './domain/schedule.js';
+import { missingFollowUps } from './domain/doctor.js';
+import { loadRules } from './rules.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
@@ -31,7 +33,11 @@ registerRoute('#/dashboard', dashboardView);
 registerRoute('#/plan', planView);
 registerRoute('#/reports', reportsView);
 registerRoute('#/audit', auditView);
-registerRoute('#/adviser', adviserView);
+// FR-DOC-11 — one entry point. The Farm Doctor and the farm adviser are tabs
+// on one screen, so nobody has to decide which of them their question is for
+// before they know what is wrong. Both addresses land in the same place.
+registerRoute('#/doctor', doctorView);
+registerRoute('#/adviser', doctorView);
 registerRoute('#/gates', gatesView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
@@ -74,7 +80,14 @@ async function warmWeather(ctx) {
  */
 async function generateToday(ctx) {
   if (!ctx.user || !can(ctx.user, 'assignTasks')) return;
-  const due = missingTasks(ctx.store.state, { date: isoDate() });
+  const today = isoDate();
+  // FR-DOC-07: the three-day check after every treatment is generated the same
+  // way, from the spray it belongs to, so it is on the board whether or not
+  // anybody remembered to write it down.
+  const due = [
+    ...missingTasks(ctx.store.state, { date: today }),
+    ...missingFollowUps(ctx.store.state, { today }),
+  ];
   if (!due.length) return;
 
   for (const task of due) {
@@ -98,6 +111,14 @@ async function main() {
   }
   const ctx = await startShell(store);
   window.__douvalueCtx = ctx;              // the guide's search box reaches back for this
+
+  // The rules file is the source of truth for the catalogue, the gates and the
+  // Farm Doctor's limits. It is fetched rather than bundled, and the app opens
+  // without it: until it lands, the Farm Doctor refuses to name a product
+  // rather than working from a second copy that could have drifted.
+  loadRules()
+    .then((rules) => { if (rules) ctx.refresh(); })
+    .catch(() => { /* offline first run; the service worker has it next time */ });
 
   // Sync runs itself from here: it pushes and pulls whenever the phone has
   // signal, and quietly queues everything when it does not. Never in practice

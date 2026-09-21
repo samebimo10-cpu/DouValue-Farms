@@ -28,11 +28,13 @@ never leaves it. A stranger who opens the link gets an empty app, not your farm.
 To run it locally instead:
 
 ```bash
-cd web
-python3 -m http.server 8000     # or, from the repository root:  npm start
+python3 -m http.server 8000     # from the repository root; or: npm start
 ```
 
-Then open `http://localhost:8000` and press **Load a sample farm** to look around.
+Then open `http://localhost:8000/web/` and press **Load a sample farm** to look around.
+Serve the repository root rather than `web/` on its own: the app reads
+`rules/douvalue_rules_rev5_1.json` over the network, which is how there is one copy of the
+rules rather than two.
 Every sample person signs in with PIN **1234**:
 
 | Person | Role | Lands on |
@@ -224,6 +226,51 @@ into "go and check these" instead.
 
 It says plainly that it is a field guide and not a laboratory, and points at the Rivers
 State ADP extension service for anything that could take a whole bed.
+
+### 2b. The Farm Doctor
+
+There is no agronomist on this site, so the app stands in for one on the day-to-day
+decisions — and is held to limits an app that gives agronomic advice has to be held to.
+It lives at one address with the farm adviser (**Farm Doctor**, from the Clinic), because
+nobody should have to decide which of the two their question is for before they know what
+is wrong.
+
+What it does:
+
+- **Photo review, online.** The photos go to the farm's own server and come back with a
+  stated confidence — high, medium or low — and the field test that would settle it.
+- **Everything else, offline.** Guided diagnosis, the dose calculator, the plan checks and
+  the gate checks all run on the phone with no signal. When there is no connection, photo
+  review says so and hands you the guided flow rather than a spinner.
+- **Treatment plans that already pass the rules.** Only actives in the catalogue, in the
+  store, not banned, with a dose on file, respecting IRAC/FRAC rotation, PHI, REI, mixing
+  rules and the Week 10 organics-only rule. What is ruled out is listed with the reason,
+  because "nothing you can use here" is an answer the manager has to act on.
+- **Gate evidence.** Gates 0, 1 and 4, line by line in the rules' own wording, each either
+  satisfied from records the app already holds or listed as missing with the way to fix it.
+- **The three-day check.** Every treatment gets a follow-up task three days later, and the
+  answer — worked, partly, nothing — is kept beside the trap counts either side of it.
+  "It worked" against a rising count is flagged rather than filed.
+- **The Gate 4 cycle review**, drafted from the season's own records: yield per plant,
+  which groups were used, which treatments failed their check, which were never checked.
+- **Lab samples.** A suspected virus, bacterial wilt, nematodes, or a second low-confidence
+  reading recommends a sample and tells the Owner. Samples are tracked from the day they go
+  off to the day the result comes back, and one that never comes back reaches the digest.
+
+What it never does (FR-DOC-08, and there is a test named after each one):
+
+- clears a gate — Gate 0 and Gate 4 need the Farm Manager's confirmation and the Owner's
+  approval, and the Doctor's check is what happens before that, not instead of it;
+- confirms its own diagnosis, or approves its own plan;
+- names a product outside the active-ingredient catalogue, outside the store, or on the
+  banned list;
+- invents a dose where neither the schedule rate nor an entered label gives one;
+- calls a virus or a bacterial disease confirmed from a photograph.
+
+Those limits are enforced three times over, because a limit that lives in one place is a
+limit one refactor away from gone: in the domain code that builds every answer, in the
+event log that refuses to record a self-confirmation, and on the server that refuses the
+same record arriving from anything that is not the app.
 
 ### 3. Predictions
 
@@ -451,6 +498,7 @@ DouValue-Farms/
 │     ├─ util.js         dates, naira, HTML escaping
 │     ├─ i18n.js         English and Pidgin
 │     ├─ sample.js       the worked example farm
+│     ├─ rules.js        reads rules/douvalue_rules_rev5_1.json, the source of truth
 │     ├─ domain/
 │     │  ├─ analysis.js  trend, bed performance, labour, unit economics, grades
 │     │  ├─ integrity.js the eleven record checks and the scoring behind them
@@ -458,9 +506,10 @@ DouValue-Farms/
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
 │     │  ├─ pests.js     32 problems, 67 symptoms, management for each
 │     │  ├─ diagnose.js  symptom scoring, next checks, risk board
+│     │  ├─ doctor.js    the Farm Doctor: limits, plans, gate evidence, follow-ups, lab
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  └─ predict.js   yield, revenue, planting window, labour, stock, cashflow
-│     └─ ui/             shell, kit, worker, field, clinic, manage, audit, photo
+│     └─ ui/             shell, kit, worker, field, clinic, doctor, manage, audit, photo
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
@@ -484,8 +533,8 @@ npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
 ```
 
-123 tests covering the diagnosis engine against known field cases, pre-harvest and re-entry
-blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
+332 tests covering the diagnosis engine against known field cases, the six Farm Doctor
+limits one test each, pre-harvest and re-entry blocking, resistance warnings, yield and revenue forecasting, held-out accuracy, the
 planting-window optimiser, event-log replay including out-of-order merges, the account
 hierarchy, and the server run for real and attacked rather than trusted: a farm hand's own
 token trying to pull the wage bill, a hand pushing a sale, a hand pushing a record that
