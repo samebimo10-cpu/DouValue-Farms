@@ -110,6 +110,18 @@ const EVENT_POLICY = {
   'report.record':     { write: 'reportProblem', read: ANY },
   'report.resolve':    { write: 'assignTasks',   read: ANY },
   'input.upsert':      { write: 'logInputs',     read: ANY },
+  // FR-STOCK-06/09 — the catalogue. Adding an active ingredient is the Owner's
+  // alone (`manageOwners` is the CEO and nobody else); attaching a brand label
+  // to an active that is already in the catalogue is the Farm Manager's.
+  //
+  // The banned list is not checked here, and deliberately: the server holds no
+  // copy of the rules file, and a second copy would be the one that goes stale.
+  // Every phone builds the catalogue from rules/douvalue_rules_rev5_1.json and
+  // drops a banned active on the way in, so an `active.add` naming carbofuran
+  // is a record that never becomes a catalogue entry anywhere.
+  'active.add':        { write: 'manageOwners',  read: ANY },
+  'label.add':         { write: 'settings',      read: ANY },
+  'label.retire':      { write: 'settings',      read: ANY },
   'input.receive':     { write: 'logInputs',     read: ANY },
   'input.issue':       { write: 'logInputs',     read: ANY },
   'weather.record':    { write: 'logWork',       read: ANY },

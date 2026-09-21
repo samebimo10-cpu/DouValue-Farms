@@ -24,7 +24,8 @@ import {
 import { bedPerformance, gradeMix, harvestTrend, labourProductivity, unitEconomics } from './analysis.js';
 import { audit } from './integrity.js';
 import { gateBoard } from './gates.js';
-import { harvestClearance, reentryClearance, resistanceWarnings } from './safety.js';
+import { harvestClearance, reentryClearance } from './safety.js';
+import { groupUsage } from './rotation.js';
 import { forecastAccuracy, stockForecast } from './predict.js';
 import { PROBLEM_BY_ID } from './pests.js';
 
@@ -165,7 +166,9 @@ function chemicals(state, today) {
     last60Days: top(recent, 12),
     cannotHarvestYet: cannotHarvest,
     keepPeopleOut: keepOut,
-    resistanceRisk: resistanceWarnings(state.sprays, 60, now).map((w) => compact({
+    // By resistance group, out of the rules file — a group is what resistance
+    // builds against, and two brands from one group are one product twice.
+    resistanceRisk: groupUsage(state, { today }).map((w) => compact({
       group: w.group, timesUsed: w.count, note: w.message, insteadTry: w.alternatives,
     })),
   });

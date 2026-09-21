@@ -17,6 +17,13 @@ const {
 } = await import(new URL('domain/gates.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
+// FR-GATE-05 now reads the rotation out of the rules file rather than out of a
+// hard-coded product table, so the rules have to be on the table before a gate
+// can be asked anything. That is the point: a rotation check with no rules
+// behind it would pass everything.
+const { loadRules } = await import(new URL('domain/rules.js', base).href);
+await loadRules();
+
 const TODAY = '2026-09-16';
 const day = (n) => {
   const d = new Date(`${TODAY}T00:00:00`);
@@ -257,9 +264,21 @@ test('a third spray from one resistance group is blocked, with alternatives name
   assert.ok(verdict.alternatives.length, 'a block that names no alternative just gets overridden');
 });
 
-test('two from one group is still allowed, because two is the limit', () => {
+test('the same FRAC group twice in a row is blocked, because that is what the rules say', () => {
+  // The rules are stricter than the old product-counting check: "never the same
+  // FRAC group twice in a row". One Mancozeb spray is enough to close the door
+  // on the next one, and the block names what the sequence says to use instead.
   const sprays = [{ id: 's0', cycleId: 'c1', productId: 'mancozeb', date: day(-20) }];
-  assert.equal(rotationCheck(farm({ sprays }), 'c1', 'mancozeb', { today: TODAY }).ok, true);
+  const verdict = rotationCheck(farm({ sprays }), 'c1', 'mancozeb', { today: TODAY });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'rotation');
+  assert.match(verdict.nextInSequence, /Copper Oxychloride/);
+});
+
+test('a different group is what unblocks it', () => {
+  const sprays = [{ id: 's0', cycleId: 'c1', productId: 'mancozeb', date: day(-20) }];
+  assert.equal(rotationCheck(farm({ sprays }), 'c1', 'copper_oxychloride', { today: TODAY }).ok, true);
 });
 
 test('rotation is judged per zone, not across the whole farm', () => {

@@ -7,7 +7,8 @@ import {
 } from './kit.js';
 import { diagnose, riskForecast, RISK_DRIVER_TEXT, searchProblems } from '../domain/diagnose.js';
 import { PARTS, PROBLEM_BY_ID, PROBLEM_TYPES, PROBLEMS, symptomsForPart } from '../domain/pests.js';
-import { discouragedFor, productsFor, PRODUCT_BY_ID } from '../domain/safety.js';
+import { discouragedFor, productsFor } from '../domain/safety.js';
+import { buildCatalogue, canUseActive, resolveActive } from '../domain/catalogue.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
 import { activeCycles, cycleLabel, openReports } from '../store.js';
 import { getLang, local, t } from '../i18n.js';
@@ -290,8 +291,8 @@ function stepResults(ctx) {
       + p.manage.cultural.map((c) => `<li>${esc(c)}</li>`).join('') + '</ul></details>'
       + (safe.length
         ? '<details><summary><b>If you spray</b></summary>'
-          + table([{ label: 'Product' }, { label: 'Wait before picking', num: true }, { label: 'Group' }],
-            safe.map((s) => [s.name, `${s.phiDays} d`, s.group]))
+          + table([{ label: 'Product' }, { label: 'Wait before picking', num: true }, { label: 'On this farm' }],
+            safe.map((s) => [s.name, `${s.phiDays} d`, catalogueStanding(ctx.state, s)]))
           + '<p><small>Rotate resistance groups. Two sprays from the same group in a row is how a product '
           + 'stops working. Always check the label for the rate.</small></p></details>'
         : '')
@@ -427,6 +428,21 @@ export const guideView = {
   },
 };
 
+/**
+ * What the guide suggests, checked against what the farm can actually spray.
+ *
+ * The guide is written for pepper anywhere; the catalogue is this farm's, out
+ * of the rules file. Saying which is which here stops the clinic recommending
+ * something the spray screen will then refuse to offer.
+ */
+function catalogueStanding(state, product) {
+  const catalogue = buildCatalogue(state);
+  const active = resolveActive(catalogue, product.id) || resolveActive(catalogue, product.name);
+  if (!active) return 'not in the catalogue';
+  const usable = canUseActive(catalogue, active.id);
+  return usable.ok ? `${active.group}` : 'needs a label rate';
+}
+
 export const guideItemView = {
   perm: 'viewGuide',
   render(ctx) {
@@ -447,8 +463,8 @@ export const guideItemView = {
     + card(cardHead('Stop it coming back') + `<ul>${p.manage.cultural.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`)
     + card(cardHead('Without chemicals') + `<ul>${p.manage.organic.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>`)
     + (safe.length ? card(cardHead('If you spray')
-      + table([{ label: 'Product' }, { label: 'Example' }, { label: 'Wait', num: true }, { label: 'Group' }],
-        safe.map((s) => [s.name, s.examples, `${s.phiDays} d`, s.group]))
+      + table([{ label: 'Product' }, { label: 'Example' }, { label: 'Wait', num: true }, { label: 'On this farm' }],
+        safe.map((s) => [s.name, s.examples, `${s.phiDays} d`, catalogueStanding(ctx.state, s)]))
       + '<p><small>The wait is the days between spraying and picking. Rotate groups so the product keeps working. '
       + 'The label on the container beats anything written here.</small></p>') : '')
     + (avoid.length ? card(note('danger', 'Do not use these on pepper',

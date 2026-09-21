@@ -15,6 +15,8 @@ import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView } from './ui/zones.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
+import { loadRules } from './domain/rules.js';
+import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
 import { missingTasks } from './domain/schedule.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
@@ -83,12 +85,37 @@ async function generateToday(ctx) {
   ctx.refresh();
 }
 
+/**
+ * FR-STOCK-05 — put the store's existing items onto active ingredients.
+ *
+ * The farm has a store full of items typed in by name: "Mancozeb 80% WP",
+ * "Neem oil". The catalogue works on actives, so each item is matched to one
+ * and the match is recorded — as an `input.upsert` carrying the active id,
+ * because the log is append-only and nothing here rewrites history. Past
+ * treatments are not touched at all; they are read through the catalogue, so
+ * the count before and the count after are the same records.
+ *
+ * Runs on every open, writes only the first time: each event has a fixed id,
+ * so five phones produce the same events and the merge is a no-op.
+ */
+async function migrateCatalogue(ctx) {
+  if (!ctx.user || !can(ctx.user, 'logInputs')) return;
+  const result = await migrateStockToActives(ctx.store, buildCatalogue(ctx.store.state));
+  if (result.written) ctx.refresh();
+}
+
 async function main() {
   // UX-25 has to be decided before anything is loaded: a practice session must
   // never open the real log at all.
   let practising = false;
   try { practising = sessionStorage.getItem('douvalue.practice') === '1'; } catch { /* off */ }
   setPractice(practising);
+
+  // The rules file is the source of truth for the gates, the rotation and the
+  // active-ingredient catalogue. Nothing that reads it is safe to guess at, so
+  // it is loaded before the app has a screen and a failure stops the boot
+  // rather than quietly running on no agronomy at all.
+  await loadRules();
 
   const store = await createStore();
 
@@ -109,6 +136,13 @@ async function main() {
     // A farm that cannot generate its schedule still has to be usable: every
     // screen works on what is already recorded.
     console.error('Could not generate today\'s tasks', err);
+  });
+
+  // Practice included: in practice mode the events are applied to the screen
+  // and thrown away, so a trainee sees the store on its actives like everybody
+  // else and nothing is written.
+  await migrateCatalogue(ctx).catch((err) => {
+    console.error('Could not match the store to the catalogue', err);
   });
 
   warmWeather(ctx).catch(() => { /* climatology carries the app without it */ });

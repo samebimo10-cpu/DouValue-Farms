@@ -145,6 +145,8 @@ const EMPTY = () => ({
   cycles: {},
   tasks: {},
   inputs: {},
+  actives: {},
+  labels: {},
   harvests: [],
   sales: [],
   sprays: [],
@@ -193,6 +195,7 @@ export function reduce(events) {
       case 'harvest.record': return `harvest:${p.id}`;
       case 'report.record': return `report:${p.id}`;
       case 'input.upsert': return `input:${p.id}`;
+      case 'label.add': return `label:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
@@ -212,6 +215,7 @@ export function reduce(events) {
       case 'harvest.verify': return `harvest:${p.id}`;
       case 'report.resolve': return `report:${p.id}`;
       case 'input.receive': case 'input.issue': return `input:${p.itemId}`;
+      case 'label.retire': return `label:${p.id}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
@@ -231,6 +235,7 @@ export function reduce(events) {
       case 'cycle': return !!state.cycles[id];
       case 'task': return !!state.tasks[id];
       case 'input': return !!state.inputs[id];
+      case 'label': return !!state.labels[id];
       case 'person': return !!state.people[id];
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
@@ -442,6 +447,27 @@ export function reduce(events) {
       case 'input.issue':
         state.inputs[p.itemId].qty = (Number(state.inputs[p.itemId].qty) || 0) - Number(p.qty || 0);
         state.stockMoves.push({ ...p, id: p.id || e.id, direction: 'out', by: e.by, at: e.at });
+        break;
+
+      // --- The chemical catalogue (requirements 6.8) --------------------
+      // The twenty actives and their IRAC/FRAC groups come from the rules file
+      // and are never written here. What the farm records is only what the
+      // rules leave to it: an active the Owner has added, with its group, and
+      // the brand labels a manager attaches to actives already in the
+      // catalogue. Both are read through domain/catalogue.js, which drops any
+      // banned active whatever the log says — so a bad merge cannot put
+      // carbofuran back on a spray screen.
+      case 'active.add':
+        state.actives[p.id] = { ...p, by: e.by, at: e.at };
+        break;
+      case 'label.add':
+        state.labels[p.id] = { ...(state.labels[p.id] || {}), ...p, by: e.by, at: e.at };
+        break;
+      case 'label.retire':
+        if (state.labels[p.id]) {
+          state.labels[p.id].retired = true;
+          state.labels[p.id].retiredBy = e.by;
+        }
         break;
 
       case 'weather.record':
