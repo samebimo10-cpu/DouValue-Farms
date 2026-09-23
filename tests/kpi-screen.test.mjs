@@ -13,14 +13,18 @@ import assert from 'node:assert/strict';
 
 const base = new URL('../web/js/', import.meta.url);
 const { kpiView } = await import(new URL('ui/kpis.js', base).href);
+const { isoDate } = await import(new URL('util.js', base).href);
 const { kpis, kpisByWeek, kpisByZone } = await import(new URL('domain/alerts.js', base).href);
 
-const NOW = '2026-09-21T09:00:00.000Z';
-const day = (n) => {
-  const d = new Date('2026-09-21T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
+// The clock, read the way the screen reads it.
+//
+// kpiView.render() takes no date — the KPI screen is about now — so it calls
+// isoDate(). A fixture pinned to a literal date drifts out of the 28-day
+// window the measures are computed over, and then the screen tests below are
+// reading a screen with nothing on it. The domain calls take `now` as an
+// argument, so they are given the same instant the view will find.
+const NOW = new Date().toISOString();
+const day = (n) => isoDate(new Date(Date.now() + n * 86400000));
 
 function farm(over = {}) {
   return {

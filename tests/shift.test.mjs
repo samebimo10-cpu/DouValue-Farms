@@ -217,6 +217,23 @@ test('an empty comment is refused, and one with no report to answer', () => {
 
 const ctxFor = (state, user) => ({ state, user, store: { state } });
 
+/**
+ * The board actually drew a report.
+ *
+ * Every assertion about what the manager's screen contains is worthless
+ * against the empty state — "No reports yet today" contains no script tag
+ * either, so an escaping test passes on it for the wrong reason. This is the
+ * check that makes that impossible: it fails loudly, naming the empty board,
+ * before anything is asserted about what is on it.
+ */
+function assertBoardDrewAReport(html) {
+  assert.ok(!/No reports yet today/.test(html),
+    'the board rendered its empty state, so nothing below this is being tested — '
+    + 'the fixture is dated for a day the screen is not showing');
+  assert.match(html, /data-act="open-shift-comment"/,
+    'a rendered report carries the way to answer it');
+}
+
 test('the screen offers a hand their own report, and nobody else\'s', () => {
   const state = store.reduce(log([
     ev('shift.record', { id: 'sh1', date: TODAY, observation: 'Tamuno saw whitefly on the GH-04 trap today', }, 'u_sup', at(17)),
@@ -233,9 +250,9 @@ test('the Farm Manager\'s screen shows the reports and a way to answer them', ()
   ]));
   const html = shiftView.render(ctxFor(state, state.people.u_mgr));
 
+  assertBoardDrewAReport(html);
   assert.match(html, /Emeka Okoro/);
   assert.match(html, /Drip line on bench three/);
-  assert.match(html, /data-act="open-shift-comment"/);
   assert.match(html, /not answered yet/);
 });
 
@@ -246,6 +263,11 @@ test('an observation is escaped before it is shown', () => {
       observation: '<script>alert(1)</script> and the rest of the day' }),
   ]));
   const html = shiftView.render(ctxFor(state, state.people.u_mgr));
+
+  // Before asserting on the escaping, prove there is something to escape. The
+  // negative assertion below passes on an empty board, so without this the
+  // whole test can go quiet rather than red.
+  assertBoardDrewAReport(html);
   assert.ok(!/<script/i.test(html));
   assert.match(html, /&lt;script&gt;/);
 });

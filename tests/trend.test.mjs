@@ -21,12 +21,16 @@ const base = new URL('../web/js/', import.meta.url);
 const { trendChart, trendSummary } = await import(new URL('ui/chart.js', base).href);
 const { trend, zoneTrends } = await import(new URL('domain/alerts.js', base).href);
 const { alertsView } = await import(new URL('ui/alerts.js', base).href);
+const { isoDate } = await import(new URL('util.js', base).href);
 
-const day = (n) => {
-  const d = new Date('2026-09-21T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
+// The clock, read the way the screen reads it.
+//
+// The trend maths takes `today` as an argument, but alertsView.render() does
+// not — it draws the counts as of now, so it calls isoDate(). Counts pinned to
+// a literal date eventually fall outside the window the chart covers, and then
+// the screen test at the bottom of this file is asserting against a page with
+// no chart on it.
+const day = (n) => isoDate(new Date(Date.now() + n * 86400000));
 const TODAY = day(0);
 
 function farm(scouts) {
