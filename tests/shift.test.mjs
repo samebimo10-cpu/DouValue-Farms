@@ -18,9 +18,19 @@ const base = new URL('../web/js/', import.meta.url);
 const store = await import(new URL('store.js', base).href);
 const shift = await import(new URL('domain/shift.js', base).href);
 const { shiftView } = await import(new URL('ui/shift.js', base).href);
+const { isoDate } = await import(new URL('util.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
-const TODAY = '2026-09-21';
+// Today, read the way the screen reads it.
+//
+// The domain functions take the day as an argument, but shiftView.render()
+// cannot — it is the end-of-shift screen, and the day it is about is the day
+// you are standing in. It calls isoDate(). A fixture pinned to one date
+// therefore renders an empty board on every other date, and the screen tests
+// below would be reading a page nobody would ever see. So the fixture moves
+// with the clock, and the two older evenings are dated relative to it.
+const TODAY = isoDate();
+const day = (n) => isoDate(new Date(Date.now() + n * 86400000));
 const at = (h, m = 0) => `${TODAY}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`;
 
 const ev = (type, payload, by = 'u_hand', when = at(17)) =>
@@ -133,8 +143,8 @@ test('a report from somebody nobody clocked in still counts as worked', () => {
 
 test('a run of evenings is readable, which is the point of keeping them', () => {
   const state = store.reduce(log([
-    ev('shift.record', { id: 'sh1', date: '2026-09-19', observation: OBSERVATION }, 'u_hand', '2026-09-19T17:00:00.000Z'),
-    ev('shift.record', { id: 'sh2', date: '2026-09-20', observation: OBSERVATION }, 'u_hand', '2026-09-20T17:00:00.000Z'),
+    ev('shift.record', { id: 'sh1', date: day(-2), observation: OBSERVATION }, 'u_hand', `${day(-2)}T17:00:00.000Z`),
+    ev('shift.record', { id: 'sh2', date: day(-1), observation: OBSERVATION }, 'u_hand', `${day(-1)}T17:00:00.000Z`),
     ev('shift.record', { id: 'sh3', date: TODAY, observation: OBSERVATION }),
   ]));
   assert.equal(shift.shiftHistory(state, 'u_hand', { today: TODAY }).length, 3);
