@@ -24,3 +24,24 @@ jobs:
 
       - name: The site assembles
         run: ./scripts/assemble_site.sh _site
+
+  # The same suite, with the clock moved forward.
+  #
+  # Runs beside the job above rather than inside it, so a failure here reads as
+  # its own red check with its own name: this one going red while "DouValue farm
+  # app" stays green means a test has picked up a dependency on today's date,
+  # not that the farm app is broken. The runner says so in as many words.
+  #
+  # It has caught this twice already — the end-of-shift board (two days) and the
+  # KPI and trend charts (about fifty) — both of which went red weeks later on a
+  # commit nobody had touched.
+  clock:
+    name: Tests with the clock shifted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: A test must not depend on what today's date is
+        run: npm run test:clock

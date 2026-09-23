@@ -559,7 +559,9 @@ DouValue-Farms/
 ├─ rules/               douvalue_rules_rev5_1.json, the source of truth
 ├─ docs/                requirements.md, build-rules.md, source/ (the PDFs)
 ├─ brand/               the original logo
-├─ scripts/             assemble_site.sh, which builds what Pages publishes
+├─ scripts/             assemble_site.sh (builds what Pages publishes), and the
+│                      clock-shifted test run that stops a fixture quietly
+│                      depending on today's date
 └─ tests/               domain, roles and sync
 ```
 
@@ -571,7 +573,17 @@ why it fits in a service-worker cache and opens on a cheap phone with no signal.
 ```bash
 npm test
 # or, directly:  node --test "tests/**/*.test.mjs"
+
+npm run test:clock   # the same suite, with the clock 1, 60 and 400 days ahead
 ```
+
+`test:clock` is the one worth explaining. Several screens take no date — the end-of-shift
+board, the KPI screen, the trend chart are all about *now*, so they read the clock
+themselves. A test that pins its fixture to a literal date therefore agrees with the screen
+on the day it is written and on no day after, and the failure arrives weeks later on a
+commit nobody touched. That has happened twice here. So CI runs the suite again with the
+clock moved forward, as its own check, and the runner says in as many words that the clock
+was shifted — so nobody spends an afternoon looking for a bug that is not there.
 
 577 tests covering the diagnosis engine against the rules JSON itself and against known
 field cases, the six Farm Doctor limits one test each, the active-ingredient catalogue and
