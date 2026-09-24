@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.5 (draft for restructuring) |
+| Version | 1.6 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -238,6 +238,18 @@ Fixes treatment by guesswork.
 - **FR-DOC-10 (MUST):** Every output is saved with what it read, its confidence, and who confirmed it.
 - **FR-DOC-11 (SHOULD):** The Farm Doctor and the farm adviser (§6.12) share one entry point, so staff don't have to choose between them.
 
+### 6.15 Mid-season onboarding
+The farm starts using the app with cycles already running. This section says how those crops come in without the gates either blocking them for good or waving them through.
+
+- **FR-ONB-01 (MUST):** A per-zone setup flow records the crop already growing: media type, crop, variety and transplant date. Only the Farm Manager or Owner uses it, only for a crop transplanted before the day of setup, and only in a zone with no crop already recorded. A crop planted on or after that day goes through the gates.
+- **FR-ONB-02 (MUST):** Everything derives from the transplant date: the current week (rules `week_counting`), the Week 10 rule, and the task schedule from the current week onward. Weeks before setup are not generated as overdue work.
+- **FR-ONB-03 (MUST):** Backfilled entries are marked backfilled and kept apart from live records: last insecticide and last fungicide with group and date, any spray in the last 21 days, harvest to date, and any gate evidence that exists. A backfilled spray is not counted as a treatment the app gated (G3, KPI-03, follow-up checks).
+- **FR-ONB-04 (MUST):** The rotation gate (`FR-GATE-05`) and the PHI harvest block (`FR-TREAT-02`) read backfilled sprays exactly as they read live ones. A backfilled waiting period is never shorter than the catalogue default (`FR-STOCK-07`).
+- **FR-ONB-05 (MUST):** If an onboarded zone has no spray history recorded — its last insecticide, its last fungicide and every spray in the last 21 days, each entered or recorded as none — treatments and harvest in that zone are blocked with a message saying the history is missing. They are never allowed through silently.
+- **FR-ONB-06 (MUST):** A zone planted before the app existed has the status **"planted before the gates"**, with the evidence that exists attached. It is not a violation and needs no override. Gate 2 and Gate 3 run as normal; Gate 4 at the end of the cycle clears normally.
+- **FR-ONB-07 (MUST):** Stock on hand is entered as an opening count, marked backfilled, and is not counted as usage.
+- **FR-ONB-08 (MUST):** The Owner sees a setup screen listing which zones are incomplete and what each is missing, and the farm-wide stock count.
+
 ### 6.13 Climate monitoring (optional hardware)
 - **FR-CLIM-01 (COULD):** Import temperature and humidity from low-cost loggers in each greenhouse.
 - **FR-CLIM-02 (COULD):** Raise disease-risk warnings when humidity stays above a set level for a set time.
@@ -296,6 +308,7 @@ Fixes treatment by guesswork.
 | Harvest | zone, weight/crates, grade |
 | Sale | buyer, quantity, price, payment status |
 | Override | gate, reason, Owner, time |
+| Backfilled entry | kind (spray, harvest, stock, evidence, "none" statement), zone, cycle, date, who entered it — always marked backfilled |
 
 ---
 
@@ -340,6 +353,7 @@ Fixes treatment by guesswork.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
 | 1.4 | 16 Sep 2026 | Field usability trial moved to after build, with a fix round (UX-26, UX-27, §9a) |
 | 1.3 | 16 Sep 2026 | OF-02 is the nursery; Farm Doctor replaces site agronomist; active-ingredient catalogue with manager-added labels |

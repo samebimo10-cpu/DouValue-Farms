@@ -42,6 +42,7 @@ import {
   BARRIERS, bagRules, batchFailure, batchName, batchesIn, fillsFor, galledCycle, mediaOf,
 } from './media.js';
 import { mediaLimePlan } from './calc.js';
+import { PRE_GATES, PRE_GATES_LABEL, plantedBeforeGates, preGatesEvidence, treatmentHistoryBlock } from './onboarding.js';
 
 /**
  * Gate thresholds.
@@ -70,10 +71,13 @@ export const GATE_STATE = {
   overridden: { label: 'Overridden', tone: 'warn', icon: '!' },
   waiting: { label: 'Not yet', tone: 'muted', icon: '·' },
   na: { label: 'Not applicable', tone: 'muted', icon: '·' },
+  // FR-ONB-06: the crop went in before the app existed. Not a pass and not a
+  // violation — there was no gate to pass on the day it was planted.
+  [PRE_GATES]: { label: PRE_GATES_LABEL, tone: 'muted', icon: '·' },
 };
 
 /** States that let an action through. Everything else blocks. */
-const OPEN = new Set(['pass', 'overridden', 'waiting', 'na']);
+const OPEN = new Set(['pass', 'overridden', 'waiting', 'na', PRE_GATES]);
 export const isBlocking = (condition) => !OPEN.has(condition.state);
 
 /** Ranks, mirroring web/js/store.js. Used to check who signed what. */
@@ -988,6 +992,7 @@ function summarise(conditions) {
   if (conditions.some((c) => c.state === 'fail' || c.state === 'unknown')) return 'fail';
   if (conditions.some((c) => c.state === 'held')) return 'held';
   if (conditions.some((c) => c.state === 'overridden')) return 'overridden';
+  if (conditions.some((c) => c.state === PRE_GATES)) return PRE_GATES;
   if (conditions.some((c) => c.state === 'waiting')) return 'waiting';
   return 'pass';
 }
@@ -1102,11 +1107,28 @@ export function gateModel(state, zoneId, opts = {}) {
     conditions: g4Conditions,
   });
 
+  // FR-ONB-06: a crop planted before the app existed was never asked to pass
+  // the gates that stand before a transplant. Each condition still says what
+  // it found, and carries whatever evidence was entered on setup; none of it
+  // is a violation and none of it needs an override. Gate 2 and Gate 3 run as
+  // normal, and Gate 4 at the end of this cycle — when the crop comes out and
+  // this stops applying — is judged like any other.
+  const preGates = plantedBeforeGates(w.active);
+  const preEvidence = preGates ? preGatesEvidence(state, zoneId, w.active.id) : [];
+
   // FR-GATE-07: an Owner override opens one condition on one zone and keeps
   // what it found. It does not reach G2 or G3, which block nothing here.
   for (const g of gates) {
     g.conditions = g.conditions.map((c) => {
       if (!g.blocksTransplant || !isBlocking(c)) return c;
+      if (preGates) {
+        return {
+          ...c, state: PRE_GATES, found: c.why,
+          why: `${PRE_GATES_LABEL}: transplanted ${w.active.transplantDate}, set up in the app ${w.active.onboarded.date}.`,
+          fix: null,
+          evidence: preEvidence.filter((e) => !e.gate || e.gate === g.id),
+        };
+      }
       const override = overrideFor(state, c.id, zoneId, w.since);
       return override ? { ...c, state: 'overridden', override, blockedWhy: c.why } : c;
     });
@@ -1120,7 +1142,11 @@ export function gateModel(state, zoneId, opts = {}) {
     .map(({ id, batch }) => ({ batch, failure: batchFailure(state, id) }))
     .filter((x) => x.failure && x.failure.date <= today) : [];
 
-  return { zoneId, zone, window: w, planted: !!w.active, media: bag ? 'bag' : 'bed', failedMedia, gates };
+  return {
+    zoneId, zone, window: w, planted: !!w.active, media: bag ? 'bag' : 'bed', failedMedia, gates,
+    preGates: preGates ? { status: PRE_GATES, label: PRE_GATES_LABEL, cycleId: w.active.id,
+      transplantDate: w.active.transplantDate, setupDate: w.active.onboarded.date, evidence: preEvidence } : null,
+  };
 }
 
 /**
@@ -1177,6 +1203,12 @@ export function canPlant(state, zoneId, opts = {}) {
  */
 export function canTreat(state, cycleId, opts = {}) {
   const { today = isoDate(), productId = null, activeId = null, maxAgeDays = 14 } = opts;
+
+  // FR-ONB-05 — first, because it is the one nobody on the zone can fix by
+  // diagnosing: the history has to be entered on the Setup screen.
+  const missingHistory = treatmentHistoryBlock(state, cycleId, opts);
+  if (missingHistory) return missingHistory;
+
   const recent = (state.diagnoses || [])
     .filter((d) => d.cycleId === cycleId)
     .filter((d) => d.date && d.date <= today && daysBetween(d.date, today) <= maxAgeDays)

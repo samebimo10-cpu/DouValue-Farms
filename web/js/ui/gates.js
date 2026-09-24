@@ -31,6 +31,7 @@ import {
   batchList, CLEAN_MEDIA, growingIn, hygieneRules, releaseCheck, releaseLabels,
 } from '../domain/nursery.js';
 import { CROP_LIST } from '../domain/crops.js';
+import { PRE_GATES } from '../domain/onboarding.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { requireSupervision, supervisionBanner, supervisionStamp } from './supervise.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
@@ -180,7 +181,8 @@ function boardCard(board) {
       const chips = r.model
         ? r.model.gates.map((g) => badge(`${icon(g.state)} ${g.id}`, tone(g.state))).join(' ')
         : badge('nursery', 'muted');
-      const state = isNursery(r.zone) ? '' : r.ok ? badge('clear to plant', 'ok')
+      const state = isNursery(r.zone) ? '' : r.model && r.model.preGates ? badge(r.model.preGates.label, 'muted')
+        : r.ok ? badge('clear to plant', 'ok')
         : badge(`${r.blocking.length} to clear`, 'danger');
       return `<li data-act="gates-zone" data-id="${esc(r.zone.id)}"${r.zone.id === openZone ? ' class="on"' : ''}>`
         + `<div class="grow"><b>${esc(r.zone.name)}</b><small>${esc(zoneTypeLabel(r.zone))}`
@@ -204,7 +206,16 @@ function zonePanel(ctx, row) {
       + 'and a crop in them counts as galled at the next restart.</small>'), { tight: true });
   }
 
-  if (row.planted && !row.ok) {
+  if (model.preGates) {
+    const ev = model.preGates.evidence;
+    out += card(note('info', `${model.preGates.label}`,
+      `<small>Transplanted ${esc(model.preGates.transplantDate)}, before the app was in use here, and set up on `
+      + `${esc(model.preGates.setupDate)}. This is not a violation and needs no override: there was no gate to pass `
+      + 'on the day it went in. Each gate below still says what it found. Gate 4 at the end of this cycle is '
+      + 'judged as normal.</small>'
+      + (ev.length ? `<ul>${ev.map((e) => `<li><small>${esc(evidenceLine(e))}</small></li>`).join('')}</ul>`
+        : '<p><small>No gate evidence was entered on setup.</small></p>')), { tight: true });
+  } else if (row.planted && !row.ok) {
     out += card(note('danger', 'Already planted behind a closed gate',
       '<small>This went in without every transplant condition passing. Treat what is in the ground as '
       + 'at risk and record what is missing now, so the next cycle is not the same.</small>'), { tight: true });
@@ -233,6 +244,12 @@ function conditionRow(c, zoneId, g, owner) {
   if (c.state === 'pass') {
     return `<p class="gate-row ok"><b>${icon('pass')} ${esc(c.label || c.name)}</b> <small>${esc(c.why)}</small></p>`;
   }
+  if (c.state === PRE_GATES) {
+    return `<p class="gate-row"><b>${icon(c.state)} ${esc(c.label || c.name)}</b> <small>${esc(c.why)}`
+      + `${c.found ? ` Found: ${esc(c.found)}` : ''}</small>`
+      + ((c.evidence || []).length ? `<br><small>Evidence on setup: ${esc(c.evidence.map(evidenceLine).join('; '))}</small>` : '')
+      + '</p>';
+  }
   if (c.state === 'waiting' || c.state === 'na') {
     return `<p class="gate-row"><b>${icon(c.state)} ${esc(c.label || c.name)}</b> <small>${esc(c.why)}</small></p>`;
   }
@@ -246,6 +263,12 @@ function conditionRow(c, zoneId, g, owner) {
     `<small><b>${esc(c.why)}</b><br>${esc(c.fix || '')}</small>${lines}`
     + (owner && g.blocksTransplant && !c.noOverride
       ? button('Override', 'open-override', { cls: 'btn-ghost btn-sm', data: { plotId: zoneId, gate: c.id } }) : ''));
+}
+
+/** One backfilled piece of gate evidence, as a line of text. */
+function evidenceLine(e) {
+  return [e.gate, e.what || e.itemId, e.date, e.ph != null && e.ph !== '' ? `pH ${e.ph}` : null,
+    e.lab ? `lab: ${e.lab}` : null, e.note, e.photo ? 'photo' : null].filter(Boolean).join(' · ');
 }
 
 /** The buttons that record what a gate is missing. */

@@ -12,6 +12,7 @@ import {
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
 import { gatesView } from './ui/gates.js';
+import { setupView } from './ui/setup.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView, zoneCodesView } from './ui/zones.js';
 import { kpiView } from './ui/kpis.js';
@@ -44,6 +45,7 @@ registerRoute('#/audit', auditView);
 registerRoute('#/doctor', doctorView);
 registerRoute('#/adviser', doctorView);
 registerRoute('#/gates', gatesView);
+registerRoute('#/setup', setupView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
 registerRoute('#/zones', zonesView);
