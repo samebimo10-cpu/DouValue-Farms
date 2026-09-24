@@ -192,6 +192,11 @@ export const doctorView = {
         solarised: !!limeForm.solarised,
         transplantDate: limeForm.transplantDate || null,
         holdSince: limeForm.holdSince || null,
+        // FR-GATE-08: plant bags are limed by media volume, not area.
+        media: limeForm.media === 'bag' ? 'bag' : 'bed',
+        volumeL: (Number(limeForm.volumeM3) || 0) * 1000,
+        bags: Number(limeForm.bags) || 0,
+        litresPerBag: Number(limeForm.litresPerBag) || 0,
         limeDate: isoDate(),
         today: isoDate(),
       });
@@ -547,8 +552,18 @@ function limeCard(ctx) {
     + '</div>'
     + field('Soil texture', select('texture',
       TEXTURES.map((t) => ({ value: t.id, label: t.label || t.name || t.id })), f.texture || ''))
-    + field('Area to treat (m²)', input('areaM2', { type: 'number', value: f.areaM2 || '' }),
+    + field('Growing in', select('media', [
+      { value: 'bed', label: 'Bed soil — dose by area' },
+      { value: 'bag', label: 'Plant bags — dose by media volume' },
+    ], f.media || 'bed'))
+    + field('Area to treat (m²) — beds', input('areaM2', { type: 'number', value: f.areaM2 || '' }),
       'Greenhouse: the bed area only. Open field: the full cropped area.')
+    + field('Heap volume (m³) — bags', input('volumeM3', { type: 'number', step: '0.1', value: f.volumeM3 || '' }),
+      'The heap before bagging. For bags already filled, leave this blank and give the bags below.')
+    + '<div class="row wrap">'
+    + field('Number of bags', input('bags', { type: 'number', step: '1', value: f.bags || '' }))
+    + field('Litres per bag', input('litresPerBag', { type: 'number', step: '1', value: f.litresPerBag || '' }))
+    + '</div>'
     + field('Where', select('zoneType', [
       { value: 'greenhouse', label: 'Greenhouse — bed area only' },
       { value: 'field', label: 'Open field — full cropped area' },
@@ -584,7 +599,11 @@ function limeOut(result) {
         + `Gate is ${esc(String(result.gateMin))}–${esc(String(result.gateMax))}.</small></p>`
       : '')
     + (result.kgText ? `<div class="dose-big">${esc(result.kgText)}</div>` : '')
-    + (result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
+    + (result.product && result.media === 'bag'
+      ? `<p><small>of ${esc(result.product)} through ${esc(String(result.volume.m3))} m³ of media`
+        + ` (${esc(String(result.kgPerM3Low))}–${esc(String(result.kgPerM3High))} kg per m³`
+        + `${result.perBagText ? `; ${esc(result.perBagText)} per bag` : ''}). ${esc(result.volume.where || '')}</small></p>`
+      : result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
     + ((result.locks || []).length
       ? '<ul class="list">' + result.locks.map((l) => `<li><div class="grow"><b>${esc(l.what || l.label || '')}</b>`
         + `<small>${esc(l.why || l.detail || '')}</small></div></li>`).join('') + '</ul>'

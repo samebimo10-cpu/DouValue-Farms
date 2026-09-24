@@ -184,6 +184,17 @@ Every record carries three times, and the Farm check screen compares them:
 Lists show when a record was entered, and say so explicitly when that differs
 from the day it claims.
 
+### Plant-bag zones
+
+A zone is grown in **bed soil** or in **plant bags** (set on the zone). Bed zones are tested on
+their own ground, as they always were. A bag zone's Gate 0 clears on the **media batch** its bags
+came from: supplier, heap solarisation dates, a three-point pH and a clean nematode assay. Every
+fill is recorded as batch → bags → zone, so when a batch fails, before or after planting, the
+Gates screen and the Owner's digest name every zone it reached. The lime calculator doses bags
+by media volume. The sample farm has two bag houses on one heap; follow
+[docs/walkthrough-bag-zone.md](docs/walkthrough-bag-zone.md) to clear one and to fail the heap
+after planting (`FR-GATE-08` to `FR-GATE-10`).
+
 ## The four things this app is actually for
 
 ### 1. Recording work, with the safety rule enforced
@@ -540,6 +551,7 @@ DouValue-Farms/
 │     │  ├─ pests.js     32 local problems: products, PHI, weather response
 │     │  ├─ diagnose.js  triage rows, cards, look-alikes, confirm tests, risk board
 │     │  ├─ doctor.js    the Farm Doctor: limits, plans, gate evidence, follow-ups, lab
+│     │  ├─ media.js     plant-bag media: batch → bags → zone, for Gate 0 and recalls
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  ├─ predict.js   yield, revenue, planting window, labour, stock, cashflow
 │     │  ├─ alerts.js    thresholds, the four-rung ladder, straight-to-Owner, the KPIs
@@ -557,7 +569,7 @@ DouValue-Farms/
 │  ├─ deploy/           the generated server on its own, for a one-folder deploy
 │  └─ page/             the setup page published at /server/
 ├─ rules/               douvalue_rules_rev5_1.json, the source of truth
-├─ docs/                requirements.md, build-rules.md, source/ (the PDFs)
+├─ docs/                requirements.md, build-rules.md, walkthrough-bag-zone.md, source/ (the PDFs)
 ├─ brand/               the original logo
 ├─ scripts/             assemble_site.sh (builds what Pages publishes), and the
 │                      clock-shifted test run that stops a fixture quietly

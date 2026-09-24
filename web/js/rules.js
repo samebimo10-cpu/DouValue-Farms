@@ -138,6 +138,11 @@ export function gateSpec(id, rules = cache) {
 
 export function doctorRules(rules = cache) { return (rules && rules.farm_doctor) || null; }
 
+/** FR-GATE-08 to 10 — the plant-bag media rules, or null if the file has none. */
+export function mediaRules(rules = cache) {
+  return (rules && rules.soil_and_water && rules.soil_and_water.plant_bag_media) || null;
+}
+
 export function triageRows(rules = cache) { return (rules && rules.triage) || []; }
 
 export function diagnosisCard(id, rules = cache) {

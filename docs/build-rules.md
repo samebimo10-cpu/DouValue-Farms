@@ -4,7 +4,7 @@
 | Sources | Farm Operations Schedule Rev 5 (July 2026); Rev 5.1 Acid Soil Correction |
 | Precedence | Rev 5.1 wins where the two disagree |
 | Machine-readable copy | `douvalue_rules_rev5_1.json` (same content) |
-| Rules version | rules-1.2 (decisions C-1 to C-18 applied) |
+| Rules version | rules-1.3 (decisions C-1 to C-19 applied) |
 This extract turns the schedule into rules the app can enforce. It covers gates, thresholds, rotations, spray and mixing rules, soil and water targets, triage, and diagnosis cards. **Section 1 records how each gap or contradiction in the source was settled.** Rules below already reflect those decisions.
 
 ---
@@ -30,6 +30,7 @@ This extract turns the schedule into rules the app can enforce. It covers gates,
 | C-16 | OF-02 status | **OF-02 is the nursery**, not a cropping block. Nursery hygiene rules added, and a seedling release check is now part of Gate 1. | Seedlings are the first route for thrips, virus and damping-off into every block. | Settled |
 | C-17 | No site agronomist | **The Farm Doctor takes the agronomist's day-to-day role.** It diagnoses, plans and checks gate evidence; people confirm. Gate 0 and Gate 4 need Farm Manager confirmation and Owner approval. | Keeps a human accountable for every gate and treatment. The nematode assay still needs a lab. | Settled |
 | C-18 | Brand labels unknown | **Treatments are chosen by active ingredient** from a fixed catalogue with groups built in. Managers attach brand labels (rate, PHI, REI, photo) to an active. Punch, Vanguish and Lion Seal are removed until entered this way. | The rotation gate works on groups, which the active ingredient fixes; brands can follow later. | Settled |
+| C-19 | *New:* some zones grow in plant bags, not bed soil | **Each zone has a media type: bed soil or plant bag.** For bag zones Gate 0 clears on the media batch (supplier, three-point pH, nematode assay, heap solarisation dates), traced batch → bags → zone. Lime is dosed by media volume. Bed zones are unchanged. See §11, plant-bag media. | Bagged media is bought and mixed in heaps; the heap is what carries or clears nematodes, and one bad heap can reach several houses. | Settled — review at Gate 4 cycle review |
 
 ---
 
@@ -257,6 +258,16 @@ Label value, once entered, is used only if it is longer than the default. The sp
 **Nitrogen at planting:** urea in the planting hole is DELETED (Rev 5.1); starter P placed near root zone; Calcium Nitrate 2-3 g/L weekly from Day 10-14 after transplant.
 
 **Do not buy:** gypsum (no pH effect), charcoal, compost alone, liquid pH 'soil conditioners'. Fallback: hardwood ash only, max 150 g/m2, counted as ~1/3 strength of hydrated lime. Open field re-limes a season sooner than houses.
+
+**Plant-bag media** (`soil_and_water.plant_bag_media`). Applies to zones grown in plant bags rather than in bed soil; bed zones are unchanged.
+
+- Gate 0 clears on the media batch, not the zone: every batch with bags in the zone must pass.
+- Batch record: supplier; date delivered or mixed; heap solarisation start and end dates. Solarisation at least 21 days.
+- pH: three points per heap, same method and the same 5.5–7.0 range as the soil pH gate. Nematode: lab assay of the heap, returned CLEAR.
+- Traceability: batch → bags → zone. Every fill records the batch, the zone and the number of bags.
+- Failed after planting: a dirty nematode result on a batch closes Gate 0 on every zone holding bags from it, planted or not; pull those bags and do not reuse the media.
+- Lime by media volume: the route rate per 100 m² spread through a 20 cm incorporation depth (20 m³ of soil), so kg per m³ of media = rate per 100 m² ÷ 20. Mix through the heap before bagging; bags already filled share the dose evenly per bag, watered in.
+- *Source:* Owner instruction, Sep 2026 (requirements v1.6, FR-GATE-08 to FR-GATE-10); not in Rev 5 / 5.1. Review at the next Gate 4 cycle review.
 
 ## 11a. Week counting and pre-plant offsets
 

@@ -159,6 +159,10 @@ const EMPTY = () => ({
   referencePhotos: {},
   soilTests: [],
   topsoilBatches: {},
+  // FR-GATE-08 to 10: plant-bag media. A batch is a heap; a fill is some bags
+  // from one batch put into one zone.
+  mediaBatches: {},
+  mediaFills: [],
   gateOverrides: [],
   // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
   // gates, and the samples that went to a lab.
@@ -210,6 +214,8 @@ export function reduce(events) {
       case 'label.add': return `label:${p.id}`;
       case 'diagnosis.record': return `diagnosis:${p.id}`;
       case 'topsoil.receive': return `topsoil:${p.id}`;
+      case 'media.receive': return `media:${p.id}`;
+      case 'media.fill': return `fill:${p.id}`;
       case 'gate.override': return `override:${p.id}`;
       case 'doctor.record': return `doctor:${p.id}`;
       case 'lab.record': return `lab:${p.id}`;
@@ -235,6 +241,8 @@ export function reduce(events) {
       case 'attendance.out': return `attendance:${p.personId}`;
       case 'diagnosis.confirm': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
+      case 'media.solarise': case 'media.fill': return `media:${p.batchId}`;
+      case 'media.pull': return `fill:${p.id}`;
       case 'gate.override.revoke': return `override:${p.id}`;
       case 'doctor.confirm': case 'doctor.approve': case 'doctor.owner-seen': return `doctor:${p.id}`;
       case 'lab.send': case 'lab.result': return `lab:${p.id}`;
@@ -257,6 +265,8 @@ export function reduce(events) {
       case 'harvest': return state.harvests.some((h) => h.id === id);
       case 'diagnosis': return state.diagnoses.some((d) => d.id === id);
       case 'topsoil': return !!state.topsoilBatches[id];
+      case 'media': return !!state.mediaBatches[id];
+      case 'fill': return state.mediaFills.some((f) => f.id === id);
       case 'override': return state.gateOverrides.some((o) => o.id === id);
       case 'doctor': return state.doctorOutputs.some((o) => o.id === id);
       case 'lab': return state.labSamples.some((s) => s.id === id);
@@ -297,6 +307,32 @@ export function reduce(events) {
       case 'topsoil.assign':
         if (state.plots[p.zoneId]) state.plots[p.zoneId].topsoilBatchId = p.batchId;
         break;
+
+      // FR-GATE-08 to 10: a media batch, its heap's solarisation, and the bags
+      // filled from it. A fill is never deleted: pulling bags marks them
+      // pulled, so where a failed batch went stays on the record.
+      case 'media.receive':
+        state.mediaBatches[p.id] = { ...(state.mediaBatches[p.id] || {}), ...p, by: e.by, at: e.at };
+        break;
+      case 'media.solarise': {
+        const b = state.mediaBatches[p.batchId];
+        if (b) { b.solarisedFrom = p.from || b.solarisedFrom; b.solarisedTo = p.to || b.solarisedTo; }
+        break;
+      }
+      case 'media.fill':
+        if (!state.mediaFills.some((f) => f.id === p.id)) {
+          state.mediaFills.push({ ...p, bags: Number(p.bags) || 0, by: e.by, at: e.at });
+        }
+        break;
+      case 'media.pull': {
+        const f = state.mediaFills.find((x) => x.id === p.id);
+        if (f && !f.pulledAt) {
+          f.pulledAt = p.date || isoDate(new Date(e.at));
+          f.pulledBy = e.by;
+          f.pulledReason = p.reason || '';
+        }
+        break;
+      }
       case 'gate.override':
         state.gateOverrides.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;

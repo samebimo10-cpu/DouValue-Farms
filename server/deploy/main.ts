@@ -149,6 +149,14 @@ const EVENT_POLICY = {
   'soiltest.record':   { write: 'scout',         read: ANY },
   'topsoil.receive':   { write: 'logInputs',     read: ANY },
   'topsoil.assign':    { write: 'manageCycles',  read: ANY },
+  // FR-GATE-08 to 10 — plant-bag media. Receiving a heap and recording its
+  // solarisation is store work, like a topsoil delivery. Filling bags into a
+  // zone, and pulling them out again, decides what that zone's Gate 0 reads,
+  // so it sits with whoever runs cycles, like topsoil.assign.
+  'media.receive':     { write: 'logInputs',     read: ANY, guard: guardMediaReceive },
+  'media.solarise':    { write: 'logInputs',     read: ANY, guard: guardMediaSolarise },
+  'media.fill':        { write: 'manageCycles',  read: ANY, guard: guardMediaFill },
+  'media.pull':        { write: 'manageCycles',  read: ANY, guard: guardMediaPull },
   // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
   // and a confirmed diagnosis is what unlocks a treatment. FR-DOC-01 adds the
   // step that makes the confirmation mean something: the senior performs the
@@ -704,6 +712,42 @@ function guardDoctorConfirm(event, author) {
 }
 
 /** FR-DOC-06 — evidence has to say which gate and which line of it. */
+/**
+ * FR-GATE-08 to 10. The chain batch -> bags -> zone is only worth anything if
+ * every link names the thing it links, so a fill without a batch, a zone or a
+ * number of bags is refused rather than stored as a gap in the recall list.
+ */
+function guardMediaReceive(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'A media batch needs an id' };
+  if (!String(p.supplier || '').trim()) return { ok: false, why: 'A media batch must name its supplier' };
+  return { ok: true };
+}
+
+function guardMediaSolarise(event) {
+  const p = event.payload || {};
+  if (!p.batchId) return { ok: false, why: 'Say which media batch was solarised' };
+  if (!p.from || !p.to) return { ok: false, why: 'Solarisation needs a start and an end date' };
+  if (String(p.to) < String(p.from)) return { ok: false, why: 'Solarisation cannot end before it starts' };
+  return { ok: true };
+}
+
+function guardMediaFill(event) {
+  const p = event.payload || {};
+  if (!p.id || !p.batchId || !p.zoneId) {
+    return { ok: false, why: 'A fill must name the batch and the zone the bags went into' };
+  }
+  const bags = Number(p.bags);
+  if (!Number.isInteger(bags) || bags < 1) return { ok: false, why: 'A fill must say how many bags' };
+  return { ok: true };
+}
+
+function guardMediaPull(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which fill of bags was pulled' };
+  return { ok: true };
+}
+
 function guardGateEvidence(event) {
   const p = event.payload || {};
   if (!p.gate || !p.itemId) return { ok: false, why: 'Evidence must name the gate and which line of it' };

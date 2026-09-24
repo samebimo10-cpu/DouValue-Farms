@@ -19,7 +19,8 @@
 import { isoDate } from '../util.js';
 import { alerts, kpis, OWNER_LEVELS, risingWarnings, straightToOwner } from './alerts.js';
 import { ownerNotifications } from './doctor.js';
-import { gateBoard } from './gates.js';
+import { condemnedBatches, gateBoard } from './gates.js';
+import { describeZones } from './media.js';
 import { sampleDataCheck } from './readiness.js';
 import { uncoveredToday } from './positions.js';
 import { lowStock } from './stock.js';
@@ -87,6 +88,22 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
         detail: 'Test it now — the result decides what happens to the next cycle in that ground.',
       });
     }
+  }
+
+  // 3a. FR-GATE-10 — a media batch that failed its nematode assay, with every
+  //     zone its bags reached, in one line. The per-zone lines above say each
+  //     house is blocked; this one says why they are blocked together, so the
+  //     Owner pulls one batch rather than chasing three separate problems.
+  for (const bad of condemnedBatches(state, { today })) {
+    if (!bad.live.length) continue;
+    const b = bad.batch || {};
+    const t = bad.failedTest || {};
+    out.push({
+      severity: 'critical',
+      line: `Media batch from ${b.supplier || 'an unnamed supplier'} (${b.date || 'no date'}) failed: `
+        + `${t.nematode || 'nematodes found'} on ${t.date || 'an unrecorded date'}`,
+      detail: `Bags from it are in ${describeZones(bad.live)}. Pull them all and do not reuse the media.`,
+    });
   }
 
   // 3b. A house with nobody on it today. FR-ROLE-02 moves work to the backup

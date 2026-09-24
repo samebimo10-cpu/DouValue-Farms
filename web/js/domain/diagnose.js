@@ -36,7 +36,7 @@ import { loadRules, peekRules, rulesVersion } from '../rules.js';
 
 const RULES = peekRules() || await loadRules();
 
-/** rules-1.2 at the time of writing. Stamped onto everything the engine produces. */
+/** rules-1.3 at the time of writing. Stamped onto everything the engine produces. */
 export const RULES_VERSION = rulesVersion(RULES) || 'unknown';
 import { PROBLEMS, PROBLEM_BY_ID } from './pests.js';
 import { wetnessIndex, drynessIndex, waterloggingIndex } from './climate.js';

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.5 (draft for restructuring) |
+| Version | 1.6 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -143,6 +143,9 @@ Gates stop wrong actions. They are the most important part of the app.
 - **FR-GATE-05 (MUST):** **Spray rotation.** The app blocks a product if it breaks the rotation rules for that pest and zone (Build Rules Extract §6–7).
 - **FR-GATE-06 (MUST):** All gates from Farm Operations Schedule Rev 5 / 5.1 (Gate 0 to Gate 4, clean-restart protocol for GH-04 and GH-05) are carried over from GateField and listed on one Gates screen with their current state per zone.
 - **FR-GATE-07 (MUST):** Only the Owner can override a gate. Every override needs a reason (voice or text) and is shown in the digest.
+- **FR-GATE-08 (MUST):** **Media type per zone.** Each zone is grown in either **bed soil** or **plant bags**. Bed zones keep FR-GATE-01 to 03 exactly as written. For a plant-bag zone, Gate 0 clears on the **media batch** each bag was filled from, not on the zone's ground: the batch needs its supplier, the heap's solarisation start and end dates (at least the minimum in the rules), a three-point pH of 5.5–7.0 taken after any lime, and a clean nematode lab result. Every batch with bags standing in the zone must pass. Media type cannot be changed while a crop is growing in the zone.
+- **FR-GATE-09 (MUST):** **Media batches.** Each heap of bought-in or mixed media is logged as a batch. Filling bags records the batch, the zone and the number of bags; fills from a batch still waiting on its tests are recorded (so they can be traced) and the zone stays blocked. A batch that has failed its nematode assay cannot be bagged.
+- **FR-GATE-10 (MUST):** **Traceability: batch → bags → zone.** When a batch fails its nematode assay, before or after planting, Gate 0 closes on every zone holding bags from it, and the Gates screen and the Owner's digest name every affected zone with its bag count and whether it is planted. A later clean re-test does not clear a failed batch; only an Owner override (FR-GATE-07) does. Pulled bags are marked pulled, not deleted, so the record of where the batch went stays.
 
 ### 6.3 Daily tasks
 - **FR-TASK-01 (MUST):** Tasks are generated daily from the operations schedule for each zone: scouting, trap checks, irrigation, fertigation, pruning, harvest, sanitation.
@@ -230,7 +233,7 @@ Fixes treatment by guesswork.
 - **FR-DOC-02 (MUST):** Names look-alike causes and the test that tells them apart (e.g. nematode galls vs acid-soil roots).
 - **FR-DOC-03 (MUST):** Online photo review with a stated confidence (high / medium / low). Offline, the rules-based diagnosis, calculators and plan checks still work.
 - **FR-DOC-04 (MUST):** Treatment plans already pass Gate 3, rotation, PHI, REI, mixing, timing, the Week 10 organics rule, and stock on hand.
-- **FR-DOC-05 (MUST):** Dose calculator (per 16 L knapsack, 500 L and 1,000 L tank) and lime calculator (pH, texture, bed area → route and kg).
+- **FR-DOC-05 (MUST):** Dose calculator (per 16 L knapsack, 500 L and 1,000 L tank) and lime calculator (pH, texture, bed area → route and kg). For plant bags, the lime calculator doses by **media volume** (heap volume, or bags × litres per bag → kg, kg per m³ and g per bag), with the same bands, hold and reduced doses as beds.
 - **FR-DOC-06 (MUST):** Checks Gate 0, 1 and 4 evidence and lists anything missing.
 - **FR-DOC-07 (MUST):** Schedules a follow-up check 3 days after each treatment and records whether it worked. Drafts the Gate 4 cycle review from the season's records.
 - **FR-DOC-08 (MUST):** Never clears a gate, confirms its own diagnosis or approves its own plan. Never recommends a product outside the catalogue or stock, a banned product, or an invented dose. Never confirms a virus or bacterial disease on a photo alone.
@@ -283,10 +286,12 @@ Fixes treatment by guesswork.
 |---|---|
 | Person | name, face photo, PIN, language, position |
 | Position | role, primary zone, backup zone |
-| Zone | ID, type (greenhouse/field), QR code, status |
+| Zone | ID, type (greenhouse/field), media (bed soil / plant bags), litres per bag, QR code, status |
 | Crop cycle | zone, crop, variety, planting date, harvest window |
-| Soil test | zone or topsoil batch, pH, nematode result, date |
+| Soil test | zone, topsoil batch or media batch, pH (and three-point readings), nematode result, lab, date |
 | Topsoil batch | supplier, date, test result, zones used |
+| Media batch | supplier, date, volume, heap solarisation start and end, tests (three-point pH, nematode, lab) |
+| Bag fill | media batch, zone, number of bags, date, pulled (date, by, reason) |
 | Task | type, zone, position, due, status, photos |
 | Scouting record | zone, pest, count, grid location, photos, person |
 | Alert | trigger, zone, deadline, escalation level, status |
@@ -303,6 +308,7 @@ Fixes treatment by guesswork.
 
 - [ ] Every MUST requirement passes its test
 - [ ] Planting blocked when pH is outside 5.5–7.0 (`FR-GATE-01`)
+- [ ] Plant-bag zone blocked until its media batch clears, and a failed batch names every zone it reached (`FR-GATE-08`, `FR-GATE-10`)
 - [ ] Treatment blocked without a diagnosis (`FR-GATE-04`)
 - [ ] Threshold breach escalates correctly with times shortened for testing (`FR-SCOUT-04`)
 - [ ] All field screens work in airplane mode, then sync (`NFR-OFF-01/02`)
@@ -340,6 +346,7 @@ Fixes treatment by guesswork.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.6 | 24 Sep 2026 | Media type per zone (bed soil or plant bags); Gate 0 for bag zones clears on the media batch; batch → bags → zone traceability; lime by media volume (FR-GATE-08 to 10, FR-DOC-05). Rules decision C-19 |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
 | 1.4 | 16 Sep 2026 | Field usability trial moved to after build, with a fix round (UX-26, UX-27, §9a) |
 | 1.3 | 16 Sep 2026 | OF-02 is the nursery; Farm Doctor replaces site agronomist; active-ingredient catalogue with manager-added labels |

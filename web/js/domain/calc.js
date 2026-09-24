@@ -14,7 +14,7 @@
 
 import { addDays, daysBetween, isoDate, round } from '../util.js';
 import { KNAPSACK_L } from './safety.js';
-import { getRules as rules } from '../rules.js';
+import { getRules as rules, mediaRules } from '../rules.js';
 
 /** The three vessels FR-DOC-05 names, smallest first. */
 export const TANKS = [
@@ -223,6 +223,12 @@ function rateRange(text) {
  *
  * Everything below reads its numbers from rules.soil_and_water, so correcting
  * the schedule corrects the calculator.
+ *
+ * Plant bags (FR-GATE-08, `media: 'bag'`) are dosed by the volume of media,
+ * not by an area. The same route table applies, spread through the
+ * incorporation depth the rules give: a 100 m² rate worked 20 cm deep is a
+ * rate for 20 m³ of soil. The bands, the hold and the half and quarter doses
+ * are the same; only the unit the kilograms are counted in changes.
  */
 export function limePlan({
   readings = [],
@@ -234,11 +240,16 @@ export function limePlan({
   limeDate = null,
   lastLime = null,
   holdSince = null,
+  media = 'bed',
+  volumeL = 0,
+  bags = 0,
+  litresPerBag = 0,
   today = isoDate(),
 } = {}) {
   const soil = rules().soil_and_water;
   const gate = soil.soil_ph_gate;
   const lime = soil.lime;
+  const bag = media === 'bag';
 
   const points = readings.map(Number).filter((n) => Number.isFinite(n));
   if (points.length < 3) {
@@ -260,6 +271,29 @@ export function limePlan({
     };
   }
 
+  // How many "100 m² at the incorporation depth" the job is. For a bed that is
+  // the area over 100; for bags it is the media volume over 20 m³.
+  let units = (Number(areaM2) || 0) / 100;
+  let volume = null;
+  if (bag) {
+    const spec = mediaRules();
+    if (!spec) {
+      return { ok: false, reason: 'no-media-rules',
+        why: 'The rules file has no plant-bag media section, so there is no rate by volume.',
+        fix: 'Load rules-1.3 or later.' };
+    }
+    const litres = Number(volumeL) > 0 ? Number(volumeL) : (Number(bags) || 0) * (Number(litresPerBag) || 0);
+    if (!(litres > 0)) {
+      return { ok: false, reason: 'no-volume',
+        why: 'Bags are limed by the volume of media, and no volume was given.',
+        fix: 'Enter the heap volume, or the number of bags and the litres each bag holds.' };
+    }
+    const perUnitM3 = 100 * spec.lime_incorporation_depth_m;
+    units = litres / 1000 / perUnitM3;
+    volume = { litres, m3: round(litres / 1000, 2), bags: Number(bags) || 0,
+      litresPerBag: Number(litresPerBag) || 0, perUnitM3, where: spec.lime_where, basis: spec.lime_basis };
+  }
+
   const mean = round(points.reduce((a, b) => a + b, 0) / points.length, 2);
   const min = Math.min(...points);
   const max = Math.max(...points);
@@ -276,7 +310,8 @@ export function limePlan({
   }
 
   const common = { reading, texture: tex, areaM2, zoneType, warnings, gateMin: gate.min, gateMax: gate.max,
-    treatArea: gate.treat_area, doNotBuy: lime.do_not_buy || [], fallback: lime.fallback };
+    treatArea: bag ? volume.where : gate.treat_area, doNotBuy: lime.do_not_buy || [], fallback: lime.fallback,
+    media: bag ? 'bag' : 'bed', volume };
 
   // --- Above the gate: lime is the wrong tool entirely --------------------
   if (mean > gate.max) {
@@ -320,7 +355,7 @@ export function limePlan({
     // The hold ran its ten days and the block is still under 5.5, so the
     // schedule allows a quarter of the ORIGINAL rate — not a quarter of a
     // fresh full dose.
-    const quarter = doseFor({ lime, tex, areaM2, solarised, transplantDate, lastLime, fraction: 0.25 });
+    const quarter = doseFor({ lime, tex, units, volume, solarised, transplantDate, lastLime, fraction: 0.25 });
     return { ok: true, ...common, band: 'hold-expired', action: 'quarter-rate',
       ...quarter,
       headline: `pH ${mean.toFixed(2)} after a 10-day hold. Apply one quarter of the original rate.`,
@@ -329,7 +364,8 @@ export function limePlan({
       retestOn: isoDate(addDays(today, 10)),
       blocksTransplant: true,
       steps: [
-        `Apply ${quarter.kgText} — one quarter of the original rate, not a new full dose.`,
+        `Apply ${quarter.kgText}${quarter.perBagText ? ` (${quarter.perBagText} per bag)` : ''} — `
+          + 'one quarter of the original rate, not a new full dose.',
         'Wait 10 days.',
         `Re-test the same three points on ${isoDate(addDays(today, 10))}.`,
       ],
@@ -338,7 +374,7 @@ export function limePlan({
 
   // --- Below 5.2 ----------------------------------------------------------
   const first = !lastLime;
-  const dose = doseFor({ lime, tex, areaM2, solarised, transplantDate, lastLime,
+  const dose = doseFor({ lime, tex, units, volume, solarised, transplantDate, lastLime,
     fraction: first ? 1 : 0.5 });
 
   return {
@@ -355,12 +391,18 @@ export function limePlan({
     retestOn: isoDate(addDays(limeDate || today, first ? 28 : 10)),
     steps: first
       ? [
-        `Spread ${dose.kgText} of ${dose.product} over the ${treatAreaText(zoneType, gate)}.`,
+        bag
+          ? `Mix ${dose.kgText} of ${dose.product} through the ${volume.m3} m³ of media${
+            dose.perBagText ? ` (${dose.perBagText} per bag)` : ''}.`
+          : `Spread ${dose.kgText} of ${dose.product} over the ${treatAreaText(zoneType, gate)}.`,
         dose.timing || 'Incorporate and irrigate.',
-        `Re-test the three points before transplant, after the lime has worked in.`,
+        bag
+          ? 'Re-test three points in the heap before bagging, after the lime has worked in.'
+          : `Re-test the three points before transplant, after the lime has worked in.`,
       ]
       : [
-        `Apply ${dose.kgText} — half the original rate. Never stack a second full dose.`,
+        `Apply ${dose.kgText}${dose.perBagText ? ` (${dose.perBagText} per bag)` : ''} — half the original rate. `
+          + 'Never stack a second full dose.',
         'Add 10 days to the schedule.',
         `Re-test the same three points on ${isoDate(addDays(limeDate || today, 10))}.`,
       ],
@@ -375,13 +417,13 @@ function treatAreaText(zoneType, gate) {
 }
 
 /** Route, product and kilograms, at whatever fraction of the rate applies. */
-function doseFor({ lime, tex, areaM2, solarised, transplantDate, lastLime, fraction = 1 }) {
+function doseFor({ lime, tex, units, volume = null, solarised, transplantDate, lastLime, fraction = 1 }) {
   // Route A is for a block not yet under solarisation plastic; Route B is for
   // one already solarised with transplant less than three weeks out.
   const route = solarised ? 'B' : 'A';
   const spec = route === 'B' ? lime.route_B : lime.route_A;
   const range = rateRange(spec.rates_per_100m2_kg[tex.rulesKey]);
-  const hundreds = (Number(areaM2) || 0) / 100;
+  const hundreds = Number(units) || 0;
 
   // "Original rate" means the rate that actually went on, when one is on
   // record. Falling back to the table keeps the sum honest when it is not.
@@ -392,7 +434,25 @@ function doseFor({ lime, tex, areaM2, solarised, transplantDate, lastLime, fract
   const low = round(base.low * hundreds * fraction, 1);
   const high = round(base.high * hundreds * fraction, 1);
 
+  // Bags: the same dose, said per cubic metre and per bag, because that is how
+  // it is weighed out at the heap.
+  let perVolume = {};
+  if (volume) {
+    const m3Low = round((base.low * fraction) / volume.perUnitM3, 3);
+    const m3High = round((base.high * fraction) / volume.perUnitM3, 3);
+    const g = (kgPerM3) => round(kgPerM3 * volume.litresPerBag, 0);
+    perVolume = {
+      kgPerM3Low: m3Low,
+      kgPerM3High: m3High,
+      gPerBagLow: volume.litresPerBag ? g(m3Low) : null,
+      gPerBagHigh: volume.litresPerBag ? g(m3High) : null,
+      perBagText: volume.litresPerBag
+        ? (g(m3Low) === g(m3High) ? `${g(m3Low)} g` : `${g(m3Low)}–${g(m3High)} g`) : null,
+    };
+  }
+
   return {
+    ...perVolume,
     route,
     product: spec.product,
     when: spec.when,

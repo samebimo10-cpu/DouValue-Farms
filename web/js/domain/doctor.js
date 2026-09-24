@@ -1243,6 +1243,21 @@ function checkGateItem(state, { gateId, itemId, label, zoneId, cycleId, today, r
       if (nem.state !== 'pass') {
         return item(itemId, label, 'missing', { why: nem.why, fix: nem.fix || 'Send a soil sample for a nematode assay.' });
       }
+      // FR-GATE-08: a bag zone's lab report is one per media batch in it.
+      if (nem.media) {
+        const unnamed = (nem.tests || []).filter((t) => !t.lab);
+        if (unnamed.length) {
+          return item(itemId, label, 'missing', {
+            why: `${unnamed.length} media batch assay${unnamed.length === 1 ? ' does' : 's do'} not name the lab that gave ${unnamed.length === 1 ? 'it' : 'them'}.`,
+            fix: 'Record which lab tested each batch, and keep the reports. Gate 0 asks for a lab report, not a note.',
+            from: { kind: 'soil-test', id: unnamed[0].id || null },
+          });
+        }
+        return item(itemId, label, 'have', {
+          why: nem.tests.map((t) => `${t.lab} returned clear on ${t.date}`).join('; ') + '.',
+          from: { kind: 'soil-test', id: (nem.test && nem.test.id) || null },
+        });
+      }
       if (!(nem.test && nem.test.lab)) {
         return item(itemId, label, 'missing', {
           why: 'A clean nematode result is on file but it does not name the lab that gave it.',
@@ -1260,6 +1275,27 @@ function checkGateItem(state, { gateId, itemId, label, zoneId, cycleId, today, r
       const ph = phGate(state, zoneId, { today });
       if (ph.state !== 'pass') {
         return item(itemId, label, 'missing', { why: ph.why, fix: ph.fix || 'Record a corrected pH reading.' });
+      }
+      // FR-GATE-08: the bag gate already insists on three points per batch;
+      // what is left to check is a meter photo for every batch.
+      if (ph.media) {
+        // The soil-test form has no camera, so a meter photo recorded against
+        // this line on the evidence card, on or after the newest batch
+        // reading, counts for the batches in this zone.
+        const newest = (ph.tests || []).map((t) => t.date).sort().pop() || '';
+        const shot = recorded && recorded.photo && (recorded.date || (recorded.at || '').slice(0, 10)) >= newest;
+        const bare = shot ? [] : (ph.tests || []).filter((t) => !t.photo);
+        if (bare.length) {
+          return item(itemId, label, 'missing', {
+            why: `${bare.length} media batch pH reading${bare.length === 1 ? ' has' : 's have'} no photo of the meter.`,
+            fix: 'Photograph the meter reading and attach it to each batch\'s test.',
+            from: { kind: 'soil-test', id: bare[0].id || null },
+          });
+        }
+        return item(itemId, label, 'have', {
+          why: ph.why + ' Meter photographed.',
+          from: { kind: 'soil-test', id: (ph.test && ph.test.id) || null },
+        });
       }
       const test = ph.test || {};
       const points = Number(test.points || (Array.isArray(test.readings) ? test.readings.length : 0));

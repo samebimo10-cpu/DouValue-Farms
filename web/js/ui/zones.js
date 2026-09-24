@@ -17,6 +17,7 @@ import { can } from '../store.js';
 import { coverBoard, POSITION_TEMPLATE } from '../domain/positions.js';
 import { qrSvg, zoneCode } from '../domain/qr.js';
 import { gatesForZone } from '../domain/gates.js';
+import { bagsInZone, isBagZone, MEDIA_TYPES } from '../domain/media.js';
 import { tasksFor } from '../domain/schedule.js';
 import { isoDate, uid } from '../util.js';
 
@@ -113,6 +114,7 @@ function zoneList(ctx, zones, today) {
       const due = counts.get(z.id) || 0;
       return `<li data-act="open-zone" data-id="${esc(z.id)}"><div class="grow">`
         + `<b>${esc(z.name)}</b><small>${esc(z.type === 'field' ? 'Open field' : 'Greenhouse')}`
+        + `${isBagZone(z) ? ` · plant bags (${bagsInZone(ctx.state, z.id)} in)` : ''}`
         + `${z.areaM2 ? ` · ${esc(z.areaM2)} m²` : ''}`
         + ` · ${due} job${due === 1 ? '' : 's'} today</small></div>`
         + badge(blocked ? `${blocked} gate${blocked === 1 ? '' : 's'}` : 'clear',
@@ -173,6 +175,15 @@ function openZoneSheet(ctx, id) {
     ], zone ? zone.type || 'greenhouse' : 'greenhouse'),
       'A greenhouse is held to tighter pest thresholds — a closed room compounds a population '
       + 'that open field would shrug off.')
+    // FR-GATE-08: what the roots grow in decides what Gate 0 tests. Beds are
+    // the default and every zone recorded before bags existed is a bed.
+    + field('Growing media', select('media', MEDIA_TYPES.map((m) => ({ value: m.id, label: m.name })),
+      isBagZone(zone) ? 'bag' : 'bed'),
+      'Bed soil: Gate 0 tests this zone\'s ground. Plant bags: Gate 0 tests the media batch each bag '
+      + 'was filled from, and a failed batch names every zone it reached.')
+    + field('Litres per bag (plant bags only)', input('bagLitres', {
+      type: 'number', min: '1', step: '1', value: zone && zone.bagLitres ? zone.bagLitres : '',
+      placeholder: 'e.g. 20' }), 'The lime calculator doses bags by the volume of media in them.')
     + field('Area in square metres', input('areaM2', {
       type: 'number', value: zone ? zone.areaM2 || '' : '', placeholder: 'e.g. 300' }))
     + field('Drainage', select('drainage', [
@@ -193,15 +204,28 @@ function openZoneSheet(ctx, id) {
 async function saveZone(ctx, form) {
   const data = readForm(form);
   if (!String(data.name || '').trim()) { toast('Give the zone a name', true); return; }
+  const media = data.media === 'bag' ? 'bag' : 'bed';
+  const existing = data.id ? ctx.state.plots[data.id] : null;
+  // Gate 0 reads the bed for one and the batch for the other, so switching
+  // under a growing crop would swap the evidence the crop was cleared on.
+  if (existing && (isBagZone(existing) ? 'bag' : 'bed') !== media) {
+    const planted = Object.values(ctx.state.cycles || {})
+      .some((c) => c.plotId === existing.id && c.status === 'active');
+    if (planted) { toast('Close the cycle growing in it before changing its media', true); return; }
+  }
   await ctx.store.dispatch('plot.upsert', {
     id: data.id || uid('zone'),
     name: data.name.trim(),
     type: data.type || 'greenhouse',
     areaM2: Number(data.areaM2) || 0,
     drainage: data.drainage || 'raised',
+    media,
+    ...(media === 'bag' ? { bagLitres: Number(data.bagLitres) || 0 } : {}),
   });
   closeSheet();
-  toast(data.id ? 'Zone saved' : 'Zone added. Test its soil before anything goes in.');
+  toast(data.id ? 'Zone saved' : media === 'bag'
+    ? 'Zone added. Fill its bags from a tested media batch before anything goes in.'
+    : 'Zone added. Test its soil before anything goes in.');
 }
 
 async function retireZone(ctx, el) {

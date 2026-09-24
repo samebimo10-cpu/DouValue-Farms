@@ -5,8 +5,8 @@
       "Revision 5.1 Acid Soil Correction, Main Farm"
     ],
     "precedence": "Where Rev 5.1 and Rev 5 disagree, Rev 5.1 wins.",
-    "version": "rules-1.2",
-    "decisions": "C-1 to C-18 applied"
+    "version": "rules-1.3",
+    "decisions": "C-1 to C-19 applied"
   },
   "zones": [
     {
@@ -505,7 +505,25 @@
       "field_note": "open field re-limes a season sooner than houses",
       "neem_cake_rule": "Neem cake goes in when the solarisation plastic is lifted (T-7), not mid-solarisation. Route A lime at T-35 to T-28 gives a 21-28 day gap. Route B: at least 10 days after the hydrated lime."
     },
-    "nitrogen_at_planting": "urea in the planting hole is DELETED (Rev 5.1); starter P placed near root zone; Calcium Nitrate 2-3 g/L weekly from Day 10-14 after transplant"
+    "nitrogen_at_planting": "urea in the planting hole is DELETED (Rev 5.1); starter P placed near root zone; Calcium Nitrate 2-3 g/L weekly from Day 10-14 after transplant",
+    "plant_bag_media": {
+      "applies_to": "zones grown in plant bags rather than in bed soil; bed zones are unchanged",
+      "gate_0_clears_on": "the media batch, not the zone: every batch with bags in the zone must pass",
+      "batch_record": [
+        "supplier",
+        "date delivered or mixed",
+        "heap solarisation start and end dates"
+      ],
+      "solarisation_min_days": 21,
+      "ph_test": "three points per heap, same method and the same 5.5-7.0 range as the soil pH gate",
+      "nematode": "lab assay of the heap, returned CLEAR",
+      "traceability": "batch -> bags -> zone: every fill records the batch, the zone and the number of bags",
+      "failed_after_planting": "a dirty nematode result on a batch closes Gate 0 on every zone holding bags from it, planted or not; pull those bags and do not reuse the media",
+      "lime_incorporation_depth_m": 0.2,
+      "lime_basis": "the route rate per 100 m2 spread through a 20 cm incorporation depth (20 m3 of soil): kg per m3 of media = rate per 100 m2 / 20",
+      "lime_where": "mix through the heap before bagging; bags already filled share the dose evenly per bag, watered in",
+      "source": "Owner instruction, Sep 2026 (requirements v1.6, FR-GATE-08 to FR-GATE-10); not in Rev 5 / 5.1 — review at the next Gate 4 cycle review"
+    }
   },
   "irrigation": [
     {

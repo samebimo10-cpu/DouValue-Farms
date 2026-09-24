@@ -28,6 +28,10 @@ export async function seedSampleFarm(store) {
     { id: 'sp_b2', name: 'Bed 2 (front)', areaM2: 800, drainage: 'raised', soilPh: 5.3 },
     { id: 'sp_b3', name: 'Bed 3 (low corner)', areaM2: 600, drainage: 'ridged', soilPh: 4.9 },
     { id: 'sp_b4', name: 'Back field', areaM2: 1500, drainage: 'raised', soilPh: 5.6 },
+    // FR-GATE-08: two plant-bag houses sharing one media heap, so a trainee
+    // can see a failed batch name both of them (docs/walkthrough-bag-zone.md).
+    { id: 'sp_bag1', name: 'Bag house A', areaM2: 200, drainage: 'raised', media: 'bag', bagLitres: 20 },
+    { id: 'sp_bag2', name: 'Bag house B', areaM2: 120, drainage: 'raised', media: 'bag', bagLitres: 20 },
   ];
 
   const cycles = [
@@ -39,6 +43,8 @@ export async function seedSampleFarm(store) {
       transplantDate: d(-30), plants: 2600, areaM2: 800 },
     { id: 'sp_c4', plotId: 'sp_b3', cropId: 'habanero', variety: 'Scotch Bonnet',
       transplantDate: d(-12), plants: 1700, areaM2: 600 },
+    { id: 'sp_c5', plotId: 'sp_bag1', cropId: 'bell', variety: 'California Wonder',
+      transplantDate: d(-20), plants: 300, areaM2: 200 },
   ];
 
   const events = [
@@ -47,6 +53,24 @@ export async function seedSampleFarm(store) {
     ...plots.map((p) => ({ type: 'plot.upsert', payload: p })),
     ...cycles.map((c) => ({ type: 'cycle.start', payload: c })),
   ];
+
+  // Plant-bag media. Heap 1 was solarised, tested and cleared, then bagged into
+  // both bag houses; A is planted, B is waiting. Heap 2 has just arrived and
+  // has nothing on record yet. The walkthrough fails heap 1 after planting.
+  // Media events go in before the cycle list is replayed, so they carry the
+  // dates they happened on (see the stamping at the end).
+  events.push({ type: 'media.receive', payload: {
+    id: 'sp_mb1', supplier: 'Rumuokoro topsoil and cocopeat yard', date: d(-70), volume: '9 m³',
+    solarisedFrom: d(-66), solarisedTo: d(-40) } });
+  events.push({ type: 'soiltest.record', payload: {
+    id: 'sp_st_mb1', mediaBatchId: 'sp_mb1', date: d(-38), ph: 6.2, readings: [6.1, 6.2, 6.3], points: 3,
+    nematode: 'clean', lab: 'Sample soil lab', note: 'Sampled after the plastic came off.' } });
+  events.push({ type: 'media.fill', payload: {
+    id: 'sp_fill1', batchId: 'sp_mb1', zoneId: 'sp_bag1', bags: 300, date: d(-30) } });
+  events.push({ type: 'media.fill', payload: {
+    id: 'sp_fill2', batchId: 'sp_mb1', zoneId: 'sp_bag2', bags: 150, date: d(-28) } });
+  events.push({ type: 'media.receive', payload: {
+    id: 'sp_mb2', supplier: 'Eleme Road nursery supplies', date: d(-4), volume: '6 m³' } });
 
   // A closed cycle from earlier in the year, so the forecaster has something to
   // calibrate against and the reports are not empty.
