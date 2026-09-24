@@ -486,6 +486,9 @@ function cleanRestart(state, zone, w, rules) {
           fix: `The minimum host-free break is ${step.min_days} days from the day the old crop came out.` };
       }
     }
+    const timing = step.cover_days ? coverTiming(step, rec, w)
+      : step.within_hours_before_transplant ? knockdownTiming(step, rec, w) : null;
+    if (timing) return { ...base, from: { kind: 'gate-evidence', id: rec.id }, ...timing };
     return { ...base, state: 'pass', from: { kind: 'gate-evidence', id: rec.id },
       why: `Recorded ${dayOf(rec)}${rec.note ? ` — ${rec.note}` : ''}.` };
   });
@@ -503,6 +506,70 @@ function cleanRestart(state, zone, w, rules) {
     rule: spec.gate_rule || '',
     conditions,
   };
+}
+
+/**
+ * Step 3: solarisation is one continuous span under sealed plastic, 21 to 28
+ * days (rules → clean_restart.steps[].cover_days). The record carries the day
+ * the plastic went on (`coverFrom`) and the day it was lifted (`coverTo`); a
+ * record with no lift day means the plastic is still on. Plastic laid before
+ * the old crop ended belongs to the last restart, not this one.
+ *
+ * Returns null when the timing is right, otherwise the condition's state.
+ */
+function coverTiming(step, rec, w) {
+  const { min, max } = step.cover_days;
+  const from = rec.coverFrom || null;
+  const to = rec.coverTo || null;
+  const span = `${min}–${max} days`;
+  if (!from) {
+    return { state: 'fail', why: 'The solarisation is recorded without the day the plastic went on.',
+      fix: `Record the day the plastic went on and the day it was lifted. It must be one continuous ${span}.` };
+  }
+  if (w.since && from <= w.since) {
+    return { state: 'fail', why: `The plastic went on ${from}, before the previous cycle here ended on ${w.since}.`,
+      fix: `Solarise after the old crop is out: one continuous ${span} under sealed plastic.` };
+  }
+  if (!to) {
+    const sofar = daysBetween(from, w.judged);
+    return { state: 'held', why: `Under plastic since ${from}: ${sofar} day${sofar === 1 ? '' : 's'} so far.`,
+      fix: sofar < min
+        ? `Keep it sealed. Lift it on or after ${isoDate(addDays(from, min))} and no later than ${isoDate(addDays(from, max))}, then record the lift.`
+        : `Lift it no later than ${isoDate(addDays(from, max))} and record the lift.` };
+  }
+  const days = daysBetween(from, to);
+  if (days < min || days > max) {
+    return { state: 'fail', why: `The plastic was on ${from} to ${to}: ${days} days continuous.`,
+      fix: days < min
+        ? `Solarisation is one continuous ${span}. ${days} days is too short to kill the nematode and pathogen load: re-lay the plastic and record a new span.`
+        : `Solarisation is one continuous ${span} (Rev 5 p16). If the lab asked for longer, record it as a new span or the Owner overrides with the lab's reason.` };
+  }
+  return { state: 'pass', why: `Under sealed plastic ${from} to ${to}: ${days} days continuous${rec.note ? ` — ${rec.note}` : ''}.` };
+}
+
+/**
+ * Step 5: the pre-plant knockdown goes on within 48 h before transplant, with
+ * the doors shut overnight in between (rules →
+ * clean_restart.steps[].within_hours_before_transplant).
+ *
+ * Records carry a day, not an hour, so the window is counted in days: the day
+ * before transplant or the day before that. Transplant day itself is refused,
+ * because there has been no night with the doors shut.
+ */
+function knockdownTiming(step, rec, w) {
+  const hours = step.within_hours_before_transplant;
+  const maxDays = Math.ceil(hours / 24);
+  const sprayed = dayOf(rec);
+  const before = daysBetween(sprayed, w.judged);
+  if (before < 1) {
+    return { state: 'fail', why: `The knockdown was sprayed ${sprayed}, the same day as transplant.`,
+      fix: 'The doors stay shut overnight after the knockdown. Spray it the day before transplant.' };
+  }
+  if (before > maxDays) {
+    return { state: 'fail', why: `The knockdown was sprayed ${sprayed}, ${before} days before transplant.`,
+      fix: `It has to go on within ${hours} h before transplant (${step.timing_rule || 'the day before, or the day before that'}). Spray it again and record it.` };
+  }
+  return { state: 'pass', why: `Sprayed ${sprayed}, ${before} day${before === 1 ? '' : 's'} before transplant${rec.note ? ` — ${rec.note}` : ''}.` };
 }
 
 /** The latest evidence line for one gate and zone, inside a window. */

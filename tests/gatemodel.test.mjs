@@ -249,9 +249,22 @@ test('FR-GATE-01: the soil test is recorded with its three readings and it is th
 // --- The clean-restart protocol (GH-04, GH-05) --------------------------------
 
 const crSteps = RULES.clean_restart.steps;
-const crEvidence = (zoneId, dates = {}) => crSteps.map((s, i) => ({
-  id: `cr_${s.id}`, gate: 'CR', itemId: s.id, zoneId, date: dates[s.id] || day(-30 + i), note: 'done',
+/**
+ * A restart done by the book: old crop out 40 days ago, plastic on 38 days
+ * ago and lifted 24 days later, knockdown the day before transplant.
+ */
+const CR_DEFAULTS = {
+  terminate_remove: { date: day(-40) },
+  sanitise: { date: day(-39) },
+  solarise: { date: day(-14), coverFrom: day(-38), coverTo: day(-14) },
+  host_free_fallow: { date: day(-38) },
+  pre_plant_knockdown: { date: day(-1) },
+};
+const crEvidence = (zoneId, dates = {}, extra = {}) => crSteps.map((s) => ({
+  id: `cr_${s.id}`, gate: 'CR', itemId: s.id, zoneId, note: 'done',
+  ...CR_DEFAULTS[s.id], ...(dates[s.id] ? { date: dates[s.id] } : {}), ...(extra[s.id] || {}),
 }));
+const crVerdict = (extra, o = {}) => verdict(ready(farm({ gateEvidence: crEvidence('gh4', {}, extra) }), 'gh4'), 'gh4', o);
 
 test('clean restart: GH-04 cannot be transplanted until every step is recorded', () => {
   const state = ready(farm(), 'gh4');
@@ -277,12 +290,80 @@ test('clean restart: steps from before the previous cycle ended belong to the la
 test('clean restart: the host-free fallow has to last the minimum break', () => {
   const fallow = crSteps.find((s) => s.min_days);
   assert.equal(fallow.min_days, 21);
-  const dates = Object.fromEntries(crSteps.map((s) => [s.id, day(-5)]));
-  const state = ready(farm({ gateEvidence: crEvidence('gh4', dates) }), 'gh4');
+  // The old crop only came out five days ago.
+  const state = ready(farm({ gateEvidence: crEvidence('gh4', { terminate_remove: day(-5) }) }), 'gh4');
   const v = verdict(state, 'gh4');
   assert.deepEqual(blockingIds(v), [`cr_${fallow.id}`]);
   assert.equal(v.blocking[0].state, 'held');
   assert.match(v.blocking[0].why, /host-free for 5 days/);
+});
+
+test('clean restart: solarisation is one continuous span of 21 to 28 days under plastic', () => {
+  const solarise = crSteps.find((s) => s.id === 'solarise');
+  assert.deepEqual([solarise.cover_days.min, solarise.cover_days.max], [21, 28]);
+
+  for (const days of [21, 24, 28]) {
+    const v = crVerdict({ solarise: { coverFrom: day(-14 - days), coverTo: day(-14) } });
+    assert.equal(v.ok, true, `${days} days should pass: ${blockingIds(v)}`);
+  }
+  for (const days of [20, 29]) {
+    const v = crVerdict({ solarise: { coverFrom: day(-14 - days), coverTo: day(-14) } });
+    assert.deepEqual(blockingIds(v), ['cr_solarise'], `${days} days should block`);
+    assert.equal(v.blocking[0].state, 'fail');
+    assert.match(v.blocking[0].why, new RegExp(`${days} days continuous`));
+  }
+});
+
+test('clean restart: solarisation without the day the plastic went on does not count', () => {
+  const v = crVerdict({ solarise: { coverFrom: undefined, coverTo: undefined } });
+  assert.deepEqual(blockingIds(v), ['cr_solarise']);
+  assert.match(v.blocking[0].why, /without the day the plastic went on/);
+});
+
+test('clean restart: plastic still on is held, and says the lift window', () => {
+  const v = crVerdict({ solarise: { date: day(-10), coverFrom: day(-10), coverTo: undefined } });
+  assert.deepEqual(blockingIds(v), ['cr_solarise']);
+  assert.equal(v.blocking[0].state, 'held');
+  assert.match(v.blocking[0].why, /10 days so far/);
+  assert.match(v.blocking[0].fix, new RegExp(`on or after ${day(11)} and no later than ${day(18)}`));
+});
+
+test('clean restart: plastic laid before the old crop ended belongs to the last restart', () => {
+  const cycles = { c0: { id: 'c0', plotId: 'gh4', transplantDate: day(-200), status: 'closed', closedAt: day(-41) } };
+  const ev = crEvidence('gh4', {}, { solarise: { coverFrom: day(-45), coverTo: day(-20) } });
+  const v = verdict(withGatesCleared(farm({ cycles, gateEvidence: ev }), { zoneId: 'gh4', plantedOn: TODAY }), 'gh4');
+  assert.ok(blockingIds(v).includes('cr_solarise'), blockingIds(v).join(', '));
+  assert.match(v.blocking.find((c) => c.id === 'cr_solarise').why, /before the previous cycle here ended/);
+});
+
+test('clean restart: the knockdown goes on within 48 h before transplant, not earlier and not the same day', () => {
+  const knockdown = crSteps.find((s) => s.id === 'pre_plant_knockdown');
+  assert.equal(knockdown.within_hours_before_transplant, 48);
+
+  for (const n of [1, 2]) {
+    assert.equal(crVerdict({ pre_plant_knockdown: { date: day(-n) } }).ok, true, `${n} day(s) before`);
+  }
+  const early = crVerdict({ pre_plant_knockdown: { date: day(-3) } });
+  assert.deepEqual(blockingIds(early), ['cr_pre_plant_knockdown']);
+  assert.match(early.blocking[0].why, /3 days before transplant/);
+  assert.match(early.blocking[0].fix, /within 48 h/);
+
+  const sameDay = crVerdict({ pre_plant_knockdown: { date: TODAY } });
+  assert.deepEqual(blockingIds(sameDay), ['cr_pre_plant_knockdown']);
+  assert.match(sameDay.blocking[0].fix, /overnight/);
+});
+
+test('clean restart: a knockdown that was in time on transplant day stays in time afterwards', () => {
+  // Judged as of transplant: a cycle planted a month ago does not re-block.
+  const cycles = { c1: { id: 'c1', plotId: 'gh4', cropId: 'bell', transplantDate: day(-30), status: 'active' } };
+  const ev = crEvidence('gh4', {}, {
+    terminate_remove: { date: day(-70) }, sanitise: { date: day(-69) },
+    solarise: { date: day(-44), coverFrom: day(-68), coverTo: day(-44) },
+    host_free_fallow: { date: day(-68) }, pre_plant_knockdown: { date: day(-31) },
+  });
+  const state = withGatesCleared(farm({ cycles, gateEvidence: ev }), { zoneId: 'gh4', plantedOn: day(-30), cycleId: 'c1' });
+  const v = verdict(state, 'gh4');
+  assert.equal(v.ok, true, blockingIds(v).join(', '));
 });
 
 // --- Gate 1 (FR-FARM-05) ------------------------------------------------------

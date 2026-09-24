@@ -453,6 +453,15 @@ function openEvidence(ctx, d, watched = null) {
     + (d.item === 'traps_installed'
       ? field('How many traps are up', input('count', { type: 'number', inputmode: 'numeric', required: true }),
         'One per 6 m² at plant height.') : '')
+    + (d.item === 'solarise'
+      ? field('Plastic went on', input('coverFrom', { type: 'date', required: true }))
+        + field('Plastic lifted', input('coverTo', { type: 'date' }),
+          'Leave blank while it is still on. One continuous span of 21 to 28 days; the date above '
+          + 'is the day you record this.') : '')
+    + (d.item === 'pre_plant_knockdown'
+      ? note('warn', 'Within 48 h before transplant',
+        '<small>Spray the day before transplant, or the day before that, and keep the doors shut '
+        + 'overnight. A knockdown sprayed earlier, or on transplant day, does not count.</small>') : '')
     + (d.item === 'route_b_wait'
       ? field('Lime route used', select('route', [{ value: 'A', label: 'Route A — ag lime' }, { value: 'B', label: 'Route B — hydrated lime' }], 'A'),
         'For Route B, set the date above to the day the hydrated lime went on.') : '')
@@ -467,11 +476,17 @@ async function saveEvidence(ctx, form) {
   const data = readForm(form);
   if (!data.gate || !data.itemId || !data.zoneId) { toast('Say which gate line this is', true); return; }
   if (!String(data.note || '').trim()) { toast('Say what was done', true); return; }
+  if (data.itemId === 'solarise' && !data.coverFrom) { toast('Say the day the plastic went on', true); return; }
+  if (data.coverFrom && data.coverTo && data.coverTo < data.coverFrom) {
+    toast('The plastic cannot come off before it went on', true); return;
+  }
   await ctx.store.dispatch('gate.evidence', {
     id: uid('ev'), gate: data.gate, itemId: data.itemId, zoneId: data.zoneId,
     cycleId: data.cycleId || null, date: data.date || isoDate(), note: data.note,
     count: data.count ? Number(data.count) : undefined,
     route: data.route || undefined,
+    coverFrom: data.coverFrom || undefined,
+    coverTo: data.coverTo || undefined,
     photo: photoPayload() || undefined,
     supervision: supervisionStamp(gateWatch),
   });

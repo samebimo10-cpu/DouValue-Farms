@@ -1030,6 +1030,11 @@
           "soil + nematode sample sent to the lab; if not clear, extend solarisation / biofumigant and re-test",
           "Trichoderma drench after the plastic is lifted"
         ],
+        "cover_days": {
+          "min": 21,
+          "max": 28,
+          "rule": "one continuous span under sealed plastic, from the day it went on to the day it was lifted: 21 to 28 days (3-4 weeks)"
+        },
         "gate_link": "G0"
       },
       {
@@ -1052,6 +1057,8 @@
           "Cypermethrin 10EC 1 ml/L (IRAC 3A) over all interior surfaces within 48 h of transplant, doors shut overnight",
           "Mancozeb 80WP 2.5 g/L (FRAC M3) on beds, floor and posts"
         ],
+        "within_hours_before_transplant": 48,
+        "timing_rule": "sprayed within 48 h before transplant, with the doors shut overnight in between: recorded the day before transplant or the day before that, never on transplant day",
         "gate_link": "G1"
       }
     ],

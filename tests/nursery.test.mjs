@@ -270,6 +270,11 @@ test('the clean-restart protocol in the rules JSON is in docs/build-rules.md wor
     for (const line of step.pass_all) assert.ok(md.includes(line), line);
   }
   assert.ok(md.includes(cr.gate_rule));
+  // The two timing windows the gate enforces are in the readable copy too.
+  const solarise = cr.steps.find((st) => st.cover_days);
+  const knockdown = cr.steps.find((st) => st.within_hours_before_transplant);
+  assert.ok(md.includes(solarise.cover_days.rule), 'solarisation window');
+  assert.ok(md.includes(knockdown.timing_rule), 'knockdown window');
   assert.ok(md.includes(`rules-${RULES.meta.version.replace('rules-', '')}`));
   // The register marks exactly those two houses.
   assert.deepEqual(RULES.zones.filter((z) => z.protocol === 'clean-restart').map((z) => z.id), cr.zones);
