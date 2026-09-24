@@ -469,16 +469,25 @@ const shellActions = {
     if (!/^\d{4}$/.test(String(data.pin || ''))) { toast('PIN must be exactly 4 digits', true); return; }
     if (!String(data.name || '').trim()) { toast('Enter your name', true); return; }
     const id = 'person_ceo';
-    await c.store.dispatchMany([
-      { type: 'settings.update', payload: { farmName: data.farmName || 'DouValue Farms Limited' } },
-      { type: 'person.upsert', payload: {
-        id, name: String(data.name).trim(), role: 'ceo', pinHash: await hashPin(data.pin), dailyRate: 0 } },
-    ]);
+    // FR-FARM-01: a new farm starts with the real zones from the rules' block
+    // register — GH-01 to GH-05, OF-01, OF-02 (the nursery), OF-03, RUK-01.
+    // The sample farm is seeded elsewhere (sample.js) and is left as it is.
+    const { newFarmEvents } = await import('../domain/farm.js');
+    const { peekRules } = await import('../rules.js');
+    const rules = peekRules();
+    await c.store.dispatchMany(newFarmEvents({
+      farmName: data.farmName,
+      owner: { id, name: String(data.name).trim(), pinHash: await hashPin(data.pin), dailyRate: 0 },
+      rules,
+    }));
     c.store.setUser(c.store.state.people[id]);
     adoptLanguage(c.store.state.people[id]);
     sessionStorage.setItem('douvalue.user', id);
     navigate('#/dashboard');
-    toast('CEO account created. Next: add your farm manager under People.');
+    toast(rules
+      ? 'CEO account and the farm\'s zones created. Next: add your farm manager under People.'
+      // The register is in the rules file; with no rules there is nothing true to seed.
+      : 'CEO account created. The rules file did not load, so add the zones under Zones.', !rules);
   },
   'load-sample': async (c) => {
     const { seedSampleFarm } = await import('../sample.js');

@@ -22,6 +22,7 @@ const day = (n) => {
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
 };
+import { withGatesCleared } from './helpers/gates-cleared.mjs';
 const at = (date, hour = 9) => `${date}T${String(hour).padStart(2, '0')}:00:00.000Z`;
 
 const CEO = { id: 'u_ceo', name: 'Owner', role: 'ceo' };
@@ -321,12 +322,12 @@ test('recommendations come back in urgency order, safety first at equal urgency'
 });
 
 test('a farm with nothing wrong is told so, rather than given filler', () => {
-  const state = farm({
+  const state = withGatesCleared(farm({
     plots: { b1: { id: 'b1', name: 'Bed 1', areaM2: 800, drainage: 'raised', soilPh: 6.2 } },
     harvests: steadyHarvests(120),
     sales: [{ id: 's1', date: day(-2), kg: 900, amount: 900 * 2600 }],
     expenses: [{ id: 'e1', date: day(-10), amount: 100000, category: 'inputs' }],
-  });
+  }), { zoneId: 'b1', plantedOn: day(-120), cycleId: 'c1' });
   const result = advise(buildBrief(state, CEO, { today: TODAY }));
 
   // Seasonal advice is allowed to stand — September really is the wet peak here,

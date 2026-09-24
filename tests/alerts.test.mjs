@@ -22,6 +22,7 @@ const {
 const { digest, digestText, digestSize, exceptions } = await import(new URL('domain/digest.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
+import { withGatesCleared } from './helpers/gates-cleared.mjs';
 const NOW = '2026-09-16T08:00:00.000Z';
 const hoursAgo = (h) => new Date(new Date(NOW).getTime() - h * 3600000).toISOString();
 const day = (n) => {
@@ -363,7 +364,10 @@ test('two readings are not a trend', () => {
 // --- FR-REP-01/02: the digest ---------------------------------------------
 
 test('a quiet farm gets one line, not a report', () => {
-  const text = digestText(farm(), { now: NOW });
+  // Quiet means planted through its gates (FR-GATE-00/01/06, FR-FARM-05).
+  let quiet = withGatesCleared(farm(), { zoneId: 'gh1', plantedOn: day(-40), cycleId: 'c1' });
+  quiet = withGatesCleared(quiet, { zoneId: 'fa', plantedOn: day(-50), cycleId: 'c2' });
+  const text = digestText(quiet, { now: NOW });
 
   assert.equal(text.split('\n').length, 2, text);
   assert.match(text, /Nothing needs you today/);

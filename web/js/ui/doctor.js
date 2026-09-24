@@ -657,7 +657,8 @@ function evidenceForm(gate, zoneId, cycle) {
     + field('What was done', textarea('note', { rows: 2, placeholder: 'e.g. drip run at 1.2 bar, no blocked emitters' }))
     + field('Count, if it is a count', input('count', { type: 'number', inputmode: 'numeric' }),
       'Traps, for instance. Leave blank otherwise.')
-    + field('Batch ID, for a seedling release', input('batchId'))
+    + '<p><small>A seedling release is recorded on the nursery\'s gate screen, against the batch '
+    + 'and the block it goes to (FR-FARM-05).</small></p>'
     + '<input type="file" accept="image/*" capture="environment" name="photo" class="photo-input" data-role="evidence">'
     + button('📷 Photo', 'pick-photo', { cls: 'btn-ghost btn-block' })
     + '<div class="photo-preview"></div>'

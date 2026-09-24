@@ -5,7 +5,7 @@
       "Revision 5.1 Acid Soil Correction, Main Farm"
     ],
     "precedence": "Where Rev 5.1 and Rev 5 disagree, Rev 5.1 wins.",
-    "version": "rules-1.2",
+    "version": "rules-1.3",
     "decisions": "C-1 to C-18 applied"
   },
   "zones": [
@@ -985,6 +985,80 @@
       "batch ID recorded against the block it goes to"
     ],
     "gate_link": "Seedling release check is added to Gate 1; a block cannot log transplant without a released seedling batch."
+  },
+  "clean_restart": {
+    "name": "Clean-restart protocol",
+    "zones": [
+      "GH-04",
+      "GH-05"
+    ],
+    "why": "A between-cycle reset that breaks the previous crop's thrips, tospovirus and nematode load before a single new seedling goes in. Thrips, whitefly, mosaic and tospovirus survive in old plants, debris, weeds and volunteers; nematodes survive in the soil.",
+    "timing_note": "Tear down on a day you are not moving into the live houses afterwards; wash or change over-clothes before entering them; keep the GH-04/GH-05 doors shut during the fallow break.",
+    "steps": [
+      {
+        "id": "terminate_remove",
+        "step": 1,
+        "name": "Terminate and remove the old crop",
+        "when": "Day 1",
+        "pass_all": [
+          "every old plant cut and bagged: stems, leaves, roots and fallen debris; not shredded or composted near the houses",
+          "carried off-site and burned or buried far from all houses and the nursery",
+          "old drip mulch / ground cover lifted",
+          "every weed and volunteer pepper removed inside and for 5 m around the house"
+        ]
+      },
+      {
+        "id": "sanitise",
+        "step": 2,
+        "name": "Sanitise the structure and system",
+        "when": "Day 1-2",
+        "pass_all": [
+          "net walls, posts, benches and doors washed with detergent, then 10% bleach or approved disinfectant (net-wall folds included)",
+          "drip lines flushed with chlorine or acid line-cleaner, then clear water; blocked emitters cleared or replaced",
+          "tools, stakes and ties soaked in 10% bleach for 30 min, or replaced",
+          "all old sticky traps removed and disposed of off-site (fresh traps go in at Gate 1)"
+        ]
+      },
+      {
+        "id": "solarise",
+        "step": 3,
+        "name": "Solarise for Gate 0",
+        "when": "3-4 weeks",
+        "pass_all": [
+          "clear polythene over the beds, sealed tight, 3-4 weeks",
+          "compost 20-30 kg/bed; neem cake at plastic lift (T-7, per C-14)",
+          "soil + nematode sample sent to the lab; if not clear, extend solarisation / biofumigant and re-test",
+          "Trichoderma drench after the plastic is lifted"
+        ],
+        "gate_link": "G0"
+      },
+      {
+        "id": "host_free_fallow",
+        "step": 4,
+        "name": "Host-free fallow (green-bridge break)",
+        "when": "whole solarisation window",
+        "pass_all": [
+          "no pepper or solanaceous plant, weed or volunteer in the house for the whole fallow",
+          "minimum break is the solarisation period; longer if neighbouring houses are under heavy thrips pressure"
+        ],
+        "min_days": 21
+      },
+      {
+        "id": "pre_plant_knockdown",
+        "step": 5,
+        "name": "Pre-plant knockdown for Gate 1",
+        "when": "within 48 h of transplant",
+        "pass_all": [
+          "Cypermethrin 10EC 1 ml/L (IRAC 3A) over all interior surfaces within 48 h of transplant, doors shut overnight",
+          "Mancozeb 80WP 2.5 g/L (FRAC M3) on beds, floor and posts"
+        ],
+        "gate_link": "G1"
+      }
+    ],
+    "gate_rule": "No seedling enters GH-04 or GH-05 until every step is recorded for this restart, Gate 0 is cleared (Farm Doctor check, Farm Manager confirms, Owner approves; C-17) and Gate 1 is complete. Steps count only if recorded after the previous cycle in that house ended.",
+    "after_replant": "Extra watch for the first 3 weeks: full scouting round twice weekly (Day 2 and Day 5); see scouting.frequency.extra_watch.",
+    "superseded_in_source": "Rev 5 says 'signed off by the agronomist' (now C-17), neem cake '2 weeks in' (now C-14) and names Punch/Vanguish/Lion Seal (now C-18).",
+    "source": "Rev 5 p16-17"
   },
   "farm_doctor": {
     "role": "In-app diagnostic and planning assistant that takes the place of the site agronomist for day-to-day decisions. It advises; people decide.",

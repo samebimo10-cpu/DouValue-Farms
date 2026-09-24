@@ -16,6 +16,7 @@ const {
   canPlant, canTreat, gatesForZone, gateBoard, rotationCheck, GATE_RULES,
 } = await import(new URL('domain/gates.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
+const { withGatesCleared } = await import(new URL('./helpers/gates-cleared.mjs', import.meta.url).href);
 
 // FR-GATE-05 now reads the rotation out of the rules file rather than out of a
 // hard-coded product table, so the rules have to be on the table before a gate
@@ -51,10 +52,27 @@ function farm(overrides = {}) {
   };
 }
 
+/**
+ * A soil test as FR-GATE-01 wants it: three points from a meter calibrated
+ * that morning, photographed, with a clean nematode result from a named lab.
+ */
+const soil = (o = {}) => {
+  const ph = o.ph ?? 6.3;
+  return {
+    id: 't1', zoneId: 'gh1', date: day(-10), ph, readings: [ph, ph, ph], calibrated: true,
+    photo: { dataUrl: 'data:image/jpeg;base64,x' }, nematode: 'clean', lab: 'Rivers Soil Lab', ...o,
+  };
+};
+
 /** Both soil gates satisfied, so a test only has to break the one it is about. */
-const cleanTests = (zoneId = 'gh1', date = day(-10)) => [
-  { id: 't1', zoneId, date, ph: 6.3, nematode: 'clean' },
-];
+const cleanTests = (zoneId = 'gh1', date = day(-10)) => [soil({ zoneId, date })];
+
+/**
+ * Everything except the soil cleared for gh1 — the rest of Gate 0 and all of
+ * Gate 1 — so a test about the soil only meets the soil.
+ */
+const ready = (overrides = {}, { zoneId = 'gh1', plantedOn = TODAY, cycleId = null } = {}) =>
+  withGatesCleared(farm(overrides), { zoneId, plantedOn, cycleId, soil: false });
 
 const names = (v) => v.blocking.map((g) => g.name).join(', ');
 
@@ -64,7 +82,8 @@ test('planting is blocked on a zone that has never been tested', () => {
   const verdict = canPlant(farm(), 'gh1', { today: TODAY });
 
   assert.equal(verdict.ok, false);
-  assert.equal(verdict.blocking.length, 2, names(verdict));
+  assert.ok(verdict.blocking.some((g) => g.id === 'ph'), names(verdict));
+  assert.ok(verdict.blocking.some((g) => g.id === 'nematode'), names(verdict));
   // Never tested is not a softer state than tested-and-failed. That distinction
   // is exactly how untested ground got planted in Season 1.
   assert.equal(verdict.gates.find((g) => g.id === 'ph').state, 'unknown');
@@ -73,25 +92,27 @@ test('planting is blocked on a zone that has never been tested', () => {
 
 test('planting is blocked when pH is outside 5.5 to 7.0', () => {
   for (const ph of [4.8, 5.4, 7.1, 8.2]) {
-    const state = farm({ soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph, nematode: 'clean' }] });
+    const state = ready({ soilTests: [soil({ date: day(-5), ph })] });
     const verdict = canPlant(state, 'gh1', { today: TODAY });
     assert.equal(verdict.ok, false, `pH ${ph} should be refused`);
+    assert.deepEqual(verdict.blocking.map((g) => g.id), ['ph']);
     assert.match(verdict.gates.find((g) => g.id === 'ph').why, new RegExp(String(ph)));
   }
 });
 
 test('planting is allowed at the edges of the range, which are inside it', () => {
   for (const ph of [5.5, 6.2, 7.0]) {
-    const state = farm({ soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph, nematode: 'clean' }] });
-    assert.equal(canPlant(state, 'gh1', { today: TODAY }).ok, true, `pH ${ph} should pass`);
+    const state = ready({ soilTests: [soil({ date: day(-5), ph })] });
+    const verdict = canPlant(state, 'gh1', { today: TODAY });
+    assert.equal(verdict.ok, true, `pH ${ph} should pass: ${names(verdict)}`);
   }
 });
 
 test('a reading taken before liming does not open the gate', () => {
   // The whole reason for testing early is to lime. A pre-correction reading
   // that happens to be in range says nothing about what the roots will meet.
-  const state = farm({
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.0, nematode: 'clean', beforeCorrection: true }],
+  const state = ready({
+    soilTests: [soil({ date: day(-5), ph: 6.0, beforeCorrection: true })],
   });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
 
@@ -101,8 +122,8 @@ test('a reading taken before liming does not open the gate', () => {
 
 test('a stale reading stops counting', () => {
   const tooOld = GATE_RULES.soilTestMaxAgeDays + 1;
-  const state = farm({
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-tooOld), ph: 6.3, nematode: 'clean' }],
+  const state = ready({
+    soilTests: [soil({ date: day(-tooOld) })],
   });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
 
@@ -111,13 +132,14 @@ test('a stale reading stops counting', () => {
 });
 
 test('the newest test is the one that counts', () => {
-  const state = farm({
+  const state = ready({
     soilTests: [
-      { id: 't1', zoneId: 'gh1', date: day(-40), ph: 4.5, nematode: 'clean' },   // before liming
-      { id: 't2', zoneId: 'gh1', date: day(-3), ph: 6.4, nematode: 'clean' },    // after
+      soil({ id: 't1', date: day(-40), ph: 4.5 }),   // before liming
+      soil({ id: 't2', date: day(-3), ph: 6.4 }),    // after
     ],
   });
-  assert.equal(canPlant(state, 'gh1', { today: TODAY }).ok, true);
+  const verdict = canPlant(state, 'gh1', { today: TODAY });
+  assert.equal(verdict.ok, true, names(verdict));
 });
 
 test('a bed cleared before transplant does not turn red as the test ages', () => {
@@ -125,18 +147,18 @@ test('a bed cleared before transplant does not turn red as the test ages', () =>
   // a growing crop re-blocks its own zone ninety days in, people learn that red
   // means nothing, and then it does.
   const tested = day(-130);
-  const state = farm({
+  const state = ready({
     cycles: { c1: { id: 'c1', plotId: 'gh1', cropId: 'bell', transplantDate: day(-120), status: 'active' } },
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: tested, ph: 6.2, nematode: 'clean' }],
-  });
+    soilTests: [soil({ date: tested, ph: 6.2 })],
+  }, { plantedOn: day(-120), cycleId: 'c1' });
 
   const verdict = canPlant(state, 'gh1', { today: TODAY });
   assert.equal(verdict.ok, true, names(verdict));
 });
 
 test('but an empty zone is judged as of today, which is the decision in front of you', () => {
-  const state = farm({
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-130), ph: 6.2, nematode: 'clean' }],
+  const state = ready({
+    soilTests: [soil({ date: day(-130), ph: 6.2 })],
   });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
 
@@ -145,10 +167,10 @@ test('but an empty zone is judged as of today, which is the decision in front of
 });
 
 test('a test taken after the crop went in does not retroactively clear the planting', () => {
-  const state = farm({
+  const state = ready({
     cycles: { c1: { id: 'c1', plotId: 'gh1', cropId: 'bell', transplantDate: day(-60), status: 'active' } },
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.2, nematode: 'clean' }],
-  });
+    soilTests: [soil({ date: day(-5), ph: 6.2 })],
+  }, { plantedOn: day(-60), cycleId: 'c1' });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
 
   assert.equal(verdict.ok, false, 'testing afterwards is not the same as testing first');
@@ -157,8 +179,8 @@ test('a test taken after the crop went in does not retroactively clear the plant
 // --- FR-GATE-02: the nematode gate ---------------------------------------
 
 test('a nematode result that is not clean blocks planting and says what to do instead', () => {
-  const state = farm({
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.3, nematode: 'root-knot detected' }],
+  const state = ready({
+    soilTests: [soil({ date: day(-5), nematode: 'root-knot detected' })],
   });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
   const gate = verdict.gates.find((g) => g.id === 'nematode');
@@ -171,7 +193,7 @@ test('a nematode result that is not clean blocks planting and says what to do in
 test('a pH test alone does not clear the nematode gate', () => {
   // The two are separate samples and separate questions. Season 1 passed one
   // of them.
-  const state = farm({ soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.3 }] });
+  const state = ready({ soilTests: [soil({ date: day(-5), nematode: null, lab: null })] });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
 
   assert.equal(verdict.ok, false);
@@ -182,7 +204,7 @@ test('a pH test alone does not clear the nematode gate', () => {
 // --- FR-GATE-03: purchased topsoil ---------------------------------------
 
 test('an untested topsoil batch blocks the zone it was put in', () => {
-  const state = farm({
+  const state = ready({
     plots: { gh1: { id: 'gh1', name: 'GH-01', type: 'greenhouse', topsoilBatchId: 'b1' } },
     topsoilBatches: { b1: { id: 'b1', supplier: 'Rumuokoro loader', date: day(-8) } },
     soilTests: cleanTests(),
@@ -196,12 +218,13 @@ test('an untested topsoil batch blocks the zone it was put in', () => {
 });
 
 test('a batch tested clean clears the zone it fills', () => {
-  const state = farm({
+  const state = ready({
     plots: { gh1: { id: 'gh1', name: 'GH-01', type: 'greenhouse', topsoilBatchId: 'b1' } },
     topsoilBatches: { b1: { id: 'b1', supplier: 'Rumuokoro loader', date: day(-8) } },
-    soilTests: [{ id: 't1', batchId: 'b1', date: day(-6), ph: 6.1, nematode: 'clean' }],
+    soilTests: [soil({ zoneId: undefined, batchId: 'b1', date: day(-6), ph: 6.1 })],
   });
-  assert.equal(canPlant(state, 'gh1', { today: TODAY }).ok, true);
+  const verdict = canPlant(state, 'gh1', { today: TODAY });
+  assert.equal(verdict.ok, true, names(verdict));
 });
 
 test('a zone with no purchased topsoil is not asked about topsoil', () => {
@@ -303,22 +326,22 @@ test('the rotation block reaches the treatment gate, not just the warning screen
 // --- FR-GATE-07: overrides ------------------------------------------------
 
 test('an Owner override opens the gate but does not erase what it found', () => {
-  const state = farm({
+  const state = ready({
     gateOverrides: [{ id: 'o1', gate: 'nematode', zoneId: 'gh1', by: 'u_owner',
       reason: 'Lab result lost in transit; second sample already sent', at: `${day(-1)}T09:00:00Z` }],
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.3 }],
+    soilTests: [soil({ date: day(-5), nematode: null, lab: null })],
   });
   const verdict = canPlant(state, 'gh1', { today: TODAY });
   const gate = verdict.gates.find((g) => g.id === 'nematode');
 
-  assert.equal(verdict.ok, true, 'the Owner may decide to go ahead');
+  assert.equal(verdict.ok, true, `the Owner may decide to go ahead: ${names(verdict)}`);
   assert.equal(gate.state, 'overridden');
   assert.ok(gate.blockedWhy, 'what the gate found is kept on the record');
   assert.equal(gate.override.reason, 'Lab result lost in transit; second sample already sent');
 });
 
 test('an override of one gate does not open another', () => {
-  const state = farm({
+  const state = ready({
     gateOverrides: [{ id: 'o1', gate: 'nematode', zoneId: 'gh1', by: 'u_owner',
       reason: 'Second sample already sent to the lab', at: `${day(-1)}T09:00:00Z` }],
   });
@@ -342,8 +365,8 @@ test('an override for one zone does not travel to another', () => {
 });
 
 test('a revoked override stops standing', () => {
-  const state = farm({
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-5), ph: 6.3 }],
+  const state = ready({
+    soilTests: [soil({ date: day(-5), nematode: null, lab: null })],
     gateOverrides: [{ id: 'o1', gate: 'nematode', zoneId: 'gh1', by: 'u_owner',
       reason: 'Lab result lost in transit', at: `${day(-2)}T09:00:00Z`, revoked: true }],
   });
@@ -398,17 +421,19 @@ test('a farm hand cannot confirm their own diagnosis', () => {
 // --- The board ------------------------------------------------------------
 
 test('the gates board puts the blocked zones first', () => {
-  const state = farm({
+  let state = farm({
     plots: {
-      gh1: { id: 'gh1', name: 'GH-01', type: 'greenhouse' },                 // nothing tested
+      gh1: { id: 'gh1', name: 'GH-01', type: 'greenhouse' },                 // nothing done
       gh2: { id: 'gh2', name: 'GH-02', type: 'greenhouse' },                 // clear
-      gh3: { id: 'gh3', name: 'GH-03', type: 'greenhouse' },                 // pH only
+      gh3: { id: 'gh3', name: 'GH-03', type: 'greenhouse' },                 // all but the nematode assay
     },
     soilTests: [
-      { id: 't2', zoneId: 'gh2', date: day(-4), ph: 6.2, nematode: 'clean' },
-      { id: 't3', zoneId: 'gh3', date: day(-4), ph: 6.2 },
+      soil({ id: 't2', zoneId: 'gh2', date: day(-4), ph: 6.2 }),
+      soil({ id: 't3', zoneId: 'gh3', date: day(-4), ph: 6.2, nematode: null, lab: null }),
     ],
   });
+  state = withGatesCleared(state, { zoneId: 'gh2', plantedOn: TODAY, soil: false });
+  state = withGatesCleared(state, { zoneId: 'gh3', plantedOn: TODAY, soil: false });
   const board = gateBoard(state, { today: TODAY });
 
   assert.deepEqual(board.map((r) => r.zone.name), ['GH-01', 'GH-03', 'GH-02']);

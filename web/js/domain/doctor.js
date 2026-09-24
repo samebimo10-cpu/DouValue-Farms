@@ -39,7 +39,8 @@ import {
 } from './catalogue.js';
 import { rotationVerdict, week10Actives } from './rotation.js';
 import { PROBLEM_BY_ID } from './pests.js';
-import { latestSoilTest, nematodeGate, phGate } from './gates.js';
+import { gateSignoff, latestSoilTest, nematodeGate, phGate, zoneWindow } from './gates.js';
+import { releasedFor } from './nursery.js';
 
 /**
  * The catalogue, in the shape the rest of this file reads.
@@ -1108,7 +1109,7 @@ export function awaitingConfirmation(state) {
  * file; this array only says which id each line is recorded under and how the
  * app can tell, from records it already holds, that the line is satisfied.
  */
-const GATE_ITEMS = {
+export const GATE_ITEMS = {
   G0: ['lab_report', 'ph_three_point', 'doctor_check'],
   G1: ['inputs_on_site', 'drip_pressure', 'spacing_pegged', 'traps_installed',
     'sops_live', 'scout_roster', 'route_b_wait', 'seedling_release'],
@@ -1116,11 +1117,15 @@ const GATE_ITEMS = {
 };
 
 /** The latest thing a person recorded against one line of one gate. */
-export function recordedEvidence(state, gateId, zoneId, itemId, { cycleId = null } = {}) {
+export function recordedEvidence(state, gateId, zoneId, itemId, { cycleId = null, since = null, until = null } = {}) {
+  const day = (e) => e.date || (e.at || '').slice(0, 10);
   return [...((state && state.gateEvidence) || [])]
     .filter((e) => e.gate === gateId && e.itemId === itemId)
     .filter((e) => (e.zoneId ? e.zoneId === zoneId : true))
     .filter((e) => (cycleId && e.cycleId ? e.cycleId === cycleId : true))
+    // Evidence from before the previous cycle ended describes the last crop's
+    // house, not this one's (FR-GATE-01's window, applied to every line).
+    .filter((e) => (!since || day(e) > since) && (!until || day(e) <= until))
     .sort((a, b) => ((a.at || a.date || '') < (b.at || b.date || '') ? 1 : -1))[0] || null;
 }
 
@@ -1154,6 +1159,7 @@ export function gateEvidence(state, {
 } = {}) {
   const zone = ((state && state.plots) || {})[zoneId] || null;
   const out = [];
+  const w = zoneWindow(state || { plots: {} }, zoneId, today);
 
   for (const gateId of gates) {
     const spec = gateSpec(gateId, rules);
@@ -1161,7 +1167,9 @@ export function gateEvidence(state, {
     const ids = GATE_ITEMS[gateId] || labels.map((_, i) => `item_${i + 1}`);
     const items = ids.map((id, i) => {
       const label = labels[i] || id.replace(/_/g, ' ');
-      return checkGateItem(state, { gateId, itemId: id, label, zoneId, cycleId, today, rules, zone });
+      // G4 is about the cycle it closes; the others about this planting.
+      const window = gateId === 'G4' ? {} : { since: w.since };
+      return checkGateItem(state, { gateId, itemId: id, label, zoneId, cycleId, today, rules, zone, ...window });
     });
 
     // Gate 4's evidence is a document, and the Doctor drafts it (FR-DOC-07).
@@ -1232,8 +1240,27 @@ export function gateEvidence(state, {
   };
 }
 
-function checkGateItem(state, { gateId, itemId, label, zoneId, cycleId, today, rules, zone }) {
-  const recorded = recordedEvidence(state, gateId, zoneId, itemId, { cycleId });
+/**
+ * One line of one gate, judged — the same check the Gates screen reads
+ * (gates.js → gateModel), so the Farm Doctor and the gate cannot disagree
+ * about a line. `since`/`until` bound the evidence to this planting's window;
+ * `batchId` names the seedling batch for the release line.
+ */
+export function gateItem(state, {
+  gateId, itemId, label = null, zoneId, cycleId = null, today = isoDate(), since = null, until = null,
+  batchId = null, rules = peekRules(),
+} = {}) {
+  const spec = gateSpec(gateId, rules);
+  const i = (GATE_ITEMS[gateId] || []).indexOf(itemId);
+  const text = label || ((spec && spec.pass_all) || [])[i] || itemId.replace(/_/g, ' ');
+  const zone = ((state && state.plots) || {})[zoneId] || null;
+  return checkGateItem(state, { gateId, itemId, label: text, zoneId, cycleId, today, rules, zone, since, until, batchId });
+}
+
+function checkGateItem(state, {
+  gateId, itemId, label, zoneId, cycleId, today, rules, zone, since = null, until = null, batchId = null,
+}) {
+  const recorded = recordedEvidence(state, gateId, zoneId, itemId, { cycleId, since, until });
 
   switch (itemId) {
     // --- Gate 0 -----------------------------------------------------------
@@ -1284,32 +1311,11 @@ function checkGateItem(state, { gateId, itemId, label, zoneId, cycleId, today, r
     }
 
     case 'doctor_check': {
-      const review = ((state && state.doctorOutputs) || [])
-        .filter((o) => o.kind === 'gate-review' && (o.subject || {}).zoneId === zoneId)
-        .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1))[0];
-      if (!review) {
-        return item(itemId, label, 'missing', {
-          why: 'No Farm Doctor gate check has been saved for this zone.',
-          fix: 'Run this check and save it, then the Farm Manager confirms and the Owner approves.',
-        });
-      }
-      if (!review.confirmedBy) {
-        return item(itemId, label, 'missing', {
-          why: `A gate check from ${(review.at || '').slice(0, 10)} is on file but nobody has confirmed it.`,
-          fix: `The ${CONFIRMS['gate-review'].who} confirms it. The Farm Doctor cannot (${LIMITS.gate.rule})`,
-          from: { kind: 'doctor-output', id: review.id },
-        });
-      }
-      if (!review.approvedBy) {
-        return item(itemId, label, 'missing', {
-          why: 'The gate check is confirmed but the Owner has not approved it.',
-          fix: 'FR-GATE-00: the Owner approves Gate 0 and Gate 4.',
-          from: { kind: 'doctor-output', id: review.id },
-        });
-      }
-      return item(itemId, label, 'have', {
-        why: 'Checked, confirmed by the Farm Manager and approved by the Owner.',
-        from: { kind: 'doctor-output', id: review.id },
+      // FR-GATE-00: the same sign-off the gate itself reads (gates.js).
+      const w = zoneWindow(state, zoneId, today);
+      const signoff = gateSignoff(state, zoneId, 'G0', { since: w.since, until: w.judged });
+      return item(itemId, label, signoff.state === 'pass' ? 'have' : 'missing', {
+        why: signoff.why, fix: signoff.fix || '', from: signoff.from || null,
       });
     }
 
@@ -1395,23 +1401,24 @@ function checkGateItem(state, { gateId, itemId, label, zoneId, cycleId, today, r
     }
 
     case 'seedling_release': {
+      // FR-FARM-05: a batch that passed the nursery release check and was
+      // released to this block — read from the batch record, not from a note.
       const checks = ((rules && rules.nursery) || {}).seedling_release_check || [];
-      if (!recorded) {
+      const found = releasedFor(state, zoneId, {
+        asOf: until || today, since, batchId, cycleId,
+      });
+      if (!found.batch) {
         return item(itemId, label, 'missing', {
-          why: 'No nursery release check is recorded for the batch going into this block.',
+          why: found.why,
           fix: checks.length
-            ? `FR-FARM-05: the batch passes ${checks.length} checks first — ${checks.join('; ')}.`
-            : 'Record the nursery release check for the batch.',
+            ? `Release a batch from the nursery to this block. It passes ${checks.length} checks first — ${checks.join('; ')}.`
+            : 'Release a seedling batch from the nursery to this block.',
         });
       }
-      if (!recorded.batchId) {
-        return item(itemId, label, 'missing', {
-          why: 'A release check is recorded but it does not name the batch.',
-          fix: 'The batch ID is what links the seedlings to this block. Record it.',
-          from: { kind: 'gate-evidence', id: recorded.id || null },
-        });
-      }
-      return fromRecord(itemId, label, recorded, '');
+      return item(itemId, label, 'have', {
+        why: `Batch ${found.batch.label || found.batch.id} released ${found.batch.release.date} to this block.`,
+        from: { kind: 'seedling-batch', id: found.batch.id },
+      });
     }
 
     // --- The lines only a person can answer, on either gate ---------------

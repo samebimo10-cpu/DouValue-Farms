@@ -13,6 +13,7 @@
 // The decision of which to offer is separated from the camera work below so it
 // can be tested without one.
 
+import { zoneTypeLabel } from '../domain/farm.js';
 import { badge, button, closeSheet, esc, note, openSheet, toast } from './kit.js';
 import { matchZone, parseZoneCode } from '../domain/qr.js';
 
@@ -137,7 +138,7 @@ export function zoneListSheet(state, { title = 'Which zone?', act = 'choose-zone
     + (zones.length
       ? '<ul class="list big">' + zones.map((z) => `<li data-act="${esc(act)}" data-id="${esc(z.id)}">`
         + `<div class="grow"><b>${esc(z.name)}</b>`
-        + `<small>${esc(z.type === 'field' ? 'Open field' : 'Greenhouse')}</small></div>`
+        + `<small>${esc(zoneTypeLabel(z))}</small></div>`
         + badge('choose', 'muted') + '</li>').join('') + '</ul>'
       : '<p>No zones have been added yet.</p>');
 }

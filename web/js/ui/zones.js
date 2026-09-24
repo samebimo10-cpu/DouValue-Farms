@@ -16,7 +16,8 @@ import {
 import { can } from '../store.js';
 import { coverBoard, POSITION_TEMPLATE } from '../domain/positions.js';
 import { qrSvg, zoneCode } from '../domain/qr.js';
-import { gatesForZone } from '../domain/gates.js';
+import { gatesForZone, isBlocking } from '../domain/gates.js';
+import { isNursery, zoneTypeLabel } from '../domain/farm.js';
 import { tasksFor } from '../domain/schedule.js';
 import { isoDate, uid } from '../util.js';
 
@@ -109,14 +110,14 @@ function zoneList(ctx, zones, today) {
   return `<h2 class="section">Zones</h2>${card(
     '<ul class="list">' + live.map((z) => {
       const gates = gatesForZone(ctx.state, z.id, { today });
-      const blocked = gates.filter((g) => g.state === 'fail' || g.state === 'unknown').length;
+      const blocked = isNursery(z) ? 0 : gates.filter(isBlocking).length;
       const due = counts.get(z.id) || 0;
       return `<li data-act="open-zone" data-id="${esc(z.id)}"><div class="grow">`
-        + `<b>${esc(z.name)}</b><small>${esc(z.type === 'field' ? 'Open field' : 'Greenhouse')}`
+        + `<b>${esc(z.name)}</b><small>${esc(zoneTypeLabel(z))}`
         + `${z.areaM2 ? ` · ${esc(z.areaM2)} m²` : ''}`
         + ` · ${due} job${due === 1 ? '' : 's'} today</small></div>`
-        + badge(blocked ? `${blocked} gate${blocked === 1 ? '' : 's'}` : 'clear',
-          blocked ? 'danger' : 'ok')
+        + (isNursery(z) ? badge('nursery', 'muted')
+          : badge(blocked ? `${blocked} to clear` : 'clear', blocked ? 'danger' : 'ok'))
         + '</li>';
     }).join('') + '</ul>',
   )}${retired.length ? card(
@@ -170,9 +171,11 @@ function openZoneSheet(ctx, id) {
     + field('What is it?', select('type', [
       { value: 'greenhouse', label: 'Greenhouse' },
       { value: 'field', label: 'Open field' },
+      { value: 'nursery', label: 'Nursery (seedlings, not a cropping block)' },
     ], zone ? zone.type || 'greenhouse' : 'greenhouse'),
       'A greenhouse is held to tighter pest thresholds — a closed room compounds a population '
-      + 'that open field would shrug off.')
+      + 'that open field would shrug off. A nursery raises seedlings and is never planted as a block '
+      + '(FR-FARM-04).')
     + field('Area in square metres', input('areaM2', {
       type: 'number', value: zone ? zone.areaM2 || '' : '', placeholder: 'e.g. 300' }))
     + field('Drainage', select('drainage', [
@@ -193,10 +196,19 @@ function openZoneSheet(ctx, id) {
 async function saveZone(ctx, form) {
   const data = readForm(form);
   if (!String(data.name || '').trim()) { toast('Give the zone a name', true); return; }
+  const before = data.id ? ctx.state.plots[data.id] : null;
+  const type = data.type || 'greenhouse';
+  if (before && before.type !== type && type === 'nursery' && Object.values(ctx.state.cycles || {})
+    .some((c) => c.plotId === before.id && c.status === 'active')) {
+    toast('Close the cycle growing in it before it becomes the nursery', true);
+    return;
+  }
   await ctx.store.dispatch('plot.upsert', {
     id: data.id || uid('zone'),
     name: data.name.trim(),
-    type: data.type || 'greenhouse',
+    type,
+    // A zone that changes type (as OF-02 did) stops carrying the rules type it was seeded with.
+    ...(before && before.type !== type ? { rulesType: null } : {}),
     areaM2: Number(data.areaM2) || 0,
     drainage: data.drainage || 'raised',
   });
@@ -363,7 +375,7 @@ export const zoneCodesView = {
       + `<div class="qr-sheet">${zones.map((z) => `<figure class="qr-card">`
         + qrSvg(zoneCode(z), { moduleSize: 6, label: `Zone code for ${z.name}` })
         + `<figcaption><b>${esc(z.name)}</b>`
-        + `<small>${esc(z.type === 'field' ? 'Open field' : 'Greenhouse')}`
+        + `<small>${esc(zoneTypeLabel(z))}`
         + `${z.areaM2 ? ` · ${esc(z.areaM2)} m²` : ''}</small>`
         + `<small>${esc(farmName)} — scan at the start of every job here</small>`
         + '</figcaption></figure>').join('')}</div>`;

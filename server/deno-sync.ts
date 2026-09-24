@@ -170,6 +170,15 @@ const EVENT_POLICY = {
   'doctor.owner-seen': { write: 'viewReports',   read: ANY },
   // FR-DOC-06: one line of a gate's evidence, recorded by whoever did the work.
   'gate.evidence':     { write: 'scout',         read: ANY, guard: guardGateEvidence },
+  // FR-FARM-04/05: the nursery. Sowing, checking and hardening a batch is
+  // field-senior work; the release check is a senior's call, like confirming a
+  // diagnosis, because a released batch is what opens Gate 1 for a block. The
+  // app re-judges every release from the batch's own record as well.
+  'seedling.sow':      { write: 'scout',         read: ANY, guard: guardSeedlingSow },
+  'seedling.check':    { write: 'scout',         read: ANY, guard: guardSeedlingRef },
+  'seedling.harden':   { write: 'scout',         read: ANY, guard: guardSeedlingRef },
+  'seedling.discard':  { write: 'scout',         read: ANY, guard: guardSeedlingRef },
+  'seedling.release':  { write: 'verifyHarvest', read: ANY, guard: guardSeedlingRelease },
   // FR-DIAG-05: a sample, from recommendation to result.
   'lab.record':        { write: 'scout',         read: ANY },
   'lab.send':          { write: 'scout',         read: ANY, guard: guardLabSend },
@@ -708,6 +717,34 @@ function guardGateEvidence(event) {
   const p = event.payload || {};
   if (!p.gate || !p.itemId) return { ok: false, why: 'Evidence must name the gate and which line of it' };
   if (!p.zoneId) return { ok: false, why: 'Evidence must name the zone it is about' };
+  return { ok: true };
+}
+
+/**
+ * FR-FARM-04 — nursery media must be clean: sterilised, solarised or
+ * bought-in; never raw soil from a cropping block (rules → nursery.rules).
+ */
+const CLEAN_MEDIA = ['sterilised', 'solarised', 'bought-in'];
+function guardSeedlingSow(event) {
+  const p = event.payload || {};
+  if (!p.id || !p.nurseryZoneId) return { ok: false, why: 'A batch needs an id and the nursery it is in' };
+  if (!CLEAN_MEDIA.includes(p.media)) {
+    return { ok: false, why: 'Nursery media must be sterilised, solarised or bought-in, never raw block soil' };
+  }
+  return { ok: true };
+}
+
+function guardSeedlingRef(event) {
+  const p = event.payload || {};
+  if (!p.batchId) return { ok: false, why: 'Say which seedling batch' };
+  return { ok: true };
+}
+
+/** FR-FARM-05 — a release names the batch and the block it goes to. */
+function guardSeedlingRelease(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which seedling batch' };
+  if (!p.zoneId) return { ok: false, why: 'A release names the block the batch goes to' };
   return { ok: true };
 }
 

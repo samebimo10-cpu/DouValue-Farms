@@ -12,6 +12,8 @@ import { buildCatalogue, canUseActive, rateFor, resolveActive, usableActives } f
 import { cropWeek, rotationVerdict, WEEK_10, week10Actives } from '../domain/rotation.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
 import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
+import { isNursery } from '../domain/farm.js';
+import { batchList } from '../domain/nursery.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
 import { confirmSummary, phraseChips } from './field-kit.js';
@@ -388,7 +390,10 @@ async function savePlot(ctx, form) {
 }
 
 function openCycleSheet(ctx) {
-  const plots = Object.values(ctx.state.plots);
+  // FR-FARM-04: the nursery is not a cropping block, so it is never offered.
+  const plots = Object.values(ctx.state.plots).filter((p) => !p.retired && !isNursery(p));
+  // FR-FARM-05: the batch going in, from those released and not yet planted.
+  const batches = batchList(ctx.state).filter((b) => b.status === 'released' && !b.usedByCycleId);
   if (!plots.length) {
     openSheet('<h2>Start a crop cycle</h2>' + empty('📍', 'Add a bed first',
       'A cycle has to sit on a bed so the app can work out plant numbers and yields.')
@@ -406,6 +411,11 @@ function openCycleSheet(ctx) {
       'The day seedlings went into the field, not the day you sowed the nursery.')
     + field('Number of plants', input('plants', { type: 'number', min: 1, step: '1', inputmode: 'numeric' }),
       'Leave empty and the app works it out from bed size and spacing.')
+    + field('Seedling batch', select('seedlingBatchId', batches.map((b) => ({
+      value: b.id,
+      label: `${b.label || b.id} — released to ${(ctx.state.plots[b.release.zoneId] || {}).name || b.release.zoneId}`,
+    })), '', { placeholder: batches.length ? 'Choose the batch going in' : 'No released batch yet' }),
+    'Gate 1: a block cannot log transplant without a batch released to it from the nursery.')
     + '<div id="cycle-hint"></div>'
     + '<button class="btn-block btn-lg" type="submit">Start cycle</button></form>');
   const sel = document.querySelector('.sheet select[name=cropId]');
@@ -438,7 +448,9 @@ async function saveCycle(ctx, form) {
   // FR-GATE-01/02/03. This is the block, not a warning: planting into untested
   // ground is one of the four things that cost Season 1, and the save simply
   // does not happen. Only the Owner can clear the way, and only on the record.
-  const verdict = canPlant(ctx.state, plot.id, { today: isoDate() });
+  const verdict = canPlant(ctx.state, plot.id, {
+    today: isoDate(), now: new Date().toISOString(), batchId: data.seedlingBatchId || null,
+  });
   if (!verdict.ok) {
     closeSheet();
     openGateBlock(ctx, plot, verdict);
@@ -449,6 +461,7 @@ async function saveCycle(ctx, form) {
   await ctx.store.dispatch('cycle.start', {
     id: uid('cyc'), plotId: data.plotId, cropId: data.cropId, variety: data.variety,
     transplantDate: data.transplantDate, plants, areaM2: plot.areaM2,
+    seedlingBatchId: data.seedlingBatchId || null,
   });
   closeSheet();
   toast(`${getCrop(data.cropId).name} started on ${plot.name}`);

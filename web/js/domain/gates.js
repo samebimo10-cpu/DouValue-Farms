@@ -19,38 +19,70 @@
 //      Season 1 started.
 //   3. Every block says the fix. A gate that says no without saying what would
 //      make it yes gets overridden, and then gates stop meaning anything.
+//
+// THE MODEL
+//
+// FR-GATE-06 asks for Gate 0 to Gate 4 from the rules, each with its pass
+// conditions and its evidence, on one screen per zone — plus the clean-restart
+// protocol for GH-04 and GH-05. gateModel() below is that model. Each gate is
+// the rules' own entry (name, when, pass_all, evidence, source), and each
+// pass_all line is a condition judged from records. The gates that stop a
+// transplant (G0, the clean restart, G1, and G4 of the previous cycle) are what
+// canPlant() reads; G2 and G3 are shown with their state, and G3 is the
+// treatment gate canTreat() enforces.
 
-import { daysBetween, isoDate } from '../util.js';
+import { addDays, daysBetween, isoDate } from '../util.js';
+import { gateSpec, peekRules } from '../rules.js';
 import { rotationVerdict } from './rotation.js';
+import { alerts } from './alerts.js';
+import { GATE_ITEMS, gateItem } from './doctor.js';
+import { isNursery, protocolOf } from './farm.js';
+import { releasedFor } from './nursery.js';
 
 /**
  * Gate thresholds.
  *
- * pH 5.5–7.0 is FR-GATE-01, straight from the requirements. The freshness
- * window is marked in the document as "[set from Rev 5.1]" and is not decided
- * yet, so it lives here with a defensible default and a name that makes its
- * provisional status obvious wherever it is read.
+ * pH 5.5–7.0 and the 5.2 hold line are the rules' soil_ph_gate (C-5). The
+ * 90-day freshness window is FR-GATE-01 (requirements v1.5): soil and pH
+ * results must be sampled after the previous cycle in the zone ended and no
+ * more than 90 days before transplant. It applies to the nematode assay as
+ * well as the pH, because the requirement names both.
  */
 export const GATE_RULES = {
   phMin: 5.5,
   phMax: 7.0,
-  // How old a soil test may be and still count. 90 days covers a nursery-to-
-  // transplant run without letting last season's reading authorise this one.
-  // AWAITING Rev 5.1: confirm with the agronomist before launch.
+  phHoldBelow: 5.2,
+  holdRetestDays: 10,
+  threePoints: 3,
   soilTestMaxAgeDays: 90,
-  // A nematode clearance is a bigger, slower test and is not re-run as often.
-  nematodeMaxAgeDays: 180,
+  nematodeMaxAgeDays: 90,
 };
 
 export const GATE_STATE = {
   pass: { label: 'Clear', tone: 'ok', icon: '✓' },
   fail: { label: 'Blocked', tone: 'danger', icon: '✕' },
   unknown: { label: 'Not tested', tone: 'danger', icon: '✕' },
+  held: { label: 'Held', tone: 'warn', icon: '!' },
   overridden: { label: 'Overridden', tone: 'warn', icon: '!' },
+  waiting: { label: 'Not yet', tone: 'muted', icon: '·' },
+  na: { label: 'Not applicable', tone: 'muted', icon: '·' },
 };
 
+/** States that let an action through. Everything else blocks. */
+const OPEN = new Set(['pass', 'overridden', 'waiting', 'na']);
+export const isBlocking = (condition) => !OPEN.has(condition.state);
+
+/** Ranks, mirroring web/js/store.js. Used to check who signed what. */
+const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const rankOfId = (state, id) => {
+  const p = ((state && state.people) || {})[id];
+  return (p && RANK[p.role]) || 0;
+};
+
+const dayOf = (r) => (r && (r.date || (r.at || '').slice(0, 10))) || '';
+
 /**
- * The day a gate is being asked about.
+ * The day a gate is being asked about, and the window its evidence must sit in.
  *
  * FR-GATE-01 puts a freshness window on the soil test, but the window is a
  * condition on *planting*, not a clock that keeps running afterwards. Judged
@@ -58,16 +90,35 @@ export const GATE_STATE = {
  * days later and the app starts re-blocking ground that passed its checks —
  * which teaches people the red means nothing.
  *
- * So for a zone with a crop in it, the question is "was this test fresh when
- * the crop went in?", and the answer never changes again. For an empty zone it
- * is "is it fresh now?", which is the decision actually in front of someone.
+ * So for a zone with a crop in it, the question is "was this true when the
+ * crop went in?", and the answer never changes again. For an empty zone it is
+ * "is it true now?", which is the decision actually in front of someone.
+ *
+ * `since` is the day the previous cycle in the zone ended. Evidence from
+ * before it describes the last crop's ground, not this one's.
  */
-function asOf(state, zoneId, today) {
-  const cycle = Object.values(state.cycles || {})
-    .filter((c) => c.plotId === zoneId && c.status === 'active')
-    .sort((a, b) => ((a.transplantDate || '') < (b.transplantDate || '') ? 1 : -1))[0];
-  return (cycle && cycle.transplantDate) || today;
+export function zoneWindow(state, zoneId, today = isoDate()) {
+  const cycles = Object.values((state && state.cycles) || {}).filter((c) => c.plotId === zoneId);
+  const active = cycles
+    .filter((c) => c.status === 'active')
+    .sort((a, b) => ((a.transplantDate || '') < (b.transplantDate || '') ? 1 : -1))[0] || null;
+  const judged = (active && active.transplantDate) || today;
+  const previous = cycles
+    .filter((c) => c !== active && c.status === 'closed' && c.closedAt && c.closedAt <= judged)
+    .sort((a, b) => (a.closedAt < b.closedAt ? 1 : -1))[0] || null;
+  return { today, judged, active, previous, since: previous ? previous.closedAt : null };
 }
+
+function gate(id, name, state, extra = {}) {
+  return { id, name, state, why: '', fix: null, ...extra };
+}
+
+// --- FR-GATE-01 — the pH gate ------------------------------------------------
+
+const readingsOf = (t) => (Array.isArray(t.readings) ? t.readings.map(Number).filter(Number.isFinite) : []);
+const pointsOf = (t) => readingsOf(t).length || Number(t.points) || 0;
+const lowOf = (t) => (readingsOf(t).length ? Math.min(...readingsOf(t)) : Number(t.ph));
+const highOf = (t) => (readingsOf(t).length ? Math.max(...readingsOf(t)) : Number(t.ph));
 
 /** The most recent soil test for a zone, or for the topsoil batch filling it. */
 export function latestSoilTest(state, zoneId, { today = isoDate() } = {}) {
@@ -82,27 +133,59 @@ export function latestSoilTest(state, zoneId, { today = isoDate() } = {}) {
   return mine[0] || null;
 }
 
+function phText(key) {
+  const g = ((peekRules() || {}).soil_and_water || {}).soil_ph_gate || {};
+  return g[key] || '';
+}
+
 /**
  * FR-GATE-01 — the pH gate.
  *
- * Corrected pH is what counts. Liming is the whole point of testing early, so
- * a test taken before the lime went on says nothing about what the plants will
- * meet. When a test is marked as pre-correction, it does not open the gate.
+ * A reading opens it only when all of this is true:
+ *
+ *   - it was sampled after the previous cycle here ended, and no more than 90
+ *     days before transplant;
+ *   - it was taken after any lime correction;
+ *   - it is a three-point test, from a meter calibrated that morning at pH 4.0
+ *     and 7.0, with a photo of the meter (rules → soil_ph_gate.test, Gate 0);
+ *   - every one of the three points is inside 5.5–7.0. A mean can hide an
+ *     acid corner, so the lowest point decides the hold and the highest point
+ *     decides the upper limit;
+ *   - it is not a re-test taken inside the 10-day hold after a low reading.
+ *
+ * Below 5.2 and 5.2–5.49 are the two hold rules (C-5), and each says what to
+ * do in the rules' own words.
  */
 export function phGate(state, zoneId, { today = isoDate() } = {}) {
-  const judged = asOf(state, zoneId, today);
-  const test = latestSoilTest(state, zoneId, { today: judged });
+  const w = zoneWindow(state, zoneId, today);
+  const zone = state.plots[zoneId];
+  const batchId = zone && zone.topsoilBatchId;
+  const tests = (state.soilTests || [])
+    .filter((t) => t.ph != null && t.ph !== '')
+    .filter((t) => t.zoneId === zoneId || (batchId && t.batchId === batchId))
+    .filter((t) => t.date && t.date <= w.judged)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const name = 'Soil pH tested';
+  const test = tests[0];
 
-  if (!test || test.ph == null) {
-    return gate('ph', 'Soil pH tested', 'unknown', {
+  if (!test) {
+    return gate('ph', name, 'unknown', {
       why: 'No pH reading has been recorded for this zone.',
-      fix: 'Take a pH reading and record it under Soil tests. Planting stays blocked until then.',
+      fix: 'Take a three-point pH test and record it under Soil tests. Planting stays blocked until then.',
     });
   }
 
-  const age = daysBetween(test.date, judged);
+  if (w.since && test.zoneId === zoneId && test.date <= w.since) {
+    return gate('ph', name, 'fail', {
+      why: `The last pH reading (${test.date}) was taken before the previous cycle here ended on ${w.since}.`,
+      fix: 'Re-sample. FR-GATE-01: the pH must be sampled after the last cycle in this zone ended.',
+      test,
+    });
+  }
+
+  const age = daysBetween(test.date, w.judged);
   if (age > GATE_RULES.soilTestMaxAgeDays) {
-    return gate('ph', 'Soil pH tested', 'fail', {
+    return gate('ph', name, 'fail', {
       why: `The last pH reading is ${age} days old (${test.ph} on ${test.date}).`,
       fix: `Re-test. A reading older than ${GATE_RULES.soilTestMaxAgeDays} days does not describe this soil any more.`,
       test,
@@ -110,26 +193,86 @@ export function phGate(state, zoneId, { today = isoDate() } = {}) {
   }
 
   if (test.beforeCorrection) {
-    return gate('ph', 'Soil pH tested', 'fail', {
+    return gate('ph', name, 'fail', {
       why: `The reading of ${test.ph} was taken before lime was applied, so it does not say where the soil is now.`,
       fix: 'Re-test after the lime has worked in and record that reading.',
       test,
     });
   }
 
-  const ph = Number(test.ph);
-  if (ph < GATE_RULES.phMin || ph > GATE_RULES.phMax) {
-    return gate('ph', 'Soil pH tested', 'fail', {
-      why: `pH is ${ph}, outside the ${GATE_RULES.phMin}–${GATE_RULES.phMax} range peppers need.`,
-      fix: ph < GATE_RULES.phMin
-        ? 'Lime it, wait for the lime to work in, then re-test and record the corrected reading.'
-        : 'Bring it down with sulphur or organic matter, then re-test and record the corrected reading.',
+  const points = pointsOf(test);
+  if (points < GATE_RULES.threePoints) {
+    return gate('ph', name, 'fail', {
+      why: `pH ${test.ph} on ${test.date} is from ${points || 'an unrecorded number of'} sampling point${points === 1 ? '' : 's'}.`,
+      fix: `Gate 0 asks for a three-point test: ${phText('test') || 'three points per block'}. Record all three readings.`,
+      test,
+    });
+  }
+  if (!test.calibrated) {
+    return gate('ph', name, 'fail', {
+      why: `The three-point reading on ${test.date} does not record the meter being calibrated that morning.`,
+      fix: 'Calibrate the meter at pH 4.0 and 7.0 on the morning of the test, then re-test and tick it on the record.',
+      test,
+    });
+  }
+  if (!test.photo) {
+    return gate('ph', name, 'fail', {
+      why: `The three-point reading on ${test.date} has no photo of the meter.`,
+      fix: 'Gate 0 wants the meter photo on file. Re-test and photograph the reading.',
       test,
     });
   }
 
-  return gate('ph', 'Soil pH tested', 'pass', {
-    why: `pH ${ph}, recorded ${test.date}${age ? ` (${age} days ago)` : ' today'}.`,
+  const low = lowOf(test);
+  const high = highOf(test);
+  const retestFrom = isoDate(addDays(test.date, GATE_RULES.holdRetestDays));
+  const shown = readingsOf(test).length ? readingsOf(test).join(', ') : String(test.ph);
+
+  if (low < GATE_RULES.phHoldBelow) {
+    return gate('ph', name, 'fail', {
+      hold: 'below_5_2',
+      why: `pH ${low} (points ${shown}) is below ${GATE_RULES.phHoldBelow}.`,
+      fix: `${phText('below_5_2') || 'Apply half the original lime rate again and wait 10 days.'} `
+        + `Re-test no sooner than ${retestFrom}.`,
+      retestFrom,
+      test,
+    });
+  }
+  if (low < GATE_RULES.phMin) {
+    return gate('ph', name, 'held', {
+      hold: '5_2_to_5_49',
+      why: `pH ${low} (points ${shown}) is between ${GATE_RULES.phHoldBelow} and ${GATE_RULES.phMin}: the block is held.`,
+      fix: `${phText('5_2_to_5_49') || 'Hold; re-test after 10 days.'} Re-test on or after ${retestFrom}.`,
+      retestFrom,
+      test,
+    });
+  }
+  if (high > GATE_RULES.phMax) {
+    return gate('ph', name, 'fail', {
+      why: `pH ${high} (points ${shown}) is above ${GATE_RULES.phMax}, outside the ${GATE_RULES.phMin}–${GATE_RULES.phMax} range peppers need.`,
+      fix: 'Bring it down with sulphur or organic matter, then re-test and record the corrected reading.',
+      test,
+    });
+  }
+
+  // The hold is a wait, not only a number: a passing re-test taken inside the
+  // ten days after a low reading has not waited out the hold.
+  const heldBy = tests.slice(1).find((t) => (!w.since || t.date > w.since)
+    && lowOf(t) < GATE_RULES.phMin && daysBetween(t.date, test.date) < GATE_RULES.holdRetestDays);
+  if (heldBy) {
+    const from = isoDate(addDays(heldBy.date, GATE_RULES.holdRetestDays));
+    return gate('ph', name, 'held', {
+      hold: 'retest_too_soon',
+      why: `pH ${low} on ${test.date} is in range, but only ${daysBetween(heldBy.date, test.date)} days after `
+        + `the reading of ${lowOf(heldBy)} on ${heldBy.date} that put the block on hold.`,
+      fix: `The hold is re-tested after ${GATE_RULES.holdRetestDays} days. Re-test on or after ${from}.`,
+      retestFrom: from,
+      test,
+    });
+  }
+
+  return gate('ph', name, 'pass', {
+    why: `pH ${shown} from ${points} points, recorded ${test.date}${age ? ` (${age} days ago)` : ' today'}.`,
     test,
   });
 }
@@ -139,30 +282,40 @@ export function phGate(state, zoneId, { today = isoDate() } = {}) {
  *
  * This is the one that cost Season 1. Root-knot nematode is invisible until the
  * plants are already failing, and by then the ground is the problem, not the
- * crop. Nothing goes in without a clean result on the record.
+ * crop. Nothing goes in without a clean lab result on the record — Gate 0 asks
+ * for a lab report, so a clean result must say which lab gave it.
  */
 export function nematodeGate(state, zoneId, { today = isoDate() } = {}) {
   const zone = state.plots[zoneId];
   const batchId = zone && zone.topsoilBatchId;
-  const judged = asOf(state, zoneId, today);
+  const w = zoneWindow(state, zoneId, today);
+  const name = 'Nematode clear';
 
   const tests = (state.soilTests || [])
     .filter((t) => t.nematode)
     .filter((t) => t.zoneId === zoneId || (batchId && t.batchId === batchId))
-    .filter((t) => t.date && t.date <= judged)
+    .filter((t) => t.date && t.date <= w.judged)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const test = tests[0];
   if (!test) {
-    return gate('nematode', 'Nematode clear', 'unknown', {
+    return gate('nematode', name, 'unknown', {
       why: 'No nematode test has been recorded for this zone or for the topsoil in it.',
       fix: 'Send a soil sample for a nematode test and record the result. This is the check Season 1 was lost for.',
     });
   }
 
-  const age = daysBetween(test.date, judged);
+  if (w.since && test.zoneId === zoneId && test.date <= w.since) {
+    return gate('nematode', name, 'fail', {
+      why: `The last nematode result (${test.date}) is from before the previous cycle here ended on ${w.since}.`,
+      fix: 'Re-sample. FR-GATE-01: soil results must be sampled after the last cycle in this zone ended.',
+      test,
+    });
+  }
+
+  const age = daysBetween(test.date, w.judged);
   if (age > GATE_RULES.nematodeMaxAgeDays) {
-    return gate('nematode', 'Nematode clear', 'fail', {
+    return gate('nematode', name, 'fail', {
       why: `The clean result is ${age} days old (${test.date}).`,
       fix: `Re-test. After ${GATE_RULES.nematodeMaxAgeDays} days a clean result no longer covers this ground.`,
       test,
@@ -170,7 +323,7 @@ export function nematodeGate(state, zoneId, { today = isoDate() } = {}) {
   }
 
   if (test.nematode !== 'clean') {
-    return gate('nematode', 'Nematode clear', 'fail', {
+    return gate('nematode', name, 'fail', {
       why: `The test on ${test.date} came back ${test.nematode}.`,
       fix: 'Do not plant peppers here. Solarise or rotate to a non-host — maize or a resistant cover — '
         + 'and re-test before this zone carries a crop again.',
@@ -178,8 +331,16 @@ export function nematodeGate(state, zoneId, { today = isoDate() } = {}) {
     });
   }
 
-  return gate('nematode', 'Nematode clear', 'pass', {
-    why: `Clean result recorded ${test.date}${age ? ` (${age} days ago)` : ' today'}.`,
+  if (!String(test.lab || '').trim()) {
+    return gate('nematode', name, 'fail', {
+      why: `The clean result on ${test.date} does not name the lab that gave it.`,
+      fix: 'Record which lab tested it and keep the report. Gate 0 asks for a lab report, not a note.',
+      test,
+    });
+  }
+
+  return gate('nematode', name, 'pass', {
+    why: `${test.lab} returned clean ${test.date}${age ? ` (${age} days ago)` : ' today'}.`,
     test,
   });
 }
@@ -191,7 +352,7 @@ export function nematodeGate(state, zoneId, { today = isoDate() } = {}) {
  * way to move a nematode population onto clean ground, so an untested batch
  * cannot be assigned to a zone at all.
  */
-export function batchGate(state, zoneId, { today = isoDate() } = {}) {
+export function batchGate(state, zoneId) {
   const zone = state.plots[zoneId];
   const batchId = zone && zone.topsoilBatchId;
   if (!batchId) {
@@ -208,12 +369,19 @@ export function batchGate(state, zoneId, { today = isoDate() } = {}) {
     });
   }
 
-  const tested = (state.soilTests || []).some((t) => t.batchId === batchId && t.nematode === 'clean');
-  if (!tested) {
+  const clean = (state.soilTests || []).filter((t) => t.batchId === batchId && t.nematode === 'clean');
+  if (!clean.length) {
     return gate('topsoil', 'Topsoil tested', 'fail', {
       why: `Batch from ${batch.supplier || 'an unnamed supplier'} (${batch.date || 'no date'}) has no clean test.`,
       fix: 'Test the batch before anything is planted into it. An untested load can carry nematodes '
         + 'straight into a clean house.',
+      batch,
+    });
+  }
+  if (!clean.some((t) => String(t.lab || '').trim())) {
+    return gate('topsoil', 'Topsoil tested', 'fail', {
+      why: `Batch from ${batch.supplier || 'an unnamed supplier'} tested clean, but no lab is named on the result.`,
+      fix: 'Record which lab tested the batch. A clean result nobody can trace is not a lab report.',
       batch,
     });
   }
@@ -224,51 +392,365 @@ export function batchGate(state, zoneId, { today = isoDate() } = {}) {
   });
 }
 
-/** Has the Owner overridden this gate for this zone, and is that override still standing? */
-function overrideFor(state, gateId, zoneId) {
-  const list = (state.gateOverrides || [])
-    .filter((o) => o.gate === gateId && o.zoneId === zoneId && !o.revoked)
-    .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1));
-  return list[0] || null;
+// --- FR-GATE-00 — the sign-off on Gate 0 and Gate 4 --------------------------
+
+/**
+ * FR-GATE-00: there is no site agronomist. Gate 0 and Gate 4 clear only after
+ * the Farm Doctor check, the Farm Manager's confirmation and the Owner's
+ * approval — three different records, in that order.
+ *
+ * For Gate 0 the check is a saved Farm Doctor gate review for this zone that
+ * found nothing else missing on Gate 0 at the time it was run. A review that
+ * listed missing evidence is not made good by somebody confirming it: the
+ * Farm Manager confirms what the Doctor found, and what it found was "not yet".
+ *
+ * For Gate 4 the check is the Farm Doctor's cycle review of that cycle.
+ */
+export function gateSignoff(state, zoneId, gateId, { since = null, until = isoDate(), cycleId = null } = {}) {
+  const isG0 = gateId === 'G0';
+  const id = isG0 ? 'doctor_check' : 'g4_signoff';
+  const name = isG0
+    ? (((gateSpec('G0') || {}).pass_all || [])[2] || 'Farm Doctor check passed, confirmed by Farm Manager and approved by Owner')
+    : 'Farm Doctor cycle review, confirmed by Farm Manager and approved by Owner (FR-GATE-00)';
+
+  const review = ((state && state.doctorOutputs) || [])
+    .filter((o) => (isG0
+      ? o.kind === 'gate-review' && (o.subject || {}).zoneId === zoneId
+        && (!Array.isArray((o.subject || {}).gates) || o.subject.gates.includes('G0'))
+      : o.kind === 'cycle-review' && (o.subject || {}).cycleId === cycleId))
+    .filter((o) => dayOf(o) <= until && (!since || dayOf(o) > since))
+    .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1))[0];
+
+  const c = (state2, why, fix, extra = {}) => ({ id, gate: gateId, name, state: state2, why, fix, ...extra });
+
+  if (!review) {
+    return c('unknown', isG0 ? 'No Farm Doctor gate check has been saved for this zone since the last cycle ended.'
+      : 'The Farm Doctor has not drafted the cycle review for this cycle.',
+    isG0 ? 'Record the evidence, then save the Farm Doctor gate check; the Farm Manager confirms and the Owner approves.'
+      : 'Ask the Farm Doctor to draft the cycle review from the season\'s records; the Farm Manager confirms and the Owner approves.');
+  }
+  const from = { kind: 'doctor-output', id: review.id };
+
+  if (isG0) {
+    const section = (review.gates || []).find((g) => g.id === 'G0');
+    const gaps = section ? (section.missing || []).filter((m) => m.id !== 'doctor_check') : null;
+    if (!gaps) {
+      return c('fail', `The gate check saved ${dayOf(review)} does not show Gate 0's evidence.`,
+        'Save a fresh Farm Doctor gate check for this zone.', { from });
+    }
+    if (gaps.length) {
+      return c('fail', `The Farm Doctor check on ${dayOf(review)} found Gate 0 incomplete: `
+        + `${gaps.map((m) => m.label || m.id).join('; ')}.`,
+      'Record what is missing, then run and save the Farm Doctor check again.', { from });
+    }
+  }
+
+  if (!review.confirmedBy || rankOfId(state, review.confirmedBy) < RANK.manager) {
+    return c('fail', `The Farm Doctor check from ${dayOf(review)} is waiting for the Farm Manager to confirm it.`,
+      'The Farm Manager confirms it. The Farm Doctor never confirms its own work (FR-DOC-08).', { from });
+  }
+  if (!review.approvedBy || rankOfId(state, review.approvedBy) < RANK.ceo) {
+    return c('fail', 'The Farm Manager has confirmed it; the Owner has not approved it yet.',
+      'FR-GATE-00: the Owner approves Gate 0 and Gate 4.', { from });
+  }
+  return c('pass', `Checked ${dayOf(review)}, confirmed by the Farm Manager and approved by the Owner.`, null, { from });
 }
 
-function gate(id, name, state, extra = {}) {
-  return { id, name, state, why: '', fix: null, ...extra };
+// --- The clean-restart protocol (GH-04, GH-05) -------------------------------
+
+/**
+ * Rules → clean_restart. Each step is recorded under gate "CR" by whoever did
+ * it, after the previous cycle in the house ended. The host-free fallow also
+ * has a length: the break from the day the old crop came out to transplant is
+ * at least the step's `min_days`.
+ */
+function cleanRestart(state, zone, w, rules) {
+  const spec = rules && rules.clean_restart;
+  if (!spec || protocolOf(zone, rules) !== 'clean-restart') return null;
+
+  const recorded = (itemId) => latestEvidence(state, 'CR', zone.id, itemId, { since: w.since, until: w.judged });
+  const conditions = (spec.steps || []).map((step) => {
+    const rec = recorded(step.id);
+    const base = { id: `cr_${step.id}`, gate: 'CR', name: `Step ${step.step} — ${step.name}`, itemId: step.id, lines: step.pass_all || [] };
+    if (!rec) {
+      return { ...base, state: 'unknown', why: `Not recorded for this restart (${step.when}).`,
+        fix: `Do it and record it: ${(step.pass_all || []).join('; ')}.` };
+    }
+    if (step.min_days) {
+      const out = recorded((spec.steps[0] || {}).id);
+      const days = out ? daysBetween(dayOf(out), w.judged) : null;
+      if (days == null || days < step.min_days) {
+        return { ...base, state: 'held', from: { kind: 'gate-evidence', id: rec.id },
+          why: days == null ? 'The fallow is recorded but the day the old crop came out is not.'
+            : `The house has been host-free for ${days} days.`,
+          fix: `The minimum host-free break is ${step.min_days} days from the day the old crop came out.` };
+      }
+    }
+    return { ...base, state: 'pass', from: { kind: 'gate-evidence', id: rec.id },
+      why: `Recorded ${dayOf(rec)}${rec.note ? ` — ${rec.note}` : ''}.` };
+  });
+
+  return {
+    id: 'CR',
+    name: spec.name || 'Clean-restart protocol',
+    when: 'between cycles, before transplant',
+    source: spec.source || null,
+    evidence: 'each step recorded, with a photo',
+    blocksAction: 'transplant',
+    blocksTransplant: true,
+    why: spec.why || '',
+    note: [spec.timing_note, spec.after_replant].filter(Boolean).join(' '),
+    rule: spec.gate_rule || '',
+    conditions,
+  };
+}
+
+/** The latest evidence line for one gate and zone, inside a window. */
+export function latestEvidence(state, gateId, zoneId, itemId, { cycleId = null, since = null, until = null } = {}) {
+  return [...((state && state.gateEvidence) || [])]
+    .filter((e) => e.gate === gateId && e.itemId === itemId && e.zoneId === zoneId)
+    .filter((e) => (cycleId && e.cycleId ? e.cycleId === cycleId : true))
+    .filter((e) => (!since || dayOf(e) > since) && (!until || dayOf(e) <= until))
+    .sort((a, b) => ((a.at || a.date || '') < (b.at || b.date || '') ? 1 : -1))[0] || null;
+}
+
+// --- G2 and G3: the standing gates -------------------------------------------
+
+function standingControls(state, zone, w, { today, now }) {
+  const cycle = w.active;
+  const weekOne = cycle && daysBetween(cycle.transplantDate, today) >= 7;
+  const base = { gate: 'G2' };
+  if (!cycle || !weekOne) {
+    const why = cycle ? 'Runs from Week 1 of the cycle.' : 'Runs from Week 1 once something is planted.';
+    return ['g2_scouting', 'g2_escalation', 'g2_owner'].map((id, i) => ({
+      ...base, id, name: ((gateSpec('G2') || {}).pass_all || [])[i] || id, state: 'waiting', why, fix: null,
+    }));
+  }
+  const labels = (gateSpec('G2') || {}).pass_all || [];
+
+  const counts = (state.scouts || []).filter((s) => s.cycleId === cycle.id && s.trapCount != null && dayOf(s) <= today)
+    .sort((a, b) => (dayOf(a) < dayOf(b) ? 1 : -1));
+  const gap = counts.length ? daysBetween(dayOf(counts[0]), today) : null;
+  const scouting = gap != null && gap <= 2
+    ? { state: 'pass', why: `Last trap count ${dayOf(counts[0])}.` }
+    : { state: 'fail',
+      why: gap == null ? 'No trap count has been logged for this cycle.' : `Trap counts have gapped ${gap} days.`,
+      fix: 'Count every trap today and log it. RC2 red flag: trap counts gapped more than 2 days.' };
+
+  const late = alerts(state, { now }).filter((a) => a.status === 'open' && a.cycleId === cycle.id
+    && a.dueAt && a.dueAt < now);
+  const escalation = late.length
+    ? { state: 'fail', why: `${late.length} alert${late.length === 1 ? '' : 's'} on this zone past the 24 h deadline.`,
+      fix: 'Close them with a diagnosis and a treatment, or a recorded decision not to treat (FR-SCOUT-05).' }
+    : { state: 'pass', why: 'No alert on this zone is past its deadline.' };
+
+  const weekAgo = isoDate(addDays(today, -7));
+  const ownerIds = new Set(Object.values(state.people || {}).filter((p) => p.role === 'ceo').map((p) => p.id));
+  const seen = (state.log || []).some((e) => ownerIds.has(e.by) && (e.at || '').slice(0, 10) >= weekAgo
+    && (e.at || '').slice(0, 10) <= today);
+  const owner = seen
+    ? { state: 'pass', why: 'The Owner has been on the records in the last 7 days.' }
+    : { state: 'fail', why: 'Nothing from the Owner on the records in the last 7 days.',
+      fix: 'The Owner reads the digest and this screen at least weekly (RC3).' };
+
+  return [
+    { ...base, id: 'g2_scouting', name: labels[0] || 'scouting logged', ...scouting },
+    { ...base, id: 'g2_escalation', name: labels[1] || 'escalation live', ...escalation },
+    { ...base, id: 'g2_owner', name: labels[2] || 'owner verifying', ...owner },
+  ];
+}
+
+function diagnosisFirst(state, w) {
+  const name = ((gateSpec('G3') || {}).pass_all || [])[0] || 'a diagnosis precedes every spray';
+  const cycle = w.active;
+  if (!cycle) {
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'waiting',
+      why: 'Nothing planted. Every spray will need a confirmed diagnosis first.', fix: null }];
+  }
+  const sprays = (state.sprays || []).filter((s) => s.cycleId === cycle.id);
+  const bare = sprays.filter((s) => !s.diagnosisId && !s.woundCare);
+  return [bare.length
+    ? { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
+      why: `${bare.length} spray${bare.length === 1 ? '' : 's'} on this cycle with no diagnosis behind ${bare.length === 1 ? 'it' : 'them'}.`,
+      fix: 'RC4 red flag. The treatment screen refuses new ones; diagnose what those sprays were for.' }
+    : { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'pass',
+      why: sprays.length ? `All ${sprays.length} sprays have a diagnosis behind them.` : 'No sprays yet.' }];
+}
+
+// --- The model ---------------------------------------------------------------
+
+function fromItem(gateId, it, zoneName) {
+  return {
+    id: it.id,
+    gate: gateId,
+    name: it.label,
+    itemId: it.id,
+    state: it.state === 'have' ? 'pass' : 'fail',
+    why: it.why || 'Nothing recorded for this line yet.',
+    fix: it.state === 'have' ? null : (it.fix || `Record this against ${gateId} for ${zoneName}.`),
+    from: it.from || null,
+  };
+}
+
+function summarise(conditions) {
+  if (conditions.every((c) => c.state === 'na')) return 'na';
+  if (conditions.every((c) => c.state === 'waiting' || c.state === 'na')) return 'waiting';
+  if (conditions.some((c) => c.state === 'fail' || c.state === 'unknown')) return 'fail';
+  if (conditions.some((c) => c.state === 'held')) return 'held';
+  if (conditions.some((c) => c.state === 'overridden')) return 'overridden';
+  if (conditions.some((c) => c.state === 'waiting')) return 'waiting';
+  return 'pass';
+}
+
+/** Has the Owner overridden this condition for this zone, since the last cycle ended? */
+function overrideFor(state, conditionId, zoneId, since) {
+  return (state.gateOverrides || [])
+    .filter((o) => o.gate === conditionId && o.zoneId === zoneId && !o.revoked)
+    .filter((o) => !since || (o.at || '').slice(0, 10) > since)
+    .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1))[0] || null;
+}
+
+function spec(id) {
+  const s = gateSpec(id) || {};
+  return {
+    id, name: s.name || id, when: s.when || '', source: s.source || null,
+    evidence: s.evidence || null, blocksAction: s.blocks_action || null, passAll: s.pass_all || [],
+  };
 }
 
 /**
- * FR-GATE-06 — every planting gate for one zone, in one place.
+ * FR-GATE-06 — Gate 0 to Gate 4 for one zone, from the rules.
  *
- * An override does not delete the finding. The gate still reports what it
- * found and who decided to go anyway, because that is the record the digest
- * and the audit need.
+ * Returns the gates in order (with the clean restart between G0 and G1 on
+ * GH-04 and GH-05). Every gate carries its conditions, and every condition its
+ * state, why, fix and — where there is one — the record it read.
+ */
+export function gateModel(state, zoneId, opts = {}) {
+  const today = opts.today || isoDate();
+  const now = opts.now || `${today}T23:59:59.000Z`;
+  const rules = opts.rules || peekRules();
+  const zone = (state.plots || {})[zoneId];
+  const w = zoneWindow(state, zoneId, today);
+  const zoneName = (zone && zone.name) || zoneId;
+  const gates = [];
+
+  // G0 — Ground Clearance.
+  const g0 = spec('G0');
+  const nem = nematodeGate(state, zoneId, { today });
+  const ph = phGate(state, zoneId, { today });
+  const topsoil = batchGate(state, zoneId);
+  gates.push({
+    ...g0, blocksTransplant: true,
+    conditions: [
+      { ...nem, gate: 'G0', label: g0.passAll[0] },
+      { ...ph, gate: 'G0', label: g0.passAll[1] },
+      { ...topsoil, gate: 'G0', label: 'purchased topsoil tested (FR-GATE-03)' },
+      gateSignoff(state, zoneId, 'G0', { since: w.since, until: w.judged }),
+    ],
+  });
+
+  const cr = cleanRestart(state, zone, w, rules);
+  if (cr) gates.push(cr);
+
+  // G1 — Establishment Readiness, the checklist, one recorded line at a time.
+  const g1 = spec('G1');
+  gates.push({
+    ...g1, blocksTransplant: true,
+    conditions: GATE_ITEMS.G1.map((itemId, i) => fromItem('G1', gateItem(state, {
+      gateId: 'G1', itemId, label: g1.passAll[i], zoneId, cycleId: w.active ? w.active.id : null,
+      today: w.judged, since: w.since, until: w.judged, batchId: opts.batchId || null, rules,
+    }), zoneName)),
+  });
+
+  gates.push({ ...spec('G2'), blocksTransplant: false, conditions: standingControls(state, zone, w, { today, now }) });
+  gates.push({ ...spec('G3'), blocksTransplant: false, conditions: diagnosisFirst(state, w) });
+
+  // G4 — Cycle Close & Learn. What it is about depends on where the zone is:
+  // an empty zone after a cycle has to close that cycle before the next goes
+  // in; a planted zone had to close the one before it; a planted zone with no
+  // earlier cycle waits for the end of this one.
+  const g4 = spec('G4');
+  const subject = w.previous || w.active || null;
+  const blocks = !!w.previous;
+  let g4Conditions;
+  if (!subject) {
+    g4Conditions = [{ id: 'g4_none', gate: 'G4', name: 'no earlier cycle to close', state: 'na',
+      why: 'No cycle has run in this zone yet.', fix: null }];
+  } else if (!blocks) {
+    g4Conditions = [...GATE_ITEMS.G4, 'g4_signoff'].map((id, i) => ({
+      id, gate: 'G4', name: g4.passAll[i] || 'Farm Doctor cycle review, confirmed by Farm Manager and approved by Owner (FR-GATE-00)',
+      state: 'waiting', why: 'At the end of this cycle, before the next one goes in.', fix: null,
+    }));
+  } else {
+    const window = { since: subject.transplantDate || null, until: w.judged };
+    g4Conditions = [
+      ...GATE_ITEMS.G4.map((itemId, i) => fromItem('G4', gateItem(state, {
+        gateId: 'G4', itemId, label: g4.passAll[i], zoneId, cycleId: subject.id, today: w.judged, ...window, rules,
+      }), zoneName)),
+      gateSignoff(state, zoneId, 'G4', { ...window, cycleId: subject.id }),
+    ];
+  }
+  gates.push({
+    ...g4,
+    blocksAction: blocks ? 'transplant' : null,
+    blocksTransplant: blocks,
+    subject: subject ? { cycleId: subject.id, closedAt: subject.closedAt || null, transplantDate: subject.transplantDate } : null,
+    conditions: g4Conditions,
+  });
+
+  // FR-GATE-07: an Owner override opens one condition on one zone and keeps
+  // what it found. It does not reach G2 or G3, which block nothing here.
+  for (const g of gates) {
+    g.conditions = g.conditions.map((c) => {
+      if (!g.blocksTransplant || !isBlocking(c)) return c;
+      const override = overrideFor(state, c.id, zoneId, w.since);
+      return override ? { ...c, state: 'overridden', override, blockedWhy: c.why } : c;
+    });
+    g.state = summarise(g.conditions);
+  }
+
+  return { zoneId, zone, window: w, planted: !!w.active, gates };
+}
+
+/**
+ * FR-GATE-06 — every condition that stands between this zone and a transplant.
+ *
+ * An override does not delete the finding. The condition still reports what
+ * it found and who decided to go anyway, because that is the record the
+ * digest and the audit need.
  */
 export function gatesForZone(state, zoneId, opts = {}) {
-  return [phGate(state, zoneId, opts), nematodeGate(state, zoneId, opts), batchGate(state, zoneId, opts)]
-    .map((g) => {
-      if (g.state === 'pass') return g;
-      const override = overrideFor(state, g.id, zoneId);
-      if (!override) return g;
-      return { ...g, state: 'overridden', override, blockedWhy: g.why };
-    });
+  const zone = (state.plots || {})[zoneId];
+  if (isNursery(zone)) {
+    return [gate('zone_type', 'Cropping block', 'fail', {
+      gate: 'zone',
+      noOverride: true,
+      why: `${zone.name} is the nursery, not a cropping block (FR-FARM-04).`,
+      fix: 'Seedlings are raised here, pass the release check, and are transplanted into a block.',
+    })];
+  }
+  return gateModel(state, zoneId, opts).gates
+    .filter((g) => g.blocksTransplant)
+    .flatMap((g) => g.conditions);
 }
 
 /**
- * FR-GATE-01/02/03 — may a crop be planted here?
+ * FR-GATE-00/01/02/03/06, FR-FARM-05 — may a crop be transplanted here?
  *
- * The one call the planting screen makes. `ok` is false unless every gate is
- * pass or explicitly overridden by the Owner.
+ * The one call the planting screen makes. `ok` is false unless every
+ * condition of every gate that blocks transplant is clear or explicitly
+ * overridden by the Owner. `batchId` names the seedling batch going in.
  */
 export function canPlant(state, zoneId, opts = {}) {
   const gates = gatesForZone(state, zoneId, opts);
-  const blocking = gates.filter((g) => g.state === 'fail' || g.state === 'unknown');
+  const blocking = gates.filter(isBlocking);
   return {
     ok: blocking.length === 0,
     gates,
     blocking,
     overridden: gates.filter((g) => g.state === 'overridden'),
     why: blocking.length
-      ? `${blocking.length} gate${blocking.length === 1 ? '' : 's'} not cleared: `
+      ? `${blocking.length} condition${blocking.length === 1 ? '' : 's'} not cleared: `
         + blocking.map((g) => g.name).join(', ')
       : null,
   };
@@ -335,6 +817,7 @@ export function rotationCheck(state, cycleId, productRef, opts = {}) {
   return rotationVerdict(state, cycleId, productRef, opts);
 }
 
+
 /**
  * Every zone's standing, for the Gates screen and the Owner's digest.
  * Blocked zones come first: a clear zone needs no attention.
@@ -349,6 +832,7 @@ export function gateBoard(state, opts = {}) {
         zone,
         planted: !!cycle,
         cycle: cycle || null,
+        model: isNursery(zone) ? null : gateModel(state, zone.id, opts),
         ...verdict,
       };
     })

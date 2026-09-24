@@ -7,6 +7,8 @@
 import { appendEvents, deviceId, loadEvents } from './db.js';
 import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
 import { CONFIRMS, DOCTOR } from './domain/doctor.js';
+import { releaseCheck } from './domain/nursery.js';
+import { peekRules } from './rules.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
 /**
@@ -160,6 +162,8 @@ const EMPTY = () => ({
   soilTests: [],
   topsoilBatches: {},
   gateOverrides: [],
+  // FR-FARM-05 — seedling batches in the nursery, keyed by id.
+  seedlingBatches: {},
   // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
   // gates, and the samples that went to a lab.
   doctorOutputs: [],
@@ -214,6 +218,7 @@ export function reduce(events) {
       case 'doctor.record': return `doctor:${p.id}`;
       case 'lab.record': return `lab:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
+      case 'seedling.sow': return `seedling:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
@@ -241,6 +246,8 @@ export function reduce(events) {
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
+      case 'seedling.check': case 'seedling.harden': case 'seedling.discard': return `seedling:${p.batchId}`;
+      case 'seedling.release': return `seedling:${p.id}`;
       default: return null;
     }
   };
@@ -263,6 +270,7 @@ export function reduce(events) {
       case 'position': return !!state.positions[id];
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
+      case 'seedling': return !!state.seedlingBatches[id];
       case 'report': return state.reports.some((r) => r.id === id);
       case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
@@ -461,9 +469,18 @@ export function reduce(events) {
         break;
       }
 
-      case 'cycle.start':
+      case 'cycle.start': {
         state.cycles[p.id] = { ...p, status: 'active', events: {}, startedBy: e.by, startedAt: e.at };
+        // FR-FARM-05: each batch is linked to the block it goes to. Only a
+        // batch released to this very block, and not already planted, links.
+        const batch = p.seedlingBatchId && state.seedlingBatches[p.seedlingBatchId];
+        if (batch && batch.status === 'released' && batch.release && batch.release.zoneId === p.plotId
+          && !batch.usedByCycleId) {
+          batch.usedByCycleId = p.id;
+          batch.plantedAt = p.transplantDate || isoDate(new Date(e.at));
+        }
         break;
+      }
       case 'cycle.update':
         state.cycles[p.id] = { ...state.cycles[p.id], ...p };
         break;
@@ -634,6 +651,50 @@ export function reduce(events) {
           state.labels[p.id].retiredBy = e.by;
         }
         break;
+
+      // --- The nursery (FR-FARM-04, FR-FARM-05) --------------------------
+      // A batch is sown, checked twice a week, hardened, and released to a
+      // block only when the release check passes. The check is re-run here
+      // from the batch's own record every time the log is replayed: a phone
+      // that skipped the form cannot sync its way to a released batch.
+      case 'seedling.sow':
+        state.seedlingBatches[p.id] = {
+          ...p, status: 'growing', checks: [], hardenedFrom: null, release: null, by: e.by, at: e.at,
+        };
+        break;
+      case 'seedling.check': {
+        const b = state.seedlingBatches[p.batchId];
+        if (b) b.checks.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+        break;
+      }
+      case 'seedling.harden': {
+        const b = state.seedlingBatches[p.batchId];
+        if (b && b.status === 'growing') b.hardenedFrom = p.date || isoDate(new Date(e.at));
+        break;
+      }
+      case 'seedling.discard': {
+        const b = state.seedlingBatches[p.batchId];
+        if (b && b.status === 'growing') { b.status = 'discarded'; b.discardReason = p.reason || ''; }
+        break;
+      }
+      case 'seedling.release': {
+        const b = state.seedlingBatches[p.id];
+        if (!b) break;
+        const date = p.date || isoDate(new Date(e.at));
+        const person = state.people[e.by];
+        const verdict = releaseCheck(state, b, { date, zoneId: p.zoneId, answers: p.answers || {}, rules: peekRules() });
+        const attempt = { date, zoneId: p.zoneId || null, by: e.by, at: e.at, note: p.note || '', items: verdict.items };
+        // A release check is a senior's call, like confirming a diagnosis.
+        if (!person || roleRank(person) < ROLES.supervisor.rank) {
+          b.releaseRefused = { ...attempt, why: 'A release check is done by the Field Supervisor or above.' };
+          break;
+        }
+        if (!verdict.ok) { b.releaseRefused = { ...attempt, why: verdict.why }; break; }
+        b.status = 'released';
+        b.release = attempt;
+        delete b.releaseRefused;
+        break;
+      }
 
       case 'weather.record':
         state.weather.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });

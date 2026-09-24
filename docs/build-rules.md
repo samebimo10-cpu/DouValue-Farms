@@ -4,7 +4,7 @@
 | Sources | Farm Operations Schedule Rev 5 (July 2026); Rev 5.1 Acid Soil Correction |
 | Precedence | Rev 5.1 wins where the two disagree |
 | Machine-readable copy | `douvalue_rules_rev5_1.json` (same content) |
-| Rules version | rules-1.2 (decisions C-1 to C-18 applied) |
+| Rules version | rules-1.3 (decisions C-1 to C-18 applied; clean-restart protocol transcribed from Rev 5 p16–17) |
 This extract turns the schedule into rules the app can enforce. It covers gates, thresholds, rotations, spray and mixing rules, soil and water targets, triage, and diagnosis cards. **Section 1 records how each gap or contradiction in the source was settled.** Rules below already reflect those decisions.
 
 ---
@@ -120,6 +120,28 @@ IDs follow the Rev 5.1 block register. OF-02 is now the nursery.
 *Evidence:* Cycle Review document
 
 *Source:* Rev 5 p3
+
+### Clean-restart protocol · GH-04 and GH-05
+
+A between-cycle reset that breaks the previous crop's thrips, tospovirus and nematode load before a single new seedling goes in. Thrips, whitefly, mosaic and tospovirus survive in old plants, debris, weeds and volunteers; nematodes survive in the soil.
+
+*Timing:* tear down on a day you are not moving into the live houses afterwards; wash or change over-clothes before entering them; keep the GH-04/GH-05 doors shut during the fallow break.
+
+| Step | Name | When | Pass only when all are true |
+|---|---|---|---|
+| 1 | Terminate and remove the old crop | Day 1 | every old plant cut and bagged: stems, leaves, roots and fallen debris; not shredded or composted near the houses · carried off-site and burned or buried far from all houses and the nursery · old drip mulch / ground cover lifted · every weed and volunteer pepper removed inside and for 5 m around the house |
+| 2 | Sanitise the structure and system | Day 1-2 | net walls, posts, benches and doors washed with detergent, then 10% bleach or approved disinfectant (net-wall folds included) · drip lines flushed with chlorine or acid line-cleaner, then clear water; blocked emitters cleared or replaced · tools, stakes and ties soaked in 10% bleach for 30 min, or replaced · all old sticky traps removed and disposed of off-site (fresh traps go in at Gate 1) |
+| 3 | Solarise for Gate 0 | 3-4 weeks | clear polythene over the beds, sealed tight, 3-4 weeks · compost 20-30 kg/bed; neem cake at plastic lift (T-7, per C-14) · soil + nematode sample sent to the lab; if not clear, extend solarisation / biofumigant and re-test · Trichoderma drench after the plastic is lifted |
+| 4 | Host-free fallow (green-bridge break) | whole solarisation window (minimum 21 days) | no pepper or solanaceous plant, weed or volunteer in the house for the whole fallow · minimum break is the solarisation period; longer if neighbouring houses are under heavy thrips pressure |
+| 5 | Pre-plant knockdown for Gate 1 | within 48 h of transplant | Cypermethrin 10EC 1 ml/L (IRAC 3A) over all interior surfaces within 48 h of transplant, doors shut overnight · Mancozeb 80WP 2.5 g/L (FRAC M3) on beds, floor and posts |
+
+**Gate rule:** No seedling enters GH-04 or GH-05 until every step is recorded for this restart, Gate 0 is cleared (Farm Doctor check, Farm Manager confirms, Owner approves; C-17) and Gate 1 is complete. Steps count only if recorded after the previous cycle in that house ended.
+
+**After replant:** Extra watch for the first 3 weeks: full scouting round twice weekly (Day 2 and Day 5); see scouting.frequency.extra_watch.
+
+*Superseded in the source:* Rev 5 says 'signed off by the agronomist' (now C-17), neem cake '2 weeks in' (now C-14) and names Punch/Vanguish/Lion Seal (now C-18).
+
+*Source:* Rev 5 p16-17
 
 ## 4. Recurrence test (KPIs)
 
