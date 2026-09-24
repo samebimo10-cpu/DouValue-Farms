@@ -5,8 +5,8 @@
       "Revision 5.1 Acid Soil Correction, Main Farm"
     ],
     "precedence": "Where Rev 5.1 and Rev 5 disagree, Rev 5.1 wins.",
-    "version": "rules-1.2",
-    "decisions": "C-1 to C-18 applied"
+    "version": "rules-1.4",
+    "decisions": "C-1 to C-19 applied"
   },
   "zones": [
     {
@@ -985,6 +985,148 @@
       "batch ID recorded against the block it goes to"
     ],
     "gate_link": "Seedling release check is added to Gate 1; a block cannot log transplant without a released seedling batch."
+  },
+  "clean_restart": {
+    "name": "Clean-restart protocol",
+    "zones": [
+      "GH-04",
+      "GH-05"
+    ],
+    "why": "A between-cycle reset that breaks the previous crop's thrips, tospovirus and nematode load before a single new seedling goes in. Thrips, whitefly, mosaic and tospovirus survive in old plants, debris, weeds and volunteers; nematodes survive in the soil.",
+    "timing_note": "Tear down on a day you are not moving into the live houses afterwards; wash or change over-clothes before entering them; keep the GH-04/GH-05 doors shut during the fallow break.",
+    "steps": [
+      {
+        "id": "terminate_remove",
+        "step": 1,
+        "name": "Terminate and remove the old crop",
+        "when": "Day 1",
+        "pass_all": [
+          "every old plant cut and bagged: stems, leaves, roots and fallen debris; not shredded or composted near the houses",
+          "carried off-site and burned or buried far from all houses and the nursery",
+          "old drip mulch / ground cover lifted",
+          "every weed and volunteer pepper removed inside and for 5 m around the house"
+        ]
+      },
+      {
+        "id": "sanitise",
+        "step": 2,
+        "name": "Sanitise the structure and system",
+        "when": "Day 1-2",
+        "pass_all": [
+          "net walls, posts, benches and doors washed with detergent, then 10% bleach or approved disinfectant (net-wall folds included)",
+          "drip lines flushed with chlorine or acid line-cleaner, then clear water; blocked emitters cleared or replaced",
+          "tools, stakes and ties soaked in 10% bleach for 30 min, or replaced",
+          "all old sticky traps removed and disposed of off-site (fresh traps go in at Gate 1)"
+        ]
+      },
+      {
+        "id": "solarise",
+        "step": 3,
+        "name": "Solarise for Gate 0",
+        "when": "3-4 weeks",
+        "pass_all": [
+          "clear polythene over the beds, sealed tight, 3-4 weeks",
+          "compost 20-30 kg/bed; neem cake at plastic lift (T-7, per C-14)",
+          "soil + nematode sample sent to the lab; if not clear, extend solarisation / biofumigant and re-test",
+          "Trichoderma drench after the plastic is lifted"
+        ],
+        "cover_days": {
+          "min": 21,
+          "max": 28,
+          "rule": "one continuous span under sealed plastic, from the day it went on to the day it was lifted: 21 to 28 days (3-4 weeks)"
+        },
+        "gate_link": "G0"
+      },
+      {
+        "id": "host_free_fallow",
+        "step": 4,
+        "name": "Host-free fallow (green-bridge break)",
+        "when": "whole solarisation window",
+        "pass_all": [
+          "no pepper or solanaceous plant, weed or volunteer in the house for the whole fallow",
+          "minimum break is the solarisation period; longer if neighbouring houses are under heavy thrips pressure"
+        ],
+        "min_days": 21
+      },
+      {
+        "id": "pre_plant_knockdown",
+        "step": 5,
+        "name": "Pre-plant knockdown for Gate 1",
+        "when": "within 48 h of transplant",
+        "pass_all": [
+          "Cypermethrin 10EC 1 ml/L (IRAC 3A) over all interior surfaces within 48 h of transplant, doors shut overnight",
+          "Mancozeb 80WP 2.5 g/L (FRAC M3) on beds, floor and posts"
+        ],
+        "within_hours_before_transplant": 48,
+        "timing_rule": "sprayed within 48 h before transplant, with the doors shut overnight in between: recorded the day before transplant or the day before that, never on transplant day",
+        "gate_link": "G1"
+      }
+    ],
+    "gate_rule": "No seedling enters GH-04 or GH-05 until every step is recorded for this restart, Gate 0 is cleared (Farm Doctor check, Farm Manager confirms, Owner approves; C-17) and Gate 1 is complete. Steps count only if recorded after the previous cycle in that house ended.",
+    "after_replant": "Extra watch for the first 3 weeks: full scouting round twice weekly (Day 2 and Day 5); see scouting.frequency.extra_watch.",
+    "superseded_in_source": "Rev 5 says 'signed off by the agronomist' (now C-17), neem cake '2 weeks in' (now C-14) and names Punch/Vanguish/Lion Seal (now C-18).",
+    "source": "Rev 5 p16-17"
+  },
+  "plant_bags": {
+    "name": "Plant-bag zones",
+    "media_types": {
+      "bed": "the crop grows in the zone's own bed soil; Gate 0 clears on the bed, as before",
+      "bag": "the crop grows in plant bags filled from a media batch; Gate 0 clears on the media batch, not the bed"
+    },
+    "why": "In a bag zone the roots never meet the bed. The media batch is the ground: a nematode or acid load arrives with the batch and goes into every bag it fills.",
+    "gate_0": {
+      "clears_on": "media batch",
+      "pass_all": [
+        "media batch on record with supplier and delivery date, filling the bags after the previous cycle here ended",
+        "media pH 5.5-7.0 from a three-point test of the batch (meter calibrated that morning, with meter photo), after any lime correction",
+        "nematode lab report on the media batch returned CLEAR",
+        "if the heap was covered: solarisation dates recorded (plastic on, plastic lifted)",
+        "whether the bags stand on a barrier recorded: ground cover, polythene, or none"
+      ],
+      "freshness": "Batch results are sampled on or after the delivery date and no more than 90 days before transplant (FR-GATE-01's window, applied to the batch).",
+      "signoff": "Farm Doctor check passed, confirmed by Farm Manager and approved by Owner (C-17), as for a bed zone."
+    },
+    "fill_rule": "No bag is filled from a batch until the batch has cleared its own lines: supplier and delivery date, three-point pH, nematode CLEAR, and solarisation dates if the heap was covered. A rejected, failed, untested or failing batch cannot fill bags (FR-GATE-03).",
+    "trace": {
+      "rule": "Every fill records batch -> bags -> zone. A batch that fails after filling names every zone it filled, with the bags and any crop planted in them.",
+      "failure": "A batch fails later when a nematode result on it comes back not clear after its first fill, or when a failure is recorded against it (for example galls traced to the batch)."
+    },
+    "barrier": {
+      "options": [
+        "ground cover",
+        "polythene",
+        "none"
+      ],
+      "why": "Bags on bare ground can root through the drainage holes into bed soil nobody tested."
+    },
+    "lime": {
+      "basis": "media volume (m3), not bed area",
+      "incorporation_depth_m": {
+        "min": 0.15,
+        "max": 0.2
+      },
+      "derivation": "kg per m3 = Route A kg per 100 m2 / (100 m2 x incorporation depth); the depth is 15-20 cm from route_A.timing. Low end: the low rate over 20 cm; high end: the high rate over 15 cm.",
+      "route": "Route A only: dolomitic lime mixed through the heap before filling. Route B gives no incorporation depth, so no rate per m3 derives from it; a covered (solarised) heap needing lime has no derived rate.",
+      "no_rate": "If a rate cannot be derived (media texture not in the lime table, Route B, or no batch volume), the app says so and the batch is corrected or rejected before any bag is filled. It never guesses a dose (FR-DOC-08).",
+      "after": "Re-test the batch at three points after the lime has worked in; a reading from before the lime does not open the gate."
+    },
+    "clean_restart": {
+      "replaces_step": "solarise",
+      "step": {
+        "id": "fresh_media",
+        "step": 3,
+        "name": "Fresh or re-treated media for Gate 0",
+        "when": "before the bags are filled",
+        "pass_all": [
+          "bags filled for this restart from a fresh or a re-treated batch; media left in the bags from the last crop does not count",
+          "a re-treated batch records how it was treated",
+          "bags from a galled crop are discarded, not refilled; their media is not re-treated for reuse"
+        ],
+        "gate_link": "G0"
+      },
+      "galled": "A crop is galled when the Gate 4 root inspection found galls, a root-knot nematode diagnosis was confirmed on it, or the batch in its bags failed on nematodes."
+    },
+    "source": "Owner instruction, 24 Sep 2026 (C-19); lime rate derived from Rev 5.1 Route A"
   },
   "farm_doctor": {
     "role": "In-app diagnostic and planning assistant that takes the place of the site agronomist for day-to-day decisions. It advises; people decide.",

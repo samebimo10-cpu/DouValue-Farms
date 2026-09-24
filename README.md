@@ -547,6 +547,10 @@ DouValue-Farms/
 │     │  ├─ shift.js     end-of-shift reports and the farm manager's board
 │     │  ├─ stock.js     low stock, addressed to the Farm Manager
 │     │  ├─ supervision.js  supervised spray and gate screens until the trial is signed off
+│     │  ├─ gates.js     Gate 0 to Gate 4 and the GH-04/05 clean restart, per zone, from the rules
+│     │  ├─ nursery.js   seedling batches, the release check, the nursery's own tasks
+│     │  ├─ farm.js      zone types and the real zone register a new farm starts with
+│     │  ├─ media.js     plant-bag zones: media type, batch → bags → zone, failures, galled crops
 │     │  └─ qr.js        zone door codes: the encoder, and reading one back
 │     └─ ui/             shell, kit, worker, field, clinic, doctor, ppe, manage, audit,
 │                        photo, chart (the trend), kpis, scan, shift, update (the prompt)

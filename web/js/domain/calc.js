@@ -368,7 +368,96 @@ export function limePlan({
   };
 }
 
+/**
+ * Lime for a plant-bag batch — by media volume, not bed area (C-19).
+ *
+ * The rules give lime per 100 m² of bed, worked into 15–20 cm. A heap of bag
+ * media has no bed area, so the rate is carried over through that depth: kg
+ * per m³ = kg per 100 m² ÷ (100 m² × depth). The low end is the low rate over
+ * the deeper 20 cm and the high end the high rate over 15 cm, so the range
+ * covers what the table covers. Only Route A states a depth; Route B does not,
+ * so a covered heap has no rate to derive.
+ *
+ * Where no rate can be derived the answer is `derivable: false` with the
+ * reason, and the batch is corrected or rejected before any bag is filled. It
+ * never falls back to a guess (FR-DOC-08).
+ */
+export function mediaLimePlan({
+  readings = [], texture = null, volumeM3 = 0, covered = false, lastLime = null, holdSince = null,
+  today = isoDate(),
+} = {}) {
+  const spec = (rules().plant_bags || {}).lime || {};
+  const depth = spec.incorporation_depth_m || {};
+  const volume = Number(volumeM3) || 0;
+  const cannot = (reason, why, fix) => ({
+    ok: false, derivable: false, reason, why, fix,
+    rule: spec.no_rate || 'No rate can be derived: correct the batch or reject it before filling.',
+  });
+
+  // The table's rate, never a rate someone recorded per 100 m² of bed.
+  const ask = (tex) => limePlan({ readings, texture: tex, areaM2: 100, zoneType: 'bag', solarised: false,
+    lastLime: lastLime ? {} : null, holdSince, today });
+  const plan = ask(texture);
+  if (!plan.ok && plan.reason === 'three-points') return { ...plan, derivable: false };
+  // In range, above range or on hold: no lime goes on, so there is no rate to
+  // derive, whatever the media is. The band does not depend on the texture.
+  const band = plan.ok ? plan : ask(TEXTURES[0].id);
+  if (band.ok && !band.kgText) {
+    return { ...band, texture: textureFor(texture), derivable: true, basis: 'volume', noLime: true };
+  }
+
+  if (!plan.ok || !textureFor(texture)) {
+    return cannot('no-texture',
+      `The batch's media${texture ? ` (${texture})` : ''} is not one of the textures in the lime table `
+        + `(${TEXTURES.map((t) => t.rulesKey).join(', ')}), so no rate per m³ can be derived.`,
+      'Correct the batch: record which of the three textures it is, re-mix it to one, or reject it.');
+  }
+  if (covered) {
+    return cannot('route-b',
+      'The heap has been under solarisation plastic, which puts it on Route B, and Route B gives no '
+        + 'incorporation depth, so no rate per m³ can be derived.',
+      'Correct the batch (re-test after it has settled, or re-mix it with clean media) or reject it.');
+  }
+  if (!(volume > 0)) {
+    return cannot('no-volume', 'The batch has no volume recorded, so the kilograms for it cannot be worked out.',
+      'Correct the batch: record its volume in m³.');
+  }
+  if (!(depth.min > 0 && depth.max >= depth.min)) {
+    return cannot('no-depth', 'The rules give no incorporation depth, so no rate per m³ can be derived.',
+      'Correct the rules file before liming any batch.');
+  }
+
+  const perM3Low = round(plan.ratePer100Low / (100 * depth.max), 2);
+  const perM3High = round(plan.ratePer100High / (100 * depth.min), 2);
+  const kgLow = round(perM3Low * volume, 1);
+  const kgHigh = round(perM3High * volume, 1);
+  const kgText = kgLow === kgHigh ? `${kgLow} kg` : `${kgLow}–${kgHigh} kg`;
+  const fractionText = plan.fraction === 1 ? '' : plan.fraction === 0.5 ? ' (half the original rate)'
+    : ' (one quarter of the original rate)';
+  return {
+    ...plan,
+    derivable: true,
+    basis: 'volume',
+    volumeM3: volume,
+    perM3Low,
+    perM3High,
+    kgLow,
+    kgHigh,
+    kgText,
+    headline: `pH ${plan.reading.mean.toFixed(2)}. Mix ${kgText} of ${plan.product} through the `
+      + `${volume} m³ batch${fractionText}, before any bag is filled.`,
+    steps: [
+      `Mix ${kgText} of ${plan.product} through the whole heap — ${perM3Low}–${perM3High} kg per m³, `
+        + 'the Route A rate carried over its 15–20 cm depth.',
+      spec.after || 'Re-test the batch at three points after the lime has worked in.',
+      'No bag is filled from this batch until the re-test passes.',
+    ],
+    derivation: spec.derivation || null,
+  };
+}
+
 function treatAreaText(zoneType, gate) {
+  if (zoneType === 'bag') return 'whole batch heap, mixed through before filling';
   return zoneType === 'greenhouse'
     ? 'bed area only (not the paths)'
     : 'full cropped area';

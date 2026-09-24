@@ -9,7 +9,7 @@
 // rules file is cached with it: the plan checks, the gate checks and both
 // calculators are required to work with no signal (FR-DOC-03), and they cannot
 // do that if their own rule book needs a network.
-const CACHE = 'douvalue-v16';
+const CACHE = 'douvalue-v18';
 
 const SHELL = [
   './',
@@ -77,6 +77,9 @@ const SHELL = [
   './js/domain/shift.js',
   './js/domain/stock.js',
   './js/domain/supervision.js',
+  './js/domain/farm.js',
+  './js/domain/nursery.js',
+  './js/domain/media.js',
 ];
 
 // NFR-OFF-05 — a new version waits to be asked.

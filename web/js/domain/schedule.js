@@ -22,6 +22,7 @@
 
 import { addDays, daysBetween, isoDate } from '../util.js';
 import { stageAt, waterDemandMmPerDay } from './crops.js';
+import { NURSERY_OPERATIONS, nurseryTasks } from './nursery.js';
 
 /**
  * The schedule.
@@ -202,6 +203,10 @@ export function tasksFor(state, { date = isoDate(), operations = null } = {}) {
     }
   }
 
+  // FR-FARM-04: the nursery has no crop cycle, but it has daily work of its
+  // own — and it comes first in the day, because staff go nursery first.
+  out.push(...nurseryTasks(state, { date, taskIdFor, positionOfZone }));
+
   return out.sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
 }
 
@@ -254,6 +259,6 @@ export function dayProgress(state, { date = isoDate(), personId = null } = {}) {
 
 /** The steps for a task kind, for the numbered card on the worker's screen (UX-19). */
 export function howTo(kind, operations = OPERATIONS) {
-  const op = operations.find((o) => o.kind === kind);
+  const op = operations.find((o) => o.kind === kind) || NURSERY_OPERATIONS.find((o) => o.kind === kind);
   return op ? { title: op.title, how: op.how, why: op.why, proof: !!op.proof } : null;
 }

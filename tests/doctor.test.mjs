@@ -519,7 +519,7 @@ test('FR-DOC-06: a clean nematode result with no lab named is not a lab report',
   const state = farm({
     // Dated before transplant: Gate 0 asks whether this ground was cleared
     // before the crop went in, not whether it was tested afterwards.
-    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-50), ph: 6.2, points: 3,
+    soilTests: [{ id: 't1', zoneId: 'gh1', date: day(-50), ph: 6.2, points: 3, calibrated: true,
       photo: 'data:image/jpeg;base64,x', nematode: 'clean' }],
   });
   const g0 = gateEvidence(state, { zoneId: 'gh1', today: TODAY }).gates.find((g) => g.id === 'G0');
