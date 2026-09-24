@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/**/*.test.mjs\"",
-    "start": "npx --yes http-server . -p 8000 -c-1 -o /web/"
+    "start": "npx --yes http-server . -p 8000 -c-1 -o /web/",
+    "test:clock": "node scripts/test-clock-offsets.mjs"
   },
   "license": "MIT"
 }
