@@ -19,8 +19,12 @@ import {
 import { can } from '../store.js';
 import { peekRules } from '../rules.js';
 import {
-  canPlant, gateBoard, gateModel, GATE_RULES, GATE_STATE, isBlocking,
+  canPlant, fillCheck, gateBoard, gateModel, GATE_RULES, GATE_STATE, isBlocking,
 } from '../domain/gates.js';
+import {
+  batchName, batchTrace, batchFailure, bagRules, isBagZone, MEDIA_SOURCES, traceText,
+} from '../domain/media.js';
+import { TEXTURES } from '../domain/calc.js';
 import { confirmOutput, draftCycleReview, gateEvidence } from '../domain/doctor.js';
 import { isNursery, zoneTypeLabel } from '../domain/farm.js';
 import {
@@ -75,6 +79,23 @@ export const gatesView = {
       openTopsoil(ctx, watched);
     },
     'save-topsoil': saveTopsoil,
+
+    // C-19: plant-bag media — a batch, its fills batch → bags → zone, and what
+    // happens to it afterwards. Recording any of it is gate evidence (UX-27).
+    'open-media': async (ctx, el) => {
+      const watched = await requireSupervision(ctx, 'gate');
+      if (!watched.ok) return;
+      openMedia(ctx, el.dataset.id || null, watched);
+    },
+    'save-media': saveMedia,
+    'open-fill': async (ctx, el) => {
+      const watched = await requireSupervision(ctx, 'gate');
+      if (!watched.ok) return;
+      openFill(ctx, el.dataset.zone || openZone, watched);
+    },
+    'save-fill': saveFill,
+    'open-media-end': (ctx, el) => openMediaEnd(ctx, el.dataset.id, el.dataset.kind),
+    'save-media-end': saveMediaEnd,
     'open-evidence': async (ctx, el) => {
       const watched = await requireSupervision(ctx, 'gate');
       if (!watched.ok) return;
@@ -175,6 +196,14 @@ function zonePanel(ctx, row) {
   const owner = can(ctx.user, 'manageOwners');
   let out = `<h2 class="section">${esc(row.zone.name)}</h2>`;
 
+  for (const { batch, failure } of model.failedMedia || []) {
+    const trace = batchTrace(ctx.state, batch.id);
+    out += card(note('danger', `Media batch ${batchName(batch)} failed ${failure.date}`,
+      `<small><b>${esc(failure.why)}.</b> It filled: ${esc(traceText(trace))}. `
+      + 'Every zone on that list is carrying the failed media. Bags from it are discarded, not refilled, '
+      + 'and a crop in them counts as galled at the next restart.</small>'), { tight: true });
+  }
+
   if (row.planted && !row.ok) {
     out += card(note('danger', 'Already planted behind a closed gate',
       '<small>This went in without every transplant condition passing. Treat what is in the ground as '
@@ -194,6 +223,7 @@ function zonePanel(ctx, row) {
       + (g.note ? `<p><small>${esc(g.note)}</small></p>` : ''),
     );
   }
+  if (isBagZone(row.zone) || model.media === 'bag') out += mediaCard(ctx, row.zone);
   return out;
 }
 
@@ -226,7 +256,17 @@ function gateActions(ctx, g, row, model) {
   const record = (c, gateId, extra = {}) => button(`Record: ${c.label || c.name}`.slice(0, 60), 'open-evidence', {
     cls: 'btn-ghost btn-block', data: { gate: gateId, item: c.itemId || c.id, zone: zoneId, ...extra } });
 
-  if (g.id === 'G0') {
+  if (g.id === 'G0' && g.media === 'bag') {
+    if (g.conditions.some((c) => ['media_batch', 'ph', 'nematode', 'heap_solarisation'].includes(c.id) && isBlocking(c))) {
+      btns.push(button('Record a test of a media batch', 'open-soiltest', { cls: 'btn-block', icon: '🧪' }));
+      btns.push(button('Fill bags from a batch', 'open-fill', { cls: 'btn-ghost btn-block', icon: '🪴', data: { zone: zoneId } }));
+      btns.push(button('Log a media batch', 'open-media', { cls: 'btn-ghost btn-block', icon: '🚚' }));
+    }
+    if (g.conditions.some((c) => c.id === 'bag_barrier' && isBlocking(c))) {
+      btns.push('<p><small>Record what the bags stand on under Zones → this zone.</small></p>');
+    }
+    btns.push(signoffButtons(ctx, g.conditions.find((c) => c.id === 'doctor_check'), zoneId, 'G0'));
+  } else if (g.id === 'G0') {
     if (g.conditions.some((c) => (c.id === 'ph' || c.id === 'nematode') && isBlocking(c))) {
       btns.push(button('Record a soil test', 'open-soiltest', { cls: 'btn-block', icon: '🧪', data: { plotId: zoneId } }));
     }
@@ -237,6 +277,8 @@ function gateActions(ctx, g, row, model) {
     for (const c of missing) {
       if (c.id === 'seedling_release') {
         btns.push('<p><small>Released from the nursery, on the nursery zone\'s own gate screen.</small></p>');
+      } else if (c.id === 'cr_fresh_media') {
+        btns.push(button('Fill bags from a batch', 'open-fill', { cls: 'btn-ghost btn-block', icon: '🪴', data: { zone: zoneId } }));
       } else {
         btns.push(record(c, g.id));
       }
@@ -283,7 +325,7 @@ async function saveDoctorCheck(ctx, el) {
 
 /** The tests and deliveries the gates are reading, so the verdicts can be checked. */
 function evidence(ctx, zoneId) {
-  const tests = [...(ctx.state.soilTests || [])].filter((t) => !zoneId || t.zoneId === zoneId || t.batchId)
+  const tests = [...(ctx.state.soilTests || [])].filter((t) => !zoneId || t.zoneId === zoneId || t.batchId || t.mediaBatchId)
     .sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 10);
   const batches = Object.values(ctx.state.topsoilBatches || {});
   if (!tests.length && !batches.length) return '';
@@ -293,7 +335,8 @@ function evidence(ctx, zoneId) {
     + (tests.length
       ? '<ul class="list">' + tests.map((t) => {
         const zone = ctx.state.plots[t.zoneId];
-        const where = zone ? zone.name : (t.batchId ? `topsoil batch ${t.batchId.slice(-4)}` : 'unknown');
+        const where = zone ? zone.name : t.batchId ? `topsoil batch ${t.batchId.slice(-4)}`
+          : t.mediaBatchId ? `media batch ${batchName((ctx.state.mediaBatches || {})[t.mediaBatchId])}` : 'unknown';
         const points = Array.isArray(t.readings) && t.readings.length ? ` (${t.readings.join(', ')})` : '';
         return '<li><div class="grow">'
           + `<b>${esc(where)}</b><small>${t.ph != null ? `pH ${esc(t.ph)}${esc(points)}` : 'no pH'}`
@@ -334,7 +377,9 @@ function openSoilTest(ctx, plotId, watched = null) {
     + field('Where', select('target', [
       ...zones.map((z) => ({ value: `zone:${z.id}`, label: z.name })),
       ...batches.map((b) => ({ value: `batch:${b.id}`, label: `Topsoil — ${b.supplier || b.id.slice(-4)}` })),
-    ], plotId ? `zone:${plotId}` : '', { required: true, placeholder: 'Choose a zone or a topsoil batch' }))
+      ...Object.values(ctx.state.mediaBatches || {}).filter((b) => !b.rejected)
+        .map((b) => ({ value: `media:${b.id}`, label: `Media batch — ${batchName(b)}` })),
+    ], plotId ? `zone:${plotId}` : '', { required: true, placeholder: 'Choose a zone, a topsoil batch or a media batch' }))
     + field('Date of the test', input('date', { type: 'date', value: isoDate(), required: true }))
     + '<p><small><b>pH — three points per block (FR-GATE-01).</b> '
     + `${esc(rules.test || '')}</small></p>`
@@ -381,6 +426,7 @@ async function saveSoilTest(ctx, form) {
     id: uid('st'),
     zoneId: kind === 'zone' ? id : null,
     batchId: kind === 'batch' ? id : null,
+    mediaBatchId: kind === 'media' ? id : undefined,
     date: data.date || isoDate(),
     ph: mean,
     readings: readings.length ? readings : undefined,
@@ -458,6 +504,10 @@ function openEvidence(ctx, d, watched = null) {
         + field('Plastic lifted', input('coverTo', { type: 'date' }),
           'Leave blank while it is still on. One continuous span of 21 to 28 days; the date above '
           + 'is the day you record this.') : '')
+    + (d.item === 'root_inspection'
+      ? '<label class="tick" style="margin:10px 0"><input type="checkbox" name="galls" value="1">'
+        + '<span class="txt"><b>Galls found on the roots</b><span class="pid">A galled crop\'s plant bags are '
+        + 'discarded, not refilled, at the next restart</span></span></label>' : '')
     + (d.item === 'pre_plant_knockdown'
       ? note('warn', 'Within 48 h before transplant',
         '<small>Spray the day before transplant, or the day before that, and keep the doors shut '
@@ -487,12 +537,186 @@ async function saveEvidence(ctx, form) {
     route: data.route || undefined,
     coverFrom: data.coverFrom || undefined,
     coverTo: data.coverTo || undefined,
+    galls: data.itemId === 'root_inspection' ? !!data.galls : undefined,
     photo: photoPayload() || undefined,
     supervision: supervisionStamp(gateWatch),
   });
   resetPhoto();
   closeSheet();
   toast('Evidence recorded');
+}
+
+// --- Plant-bag media (C-19) ----------------------------------------------------
+
+function batchStatus(ctx, b) {
+  if (b.rejected) return { text: `rejected ${b.rejected.date}: ${b.rejected.reason}`, tone: 'muted', badge: 'rejected' };
+  const failure = batchFailure(ctx.state, b.id);
+  if (failure) return { text: `failed ${failure.date}: ${failure.why}`, tone: 'danger', badge: 'failed' };
+  const check = fillCheck(ctx.state, b.id, { date: isoDate() });
+  return check.ok ? { text: 'cleared to fill bags', tone: 'ok', badge: 'cleared' }
+    : { text: check.why, tone: 'danger', badge: 'not cleared' };
+}
+
+/** Every media batch, what it filled, and what can still be done with it. */
+function mediaCard(ctx, zone) {
+  const batches = Object.values(ctx.state.mediaBatches || {})
+    .sort((a, b) => ((a.deliveredDate || '') < (b.deliveredDate || '') ? 1 : -1)).slice(0, 12);
+  const refused = (ctx.state.mediaFills || []).filter((f) => f.refused && f.zoneId === zone.id).slice(-3);
+  const manager = can(ctx.user, 'settings');
+  return card(
+    cardHead('Media batches', badge('batch → bags → zone', 'muted'))
+    + `<p><small>${esc((bagRules() || {}).why || '')}</small></p>`
+    + refused.map((f) => note('danger', `Fill refused ${f.date}`, `<small>${esc(f.refused.why)}</small>`)).join('')
+    + (batches.length ? '<ul class="list">' + batches.map((b) => {
+      const st = batchStatus(ctx, b);
+      const trace = batchTrace(ctx.state, b.id);
+      return '<li><div class="grow">'
+        + `<b>${esc(batchName(b))}</b><small>${esc(b.supplier || 'supplier not recorded')} · delivered `
+        + `${esc(b.deliveredDate || '?')} · ${esc(b.source || '?')}${b.volumeM3 ? ` · ${esc(b.volumeM3)} m³` : ''}`
+        + `${b.covered ? ` · under plastic ${esc(b.coverFrom || '?')} to ${esc(b.coverTo || 'still on')}` : ''}</small>`
+        + `<small>${trace.zones.length ? `Filled: ${esc(traceText(trace))}` : 'Has filled no bags yet.'}</small>`
+        + (st.tone === 'danger' ? `<small><b>${esc(st.text)}</b></small>` : '')
+        + (b.rejected || batchFailure(ctx.state, b.id) ? '' : '<div class="row wrap">'
+          + button('Correct', 'open-media', { cls: 'btn-ghost btn-sm', data: { id: b.id } })
+          + (manager ? button('Reject', 'open-media-end', { cls: 'btn-ghost btn-sm', data: { id: b.id, kind: 'reject' } }) : '')
+          + (trace.zones.length ? button('Record a failure', 'open-media-end', { cls: 'btn-ghost btn-sm', data: { id: b.id, kind: 'fail' } }) : '')
+          + '</div>')
+        + `</div>${badge(st.badge, st.tone)}</li>`;
+    }).join('') + '</ul>' : '<p><small>No media batches yet.</small></p>')
+    + button('Log a media batch', 'open-media', { cls: 'btn-ghost btn-block', icon: '🚚' }),
+  );
+}
+
+function openMedia(ctx, id, watched = null) {
+  gateWatch = watched;
+  const b = id ? ctx.state.mediaBatches[id] : null;
+  const cycles = Object.values(ctx.state.cycles || {}).filter((c) => c.status === 'closed');
+  openSheet(`<h2>${b ? `Correct ${esc(batchName(b))}` : 'Log a media batch'}</h2>`
+    + '<p><small>A batch is the ground for every bag it fills. Gate 0 on a bag zone reads its supplier, '
+    + 'delivery date, three-point pH, nematode result and, if the heap was covered, the solarisation dates.</small></p>'
+    + '<form data-act="save-media">'
+    + `<input type="hidden" name="id" value="${esc(b ? b.id : '')}">`
+    + field('Batch label', input('label', { value: b ? b.label || '' : '', required: true, placeholder: 'e.g. M-2026-12-A' }),
+      'Written on the heap, so the batch can be followed into the bags.')
+    + field('Supplier', input('supplier', { value: b ? b.supplier || '' : '', required: true }))
+    + field('Delivered on', input('deliveredDate', { type: 'date', value: b ? b.deliveredDate || '' : isoDate(), required: true }))
+    + field('Fresh or re-treated', select('source', MEDIA_SOURCES, b ? b.source || 'fresh' : 'fresh'))
+    + field('How it was re-treated', input('treatment', { value: b ? b.treatment || '' : '', placeholder: 'Re-treated media only' }))
+    + field('Re-treated from which crop', select('fromCycleId', cycles.map((c) => ({
+      value: c.id, label: `${(ctx.state.plots[c.plotId] || {}).name || c.plotId} — planted ${c.transplantDate || '?'}` })),
+    b ? b.fromCycleId || '' : '', { placeholder: 'Not re-treated, or not from this farm' }),
+    'Media from a galled crop is discarded, not re-treated.')
+    + field('What it is', input('material', { value: b ? b.material || '' : '', placeholder: 'e.g. topsoil, compost, rice hull' }))
+    + field('Texture, for the lime rate', select('texture', [
+      ...TEXTURES.map((t) => ({ value: t.id, label: t.name })),
+      { value: 'other', label: 'Something else (no lime rate can be derived)' },
+    ], b ? b.texture || '' : '', { placeholder: 'Not recorded' }))
+    + field('Volume in m³', input('volumeM3', { type: 'number', step: '0.1', value: b ? b.volumeM3 || '' : '' }),
+      'Lime for bag media is by volume, not bed area.')
+    + '<label class="tick" style="margin:10px 0"><input type="checkbox" name="covered" value="1"'
+    + `${b && b.covered ? ' checked' : ''}><span class="txt"><b>The heap was covered (solarised)</b></span></label>`
+    + field('Plastic went on', input('coverFrom', { type: 'date', value: b ? b.coverFrom || '' : '' }))
+    + field('Plastic lifted', input('coverTo', { type: 'date', value: b ? b.coverTo || '' : '' }), 'Leave blank while it is still on.')
+    + field('Notes', textarea('note', { rows: 2 }))
+    + `<button class="btn-block btn-lg" type="submit">${b ? 'Save the correction' : 'Save the batch'}</button>`
+    + '</form>');
+}
+
+async function saveMedia(ctx, form) {
+  const data = readForm(form);
+  if (!String(data.supplier || '').trim()) { toast('Say who supplied it', true); return; }
+  if (!data.deliveredDate) { toast('Say the day it was delivered', true); return; }
+  if (data.covered && data.coverFrom && data.coverTo && data.coverTo < data.coverFrom) {
+    toast('The plastic cannot come off before it went on', true); return;
+  }
+  const from = data.fromCycleId ? ctx.state.cycles[data.fromCycleId] : null;
+  const payload = {
+    label: String(data.label || '').trim(), supplier: data.supplier.trim(), deliveredDate: data.deliveredDate,
+    source: data.source || 'fresh', treatment: data.treatment || '', material: data.material || '',
+    texture: data.texture || null, volumeM3: Number(data.volumeM3) || 0,
+    fromCycleId: from ? from.id : null, fromZoneId: from ? from.plotId : null,
+    covered: !!data.covered, coverFrom: data.covered ? data.coverFrom || null : null,
+    coverTo: data.covered ? data.coverTo || null : null, note: data.note || '',
+    supervision: supervisionStamp(gateWatch),
+  };
+  if (data.id) await ctx.store.dispatch('media.update', { id: data.id, ...payload });
+  else await ctx.store.dispatch('media.receive', { id: uid('mb'), ...payload, enteredAt: new Date().toISOString() });
+  closeSheet();
+  toast(data.id ? 'Batch corrected' : 'Batch logged. Test it at three points and send a sample to the lab before any bag is filled.');
+}
+
+function openFill(ctx, zoneId, watched = null) {
+  gateWatch = watched;
+  const zones = Object.values(ctx.state.plots || {}).filter((z) => !z.retired && isBagZone(z));
+  const batches = Object.values(ctx.state.mediaBatches || {}).filter((b) => !b.rejected);
+  const today = isoDate();
+  openSheet('<h2>Fill bags from a batch</h2>'
+    + '<p><small>Only a batch that has cleared its own checks fills bags. The fill is recorded batch → bags → '
+    + 'zone, so if the batch fails later every zone it went into is named.</small></p>'
+    + (batches.length ? '<ul>' + batches.map((b) => {
+      const check = fillCheck(ctx.state, b.id, { date: today });
+      return `<li><small><b>${esc(batchName(b))}</b>: ${check.ok ? 'cleared' : esc(check.why)}</small></li>`;
+    }).join('') + '</ul>' : '')
+    + '<form data-act="save-fill">'
+    + field('Batch', select('batchId', batches.map((b) => ({ value: b.id, label: batchName(b) })), '', { required: true, placeholder: 'Choose the batch' }))
+    + field('Zone', select('zoneId', zones.map((z) => ({ value: z.id, label: z.name })), zoneId || '', { required: true, placeholder: 'Choose a plant-bag zone' }))
+    + field('How many bags', input('bags', { type: 'number', inputmode: 'numeric', required: true }))
+    + field('Litres per bag', input('litresPerBag', { type: 'number', inputmode: 'numeric' }))
+    + '<label class="tick" style="margin:10px 0"><input type="checkbox" name="newBags" value="1" checked>'
+    + '<span class="txt"><b>New bags</b><span class="pid">Bags from a galled crop are discarded, not refilled</span></span></label>'
+    + field('Notes', textarea('note', { rows: 2 }))
+    + '<button class="btn-block btn-lg" type="submit">Record the fill</button>'
+    + '</form>');
+}
+
+async function saveFill(ctx, form) {
+  const data = readForm(form);
+  if (!data.batchId || !data.zoneId) { toast('Say which batch and which zone', true); return; }
+  if (!(Number(data.bags) > 0)) { toast('Say how many bags', true); return; }
+  const id = uid('mf');
+  await ctx.store.dispatch('media.fill', {
+    id, batchId: data.batchId, zoneId: data.zoneId, date: isoDate(), bags: Number(data.bags),
+    litresPerBag: Number(data.litresPerBag) || null, newBags: !!data.newBags, note: data.note || '',
+    supervision: supervisionStamp(gateWatch),
+  });
+  closeSheet();
+  const f = (ctx.store.state.mediaFills || []).find((x) => x.id === id);
+  if (f && f.refused) toast(`Fill refused: ${f.refused.why}`, true);
+  else toast('Fill recorded');
+}
+
+function openMediaEnd(ctx, id, kind) {
+  const b = ctx.state.mediaBatches[id];
+  if (!b) return;
+  const trace = batchTrace(ctx.state, id);
+  openSheet(`<h2>${kind === 'reject' ? 'Reject' : 'Record a failure of'} ${esc(batchName(b))}</h2>`
+    + (kind === 'reject'
+      ? '<p><small>A rejected batch fills no more bags. It stays on the record.</small></p>'
+      : note('danger', 'Every zone it filled will be told', `<small>${esc(traceText(trace) || 'It has filled no bags.')}</small>`))
+    + '<form data-act="save-media-end">'
+    + `<input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="kind" value="${esc(kind)}">`
+    + (kind === 'fail' ? field('What failed', select('reason', [
+      { value: 'nematode', label: 'Nematodes (galls or a lab result)' },
+      { value: 'ph', label: 'pH out of range' },
+      { value: 'disease', label: 'Soil-borne disease' },
+      { value: 'other', label: 'Something else' },
+    ], 'nematode')) : field('Why', input('reason', { required: true })))
+    + field('Notes', textarea('note', { rows: 2, required: kind === 'fail' }))
+    + '<button class="btn-block btn-lg btn-danger" type="submit">Save</button>'
+    + '</form>');
+}
+
+async function saveMediaEnd(ctx, form) {
+  const data = readForm(form);
+  if (String(data.reason || '').trim().length < 3) { toast('Say why', true); return; }
+  if (data.kind === 'reject') {
+    await ctx.store.dispatch('media.reject', { id: data.id, date: isoDate(), reason: data.reason.trim() });
+    toast('Batch rejected');
+  } else {
+    await ctx.store.dispatch('media.fail', { id: data.id, date: isoDate(), reason: data.reason, note: data.note || '' });
+    toast('Failure recorded. Every zone it filled is named on the Gates screen and in the digest.');
+  }
+  closeSheet();
 }
 
 // --- The nursery (FR-FARM-04, FR-FARM-05) ------------------------------------

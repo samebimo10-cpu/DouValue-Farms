@@ -8,6 +8,7 @@ import { appendEvents, deviceId, loadEvents } from './db.js';
 import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
 import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { releaseCheck } from './domain/nursery.js';
+import { fillCheck } from './domain/gates.js';
 import { peekRules } from './rules.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
@@ -164,6 +165,9 @@ const EMPTY = () => ({
   gateOverrides: [],
   // FR-FARM-05 — seedling batches in the nursery, keyed by id.
   seedlingBatches: {},
+  // C-19 — plant-bag media: batches keyed by id, and every fill batch → bags → zone.
+  mediaBatches: {},
+  mediaFills: [],
   // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
   // gates, and the samples that went to a lab.
   doctorOutputs: [],
@@ -219,6 +223,7 @@ export function reduce(events) {
       case 'lab.record': return `lab:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
       case 'seedling.sow': return `seedling:${p.id}`;
+      case 'media.receive': return `media:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
@@ -248,6 +253,8 @@ export function reduce(events) {
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
       case 'seedling.check': case 'seedling.harden': case 'seedling.discard': return `seedling:${p.batchId}`;
       case 'seedling.release': return `seedling:${p.id}`;
+      case 'media.update': case 'media.reject': case 'media.fail': return `media:${p.id}`;
+      case 'media.fill': return `media:${p.batchId}`;
       default: return null;
     }
   };
@@ -271,6 +278,7 @@ export function reduce(events) {
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
       case 'seedling': return !!state.seedlingBatches[id];
+      case 'media': return !!state.mediaBatches[id];
       case 'report': return state.reports.some((r) => r.id === id);
       case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
@@ -470,7 +478,13 @@ export function reduce(events) {
       }
 
       case 'cycle.start': {
-        state.cycles[p.id] = { ...p, status: 'active', events: {}, startedBy: e.by, startedAt: e.at };
+        // C-19: a crop keeps the media it was planted in, so a zone changed
+        // from bed to bags later does not re-judge what is already growing.
+        const plot = state.plots[p.plotId];
+        state.cycles[p.id] = {
+          ...p, media: p.media || (plot && plot.media === 'bag' ? 'bag' : 'bed'),
+          status: 'active', events: {}, startedBy: e.by, startedAt: e.at,
+        };
         // FR-FARM-05: each batch is linked to the block it goes to. Only a
         // batch released to this very block, and not already planted, links.
         const batch = p.seedlingBatchId && state.seedlingBatches[p.seedlingBatchId];
@@ -693,6 +707,49 @@ export function reduce(events) {
         b.status = 'released';
         b.release = attempt;
         delete b.releaseRefused;
+        break;
+      }
+
+      // --- Plant-bag media (C-19) -------------------------------------------
+      // A batch is received with its supplier and delivery date, tested like a
+      // bed (soiltest.record with mediaBatchId), corrected, and then fills
+      // bags. A fill is re-judged here on every replay against the batch's own
+      // Gate 0 lines, as a seedling release is: a phone cannot sync its way to
+      // bags filled from an untested heap. A rejection or a later failure is a
+      // new fact about the batch; nothing about it is ever deleted.
+      case 'media.receive':
+        state.mediaBatches[p.id] = { ...p, by: e.by, at: e.at, rejected: null, failure: null, corrections: [] };
+        break;
+      case 'media.update': {
+        const b = state.mediaBatches[p.id];
+        if (!b) break;
+        const { id, rejected, failure, by, at, corrections, ...fields } = p;
+        b.corrections.push({ fields: Object.keys(fields), by: e.by, at: e.at, note: p.note || '' });
+        Object.assign(b, fields);
+        break;
+      }
+      case 'media.reject': {
+        const b = state.mediaBatches[p.id];
+        if (b && !b.rejected) b.rejected = { date: p.date || isoDate(new Date(e.at)), reason: p.reason || 'rejected', by: e.by, at: e.at };
+        break;
+      }
+      case 'media.fail': {
+        const b = state.mediaBatches[p.id];
+        if (b && !b.failure) {
+          b.failure = { date: p.date || isoDate(new Date(e.at)), reason: p.reason || 'recorded', note: p.note || '', by: e.by, at: e.at };
+        }
+        break;
+      }
+      case 'media.fill': {
+        const date = p.date || isoDate(new Date(e.at));
+        const verdict = fillCheck(state, p.batchId, { date });
+        const fill = { ...p, id: p.id || e.id, date, bags: Number(p.bags) || 0, newBags: !!p.newBags, by: e.by, at: e.at };
+        if (!state.plots[p.zoneId]) fill.refused = { why: 'That zone is not on record.' };
+        else if (state.plots[p.zoneId].media !== 'bag') {
+          fill.refused = { why: `${state.plots[p.zoneId].name || 'That zone'} grows in bed soil, not plant bags. Set its media to plant bags first.` };
+        }
+        else if (!verdict.ok) fill.refused = { why: verdict.why };
+        state.mediaFills.push(fill);
         break;
       }
 

@@ -672,6 +672,6 @@ test('a name that could be two actives resolves to neither', () => {
 });
 
 test('the catalogue says which version of the rules it was built from', () => {
-  assert.equal(rules.meta.version, 'rules-1.3');
+  assert.equal(rules.meta.version, 'rules-1.4');
   assert.match(ref('active_ingredients/0/group'), new RegExp(`^${RULES_FILE.replace('.', '\\.')}#/`));
 });

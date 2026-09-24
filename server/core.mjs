@@ -167,6 +167,17 @@ export const EVENT_POLICY = {
   'seedling.harden':   { write: 'scout',         read: ANY, guard: guardSeedlingRef },
   'seedling.discard':  { write: 'scout',         read: ANY, guard: guardSeedlingRef },
   'seedling.release':  { write: 'verifyHarvest', read: ANY, guard: guardSeedlingRelease },
+  // C-19: plant-bag media. A batch is received like any bought-in input, and
+  // corrected by the same people; filling bags commits a zone to a batch, which
+  // is cycle management, as assigning topsoil is. Rejecting a batch is the
+  // Farm Manager's or the Owner's call (`settings`, as for labels above).
+  // Recording that a batch failed is anybody who records soil tests: bad news
+  // must be easy to write down.
+  'media.receive':     { write: 'logInputs',     read: ANY, guard: guardMediaReceive },
+  'media.update':      { write: 'logInputs',     read: ANY, guard: guardMediaRef },
+  'media.reject':      { write: 'settings',      read: ANY, guard: guardMediaReason },
+  'media.fail':        { write: 'scout',         read: ANY, guard: guardMediaReason },
+  'media.fill':        { write: 'manageCycles',  read: ANY, guard: guardMediaFill },
   // FR-DIAG-05: a sample, from recommendation to result.
   'lab.record':        { write: 'scout',         read: ANY },
   'lab.send':          { write: 'scout',         read: ANY, guard: guardLabSend },
@@ -733,6 +744,46 @@ function guardSeedlingRelease(event) {
   const p = event.payload || {};
   if (!p.id) return { ok: false, why: 'Say which seedling batch' };
   if (!p.zoneId) return { ok: false, why: 'A release names the block the batch goes to' };
+  return { ok: true };
+}
+
+/**
+ * C-19 — a media batch names its supplier and delivery date (Gate 0 for a bag
+ * zone reads both), and says whether it is fresh or re-treated media.
+ */
+const MEDIA_SOURCES = ['fresh', 're-treated'];
+function guardMediaReceive(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'A media batch needs an id' };
+  if (!String(p.supplier || '').trim()) return { ok: false, why: 'Say who supplied the media' };
+  if (!p.deliveredDate) return { ok: false, why: 'Say the day the media was delivered' };
+  if (!MEDIA_SOURCES.includes(p.source)) return { ok: false, why: 'Say whether the media is fresh or re-treated' };
+  return { ok: true };
+}
+
+function guardMediaRef(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which media batch' };
+  if (p.source != null && !MEDIA_SOURCES.includes(p.source)) {
+    return { ok: false, why: 'Media is fresh or re-treated' };
+  }
+  return { ok: true };
+}
+
+/** A rejection or a failure says why: it is what every zone the batch filled is told. */
+function guardMediaReason(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which media batch' };
+  if (String(p.reason || '').trim().length < 3) return { ok: false, why: 'Say why' };
+  return { ok: true };
+}
+
+/** A fill is batch → bags → zone; all three are named. */
+function guardMediaFill(event) {
+  const p = event.payload || {};
+  if (!p.batchId) return { ok: false, why: 'Say which media batch filled the bags' };
+  if (!p.zoneId) return { ok: false, why: 'Say which zone the bags are in' };
+  if (!(Number(p.bags) > 0)) return { ok: false, why: 'Say how many bags were filled' };
   return { ok: true };
 }
 

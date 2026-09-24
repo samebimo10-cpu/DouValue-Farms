@@ -38,6 +38,10 @@ import { alerts } from './alerts.js';
 import { GATE_ITEMS, gateItem } from './doctor.js';
 import { isNursery, protocolOf } from './farm.js';
 import { releasedFor } from './nursery.js';
+import {
+  BARRIERS, bagRules, batchFailure, batchName, batchesIn, fillsFor, galledCycle, mediaOf,
+} from './media.js';
+import { mediaLimePlan } from './calc.js';
 
 /**
  * Gate thresholds.
@@ -158,6 +162,7 @@ function phText(key) {
  */
 export function phGate(state, zoneId, { today = isoDate() } = {}) {
   const w = zoneWindow(state, zoneId, today);
+  if (mediaOf(state, zoneId, w.active) === 'bag') return bagGate(state, zoneId, w, 'ph');
   const zone = state.plots[zoneId];
   const batchId = zone && zone.topsoilBatchId;
   const tests = (state.soilTests || [])
@@ -165,25 +170,36 @@ export function phGate(state, zoneId, { today = isoDate() } = {}) {
     .filter((t) => t.zoneId === zoneId || (batchId && t.batchId === batchId))
     .filter((t) => t.date && t.date <= w.judged)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
+  return judgePh(tests, {
+    judged: w.judged,
+    since: w.since,
+    none: {
+      why: 'No pH reading has been recorded for this zone.',
+      fix: 'Take a three-point pH test and record it under Soil tests. Planting stays blocked until then.',
+    },
+    early: (test) => (w.since && test.zoneId === zoneId && test.date <= w.since ? {
+      why: `The last pH reading (${test.date}) was taken before the previous cycle here ended on ${w.since}.`,
+      fix: 'Re-sample. FR-GATE-01: the pH must be sampled after the last cycle in this zone ended.',
+    } : null),
+  });
+}
+
+/**
+ * The pH judgement itself, on the tests for one place, newest first. The bed
+ * and a plant-bag media batch are judged by exactly the same rules; only what
+ * counts as "too early" and the words for the fix differ. `lowFix` lets a
+ * batch replace the bed's lime advice with lime by media volume.
+ */
+function judgePh(tests, { judged, since = null, none, early, lowFix = null }) {
   const name = 'Soil pH tested';
   const test = tests[0];
 
-  if (!test) {
-    return gate('ph', name, 'unknown', {
-      why: 'No pH reading has been recorded for this zone.',
-      fix: 'Take a three-point pH test and record it under Soil tests. Planting stays blocked until then.',
-    });
-  }
+  if (!test) return gate('ph', name, 'unknown', none);
 
-  if (w.since && test.zoneId === zoneId && test.date <= w.since) {
-    return gate('ph', name, 'fail', {
-      why: `The last pH reading (${test.date}) was taken before the previous cycle here ended on ${w.since}.`,
-      fix: 'Re-sample. FR-GATE-01: the pH must be sampled after the last cycle in this zone ended.',
-      test,
-    });
-  }
+  const tooEarly = early(test);
+  if (tooEarly) return gate('ph', name, 'fail', { ...tooEarly, test });
 
-  const age = daysBetween(test.date, w.judged);
+  const age = daysBetween(test.date, judged);
   if (age > GATE_RULES.soilTestMaxAgeDays) {
     return gate('ph', name, 'fail', {
       why: `The last pH reading is ${age} days old (${test.ph} on ${test.date}).`,
@@ -227,25 +243,26 @@ export function phGate(state, zoneId, { today = isoDate() } = {}) {
   const high = highOf(test);
   const retestFrom = isoDate(addDays(test.date, GATE_RULES.holdRetestDays));
   const shown = readingsOf(test).length ? readingsOf(test).join(', ') : String(test.ph);
+  const lowered = (verdict) => (lowFix ? { ...verdict, ...lowFix(verdict, test, tests) } : verdict);
 
   if (low < GATE_RULES.phHoldBelow) {
-    return gate('ph', name, 'fail', {
+    return lowered(gate('ph', name, 'fail', {
       hold: 'below_5_2',
       why: `pH ${low} (points ${shown}) is below ${GATE_RULES.phHoldBelow}.`,
       fix: `${phText('below_5_2') || 'Apply half the original lime rate again and wait 10 days.'} `
         + `Re-test no sooner than ${retestFrom}.`,
       retestFrom,
       test,
-    });
+    }));
   }
   if (low < GATE_RULES.phMin) {
-    return gate('ph', name, 'held', {
+    return lowered(gate('ph', name, 'held', {
       hold: '5_2_to_5_49',
       why: `pH ${low} (points ${shown}) is between ${GATE_RULES.phHoldBelow} and ${GATE_RULES.phMin}: the block is held.`,
       fix: `${phText('5_2_to_5_49') || 'Hold; re-test after 10 days.'} Re-test on or after ${retestFrom}.`,
       retestFrom,
       test,
-    });
+    }));
   }
   if (high > GATE_RULES.phMax) {
     return gate('ph', name, 'fail', {
@@ -257,7 +274,7 @@ export function phGate(state, zoneId, { today = isoDate() } = {}) {
 
   // The hold is a wait, not only a number: a passing re-test taken inside the
   // ten days after a low reading has not waited out the hold.
-  const heldBy = tests.slice(1).find((t) => (!w.since || t.date > w.since)
+  const heldBy = tests.slice(1).find((t) => (!since || t.date > since)
     && lowOf(t) < GATE_RULES.phMin && daysBetween(t.date, test.date) < GATE_RULES.holdRetestDays);
   if (heldBy) {
     const from = isoDate(addDays(heldBy.date, GATE_RULES.holdRetestDays));
@@ -289,6 +306,7 @@ export function nematodeGate(state, zoneId, { today = isoDate() } = {}) {
   const zone = state.plots[zoneId];
   const batchId = zone && zone.topsoilBatchId;
   const w = zoneWindow(state, zoneId, today);
+  if (mediaOf(state, zoneId, w.active) === 'bag') return bagGate(state, zoneId, w, 'nematode');
   const name = 'Nematode clear';
 
   const tests = (state.soilTests || [])
@@ -392,6 +410,307 @@ export function batchGate(state, zoneId) {
   });
 }
 
+// --- Plant-bag zones: Gate 0 clears on the media batch (C-19) -----------------
+
+/** Rules → plant_bags.gate_0.pass_all, one label per bag-zone G0 line. */
+export const BAG_G0_ITEMS = ['media_batch', 'ph_three_point', 'lab_report', 'heap_solarisation', 'bag_barrier'];
+
+export function bagG0Label(itemId, rules = peekRules()) {
+  const lines = ((bagRules(rules) || {}).gate_0 || {}).pass_all || [];
+  return lines[BAG_G0_ITEMS.indexOf(itemId)] || itemId.replace(/_/g, ' ');
+}
+
+const batchTests = (state, batchId, judged, key) => (state.soilTests || [])
+  .filter((t) => t.mediaBatchId === batchId)
+  .filter((t) => (key === 'ph' ? t.ph != null && t.ph !== '' : !!t.nematode))
+  .filter((t) => t.date && t.date <= judged)
+  .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+/**
+ * One media batch's own Gate 0 lines, as of a day: the record (supplier,
+ * delivery date, not rejected, not failed), the three-point pH, the nematode
+ * lab result, and the heap's solarisation dates if it was covered. These are
+ * what filling a bag from the batch needs (rules → plant_bags.fill_rule), and
+ * what a bag zone's Gate 0 reads for every batch in its bags.
+ */
+export function batchLines(state, batchId, { judged = isoDate() } = {}) {
+  const batch = ((state && state.mediaBatches) || {})[batchId] || null;
+  const who = batchName(batch);
+  if (!batch) {
+    const missing = gate('media_batch', 'Media batch', 'unknown', {
+      why: 'The bags name a media batch that is not on record.',
+      fix: 'Record the delivery as a media batch, with its supplier and date, and test it.',
+    });
+    return { batch: null, record: missing, ph: missing, nematode: missing, heap: missing };
+  }
+  const delivered = batch.deliveredDate || null;
+
+  // The record.
+  let record;
+  const failure = batchFailure(state, batchId);
+  if (batch.rejected) {
+    record = gate('media_batch', 'Media batch', 'fail', {
+      why: `${who} was rejected on ${batch.rejected.date}: ${batch.rejected.reason}.`,
+      fix: 'A rejected batch fills no bags. Empty any bags filled from it and fill them from a batch that has cleared.',
+      batch,
+    });
+  } else if (failure && failure.date <= judged) {
+    record = gate('media_batch', 'Media batch', 'fail', {
+      why: `${who} failed on ${failure.date}: ${failure.why}.`,
+      fix: 'Empty and discard the bags filled from it. Refill from a batch that has cleared Gate 0.',
+      batch, failure,
+    });
+  } else if (!String(batch.supplier || '').trim() || !delivered) {
+    record = gate('media_batch', 'Media batch', 'fail', {
+      why: `${who} does not record ${!String(batch.supplier || '').trim() ? 'its supplier' : 'its delivery date'}.`,
+      fix: 'Correct the batch record: the supplier and the day it was delivered. A batch nobody can trace is not cleared.',
+      batch,
+    });
+  } else {
+    record = gate('media_batch', 'Media batch', 'pass', {
+      why: `${who}: ${batch.supplier}, delivered ${delivered}${batch.volumeM3 ? `, ${batch.volumeM3} m³` : ''}.`,
+      batch,
+    });
+  }
+
+  // The pH, judged by the same rules as a bed, with lime by media volume.
+  const phTests = batchTests(state, batchId, judged, 'ph');
+  const ph = judgePh(phTests, {
+    judged,
+    none: {
+      why: `No pH reading has been recorded for ${who}.`,
+      fix: 'Take a three-point pH test of the batch and record it against the batch. No bag is filled until then.',
+    },
+    early: (test) => (delivered && test.date < delivered ? {
+      why: `The last pH reading of ${who} (${test.date}) is from before it was delivered on ${delivered}.`,
+      fix: 'Re-test the batch as delivered, at three points.',
+    } : null),
+    lowFix: (verdict, test, all) => batchLimeFix(batch, verdict, test, all, judged),
+  });
+
+  // The nematode lab result.
+  let nematode;
+  const nt = batchTests(state, batchId, judged, 'nematode')[0];
+  if (!nt) {
+    nematode = gate('nematode', 'Nematode clear', 'unknown', {
+      why: `No nematode test has been recorded for ${who}.`,
+      fix: 'Send a sample of the batch for a nematode assay and record the result against the batch.',
+    });
+  } else if (delivered && nt.date < delivered) {
+    nematode = gate('nematode', 'Nematode clear', 'fail', {
+      why: `The nematode result for ${who} (${nt.date}) is from before it was delivered on ${delivered}.`,
+      fix: 'Sample the batch as delivered and send it to the lab.', test: nt,
+    });
+  } else if (daysBetween(nt.date, judged) > GATE_RULES.nematodeMaxAgeDays) {
+    nematode = gate('nematode', 'Nematode clear', 'fail', {
+      why: `The clean result for ${who} is ${daysBetween(nt.date, judged)} days old (${nt.date}).`,
+      fix: `Re-test. After ${GATE_RULES.nematodeMaxAgeDays} days a clean result no longer covers this media.`, test: nt,
+    });
+  } else if (nt.nematode !== 'clean') {
+    nematode = gate('nematode', 'Nematode clear', 'fail', {
+      why: `The test of ${who} on ${nt.date} came back ${nt.nematode}.`,
+      fix: 'Reject the batch. Media carrying nematodes goes into no bag on this farm.', test: nt,
+    });
+  } else if (!String(nt.lab || '').trim()) {
+    nematode = gate('nematode', 'Nematode clear', 'fail', {
+      why: `The clean result for ${who} on ${nt.date} does not name the lab that gave it.`,
+      fix: 'Record which lab tested it and keep the report. Gate 0 asks for a lab report, not a note.', test: nt,
+    });
+  } else {
+    const age = daysBetween(nt.date, judged);
+    nematode = gate('nematode', 'Nematode clear', 'pass', {
+      why: `${nt.lab} returned ${who} clean ${nt.date}${age ? ` (${age} days ago)` : ' today'}.`, test: nt,
+    });
+  }
+
+  // The heap's solarisation dates, if it was covered.
+  let heap;
+  if (!batch.covered) {
+    heap = gate('heap_solarisation', 'Heap solarisation', 'pass', {
+      why: `${who}: the heap was not covered, so there are no solarisation dates to record.`,
+    });
+  } else if (!batch.coverFrom) {
+    heap = gate('heap_solarisation', 'Heap solarisation', 'fail', {
+      why: `${who} was covered but the day the plastic went on is not recorded.`,
+      fix: 'Correct the batch record: the day the plastic went on and the day it was lifted.',
+    });
+  } else if (!batch.coverTo || batch.coverTo > judged) {
+    heap = gate('heap_solarisation', 'Heap solarisation', 'held', {
+      why: `${who} has been under plastic since ${batch.coverFrom}.`,
+      fix: 'Record the day the plastic was lifted. Nothing is filled from a heap still under plastic.',
+    });
+  } else if (batch.coverTo < batch.coverFrom) {
+    heap = gate('heap_solarisation', 'Heap solarisation', 'fail', {
+      why: `${who}: the plastic is recorded as lifted (${batch.coverTo}) before it went on (${batch.coverFrom}).`,
+      fix: 'Correct the solarisation dates on the batch record.',
+    });
+  } else {
+    heap = gate('heap_solarisation', 'Heap solarisation', 'pass', {
+      why: `${who}: under plastic ${batch.coverFrom} to ${batch.coverTo} (${daysBetween(batch.coverFrom, batch.coverTo)} days).`,
+    });
+  }
+
+  return { batch, record, ph, nematode, heap };
+}
+
+/**
+ * Lime for a batch whose pH is low: by media volume, not bed area (C-19). When
+ * no rate can be derived the batch is corrected or rejected — the gate says so
+ * rather than passing on the bed's advice, which is written per 100 m².
+ */
+function batchLimeFix(batch, verdict, test, tests, judged) {
+  const earlier = tests.slice(1).find((t) => lowOf(t) < GATE_RULES.phMin
+    && daysBetween(t.date, test.date) >= GATE_RULES.holdRetestDays);
+  let plan;
+  try {
+    plan = mediaLimePlan({
+      readings: readingsOf(test), texture: batch.texture || null, volumeM3: batch.volumeM3,
+      covered: !!batch.covered, lastLime: tests.some((t) => t.beforeCorrection) ? {} : null,
+      holdSince: verdict.hold === '5_2_to_5_49' && earlier ? earlier.date : null, today: judged,
+    });
+  } catch (err) {
+    plan = { derivable: false, why: 'The rules are not loaded, so no lime rate can be read.', fix: '' };
+  }
+  if (plan.noLime) return {};
+  if (!plan.derivable) {
+    return {
+      state: 'fail',
+      noRate: true,
+      limePlan: plan,
+      fix: `No lime rate can be derived for this batch: ${plan.why} ${plan.fix} `
+        + 'The batch is corrected or rejected before any bag is filled from it.',
+    };
+  }
+  return {
+    limePlan: plan,
+    fix: `${plan.headline} ${plan.steps.slice(1).join(' ')}`,
+  };
+}
+
+/**
+ * Rules → plant_bags.fill_rule: may bags be filled from this batch today? The
+ * batch's own four lines must all pass. The reducer re-runs this on every
+ * replay, so a phone cannot sync its way to a fill from an untested heap.
+ */
+export function fillCheck(state, batchId, { date = isoDate() } = {}) {
+  const lines = batchLines(state, batchId, { judged: date });
+  const items = [lines.record, lines.ph, lines.nematode, lines.heap];
+  const blocking = items.filter((c) => c.state !== 'pass');
+  return {
+    ok: blocking.length === 0,
+    items,
+    blocking,
+    lines,
+    why: blocking.length ? blocking.map((c) => `${c.why} ${c.fix || ''}`.trim()).join(' ') : null,
+  };
+}
+
+/**
+ * A bag zone's Gate 0 line, over every batch in its bags. The bags must have
+ * been filled after the previous cycle here ended — media left in from the
+ * last crop is the last crop's ground — and every batch in them must pass.
+ */
+function bagGate(state, zoneId, w, which) {
+  const window = { since: w.since, until: w.judged };
+  const batches = batchesIn(state, zoneId, window);
+  const id = which === 'record' ? 'media_batch' : which === 'heap' ? 'heap_solarisation' : which;
+  const name = { media_batch: 'Media batch', ph: 'Soil pH tested', nematode: 'Nematode clear',
+    heap_solarisation: 'Heap solarisation' }[id];
+
+  if (!batches.length) {
+    const earlier = fillsFor(state, zoneId, { until: w.judged }).length;
+    return gate(id, name, 'unknown', {
+      why: earlier && w.since
+        ? `The bags here were filled before the previous cycle ended on ${w.since}. That media grew the last crop.`
+        : 'No bags have been filled here from a media batch, so there is no media to judge.',
+      fix: 'Fill the bags from a media batch that has cleared its own checks (supplier, three-point pH, '
+        + 'nematode CLEAR, heap dates if covered). The fill is recorded batch → bags → zone.',
+    });
+  }
+
+  const judged = batches.map(({ id: batchId }) => batchLines(state, batchId, { judged: w.judged })[which]);
+  const bad = judged.find((c) => c.state !== 'pass');
+  if (bad) return { ...bad, id, name };
+  return gate(id, name, 'pass', {
+    why: judged.map((c) => c.why).join(' '),
+    test: judged[0].test,
+    batches: batches.map((b) => b.id),
+  });
+}
+
+/** Rules → plant_bags.barrier: whether the bags stand on a barrier, recorded. */
+export function barrierGate(state, zoneId) {
+  const zone = ((state && state.plots) || {})[zoneId] || {};
+  const b = BARRIERS.find((x) => x.value === zone.barrier);
+  if (!b) {
+    return gate('bag_barrier', 'Bag barrier', 'unknown', {
+      why: 'Whether the bags stand on a barrier is not recorded.',
+      fix: 'Record it on the zone: ground cover, polythene, or none.',
+    });
+  }
+  return gate('bag_barrier', 'Bag barrier', 'pass', {
+    why: b.value === 'none'
+      ? `${b.label}. ${((bagRules() || {}).barrier || {}).why || ''}`.trim()
+      : `Bags stand on ${b.label.toLowerCase()}.`,
+  });
+}
+
+/** Gate 0's media lines for a bag zone, for the model and the Farm Doctor. */
+export function bagG0(state, zoneId, { today = isoDate() } = {}) {
+  const w = zoneWindow(state, zoneId, today);
+  return {
+    media_batch: bagGate(state, zoneId, w, 'record'),
+    ph_three_point: bagGate(state, zoneId, w, 'ph'),
+    lab_report: bagGate(state, zoneId, w, 'nematode'),
+    heap_solarisation: bagGate(state, zoneId, w, 'heap'),
+    bag_barrier: barrierGate(state, zoneId),
+  };
+}
+
+/**
+ * The clean restart in a bag zone (rules → plant_bags.clean_restart): step 3
+ * is fresh or re-treated media rather than solarising a bed. Media left in the
+ * bags from the last crop does not count, a re-treated batch says how it was
+ * treated, and bags from a galled crop are discarded, not refilled.
+ */
+function freshMedia(state, zone, w, step) {
+  const base = { id: `cr_${step.id}`, gate: 'CR', name: `Step ${step.step} — ${step.name}`, itemId: step.id,
+    lines: step.pass_all || [] };
+  const fills = fillsFor(state, zone.id, { since: w.since, until: w.judged });
+  if (!fills.length) {
+    return { ...base, state: 'unknown', why: 'No bags have been filled for this restart.',
+      fix: `Fill the bags ${step.when}: ${(step.pass_all || []).join('; ')}.` };
+  }
+  const batches = state.mediaBatches || {};
+  const galled = w.previous ? galledCycle(state, w.previous) : { galled: false };
+  for (const f of fills) {
+    const b = batches[f.batchId];
+    const who = batchName(b);
+    if (!b || !['fresh', 're-treated'].includes(b.source)) {
+      return { ...base, state: 'fail', why: `${who} is not recorded as fresh or re-treated media.`,
+        fix: 'Correct the batch record, or fill from a fresh or re-treated batch. Media left in from the last crop does not count.' };
+    }
+    if (b.source === 're-treated' && !String(b.treatment || '').trim()) {
+      return { ...base, state: 'fail', why: `${who} is re-treated media with no record of how it was treated.`,
+        fix: 'Record the treatment on the batch (for example: solarised under sealed plastic, with dates).' };
+    }
+    const from = b.fromCycleId && (state.cycles || {})[b.fromCycleId];
+    const fromGalled = from ? galledCycle(state, from) : null;
+    if (b.source === 're-treated' && fromGalled && fromGalled.galled) {
+      return { ...base, state: 'fail', why: `${who} is media from a galled crop: ${fromGalled.why}.`,
+        fix: 'Media from a galled crop is discarded, not re-treated. Fill from a fresh batch.' };
+    }
+    if (galled.galled && !f.newBags) {
+      return { ...base, state: 'fail', why: `The last crop here was galled (${galled.why}), and the fill on ${dayOf(f)} reused its bags.`,
+        fix: 'Bags from a galled crop are discarded, not refilled. Fill new bags and record them as new.' };
+    }
+  }
+  return { ...base, state: 'pass', from: { kind: 'media-fill', id: fills[fills.length - 1].id },
+    why: `${fills.length} fill${fills.length === 1 ? '' : 's'} for this restart, from `
+      + `${[...new Set(fills.map((f) => `${batchName(batches[f.batchId])} (${batches[f.batchId].source})`))].join(', ')}`
+      + `${galled.galled ? '; the last crop was galled and every bag is new' : ''}.` };
+}
+
 // --- FR-GATE-00 — the sign-off on Gate 0 and Gate 4 --------------------------
 
 /**
@@ -469,7 +788,11 @@ function cleanRestart(state, zone, w, rules) {
   if (!spec || protocolOf(zone, rules) !== 'clean-restart') return null;
 
   const recorded = (itemId) => latestEvidence(state, 'CR', zone.id, itemId, { since: w.since, until: w.judged });
+  // A bag zone restarts on fresh or re-treated media instead of a solarised
+  // bed (rules → plant_bags.clean_restart). Every other step is the same.
+  const bags = mediaOf(state, zone.id, w.active) === 'bag' && ((bagRules(rules) || {}).clean_restart || null);
   const conditions = (spec.steps || []).map((step) => {
+    if (bags && step.id === bags.replaces_step) return freshMedia(state, zone, w, bags.step);
     const rec = recorded(step.id);
     const base = { id: `cr_${step.id}`, gate: 'CR', name: `Step ${step.step} — ${step.name}`, itemId: step.id, lines: step.pass_all || [] };
     if (!rec) {
@@ -701,20 +1024,34 @@ export function gateModel(state, zoneId, opts = {}) {
   const zoneName = (zone && zone.name) || zoneId;
   const gates = [];
 
-  // G0 — Ground Clearance.
+  // G0 — Ground Clearance. A bag zone clears it on the media batch in its
+  // bags, not on the bed (C-19); a bed zone exactly as before.
   const g0 = spec('G0');
-  const nem = nematodeGate(state, zoneId, { today });
-  const ph = phGate(state, zoneId, { today });
-  const topsoil = batchGate(state, zoneId);
-  gates.push({
-    ...g0, blocksTransplant: true,
-    conditions: [
-      { ...nem, gate: 'G0', label: g0.passAll[0] },
-      { ...ph, gate: 'G0', label: g0.passAll[1] },
-      { ...topsoil, gate: 'G0', label: 'purchased topsoil tested (FR-GATE-03)' },
-      gateSignoff(state, zoneId, 'G0', { since: w.since, until: w.judged }),
-    ],
-  });
+  const bag = mediaOf(state, zoneId, w.active) === 'bag';
+  if (bag) {
+    const lines = bagG0(state, zoneId, { today });
+    gates.push({
+      ...g0, blocksTransplant: true, media: 'bag',
+      why: ((bagRules(rules) || {}).media_types || {}).bag || 'Gate 0 clears on the media batch, not the bed.',
+      conditions: [
+        ...BAG_G0_ITEMS.map((itemId) => ({ ...lines[itemId], gate: 'G0', itemId, label: bagG0Label(itemId, rules) })),
+        gateSignoff(state, zoneId, 'G0', { since: w.since, until: w.judged }),
+      ],
+    });
+  } else {
+    const nem = nematodeGate(state, zoneId, { today });
+    const ph = phGate(state, zoneId, { today });
+    const topsoil = batchGate(state, zoneId);
+    gates.push({
+      ...g0, blocksTransplant: true,
+      conditions: [
+        { ...nem, gate: 'G0', label: g0.passAll[0] },
+        { ...ph, gate: 'G0', label: g0.passAll[1] },
+        { ...topsoil, gate: 'G0', label: 'purchased topsoil tested (FR-GATE-03)' },
+        gateSignoff(state, zoneId, 'G0', { since: w.since, until: w.judged }),
+      ],
+    });
+  }
 
   const cr = cleanRestart(state, zone, w, rules);
   if (cr) gates.push(cr);
@@ -776,7 +1113,14 @@ export function gateModel(state, zoneId, opts = {}) {
     g.state = summarise(g.conditions);
   }
 
-  return { zoneId, zone, window: w, planted: !!w.active, gates };
+  // A media batch that failed after it filled bags here: not a gate (the
+  // crop in the ground was judged on transplant day), but the thing the
+  // screen and the digest lead with (rules → plant_bags.trace).
+  const failedMedia = bag ? batchesIn(state, zoneId, { since: w.since })
+    .map(({ id, batch }) => ({ batch, failure: batchFailure(state, id) }))
+    .filter((x) => x.failure && x.failure.date <= today) : [];
+
+  return { zoneId, zone, window: w, planted: !!w.active, media: bag ? 'bag' : 'bed', failedMedia, gates };
 }
 
 /**

@@ -21,7 +21,7 @@ import {
 import { adviserView } from './adviser.js';
 import { photoThumb } from './photo.js';
 import { captureEvidence } from '../db.js';
-import { dosePlan, limePlan, parseRate, TANKS, TEXTURES } from '../domain/calc.js';
+import { dosePlan, limePlan, mediaLimePlan, parseRate, TANKS, TEXTURES } from '../domain/calc.js';
 import { ppeIcon } from './ppe.js';
 import {
   CONFIDENCE, LIMITS, WORKED, approvePlan, awaitingConfirmation, confirmOutput,
@@ -184,7 +184,15 @@ export const doctorView = {
     },
     'doctor-lime': (ctx, form) => {
       limeForm = form && form.tagName === 'FORM' ? readForm(form) : {};
-      limeResult = limePlan({
+      // C-19: a plant-bag batch is limed by media volume, not bed area.
+      limeResult = limeForm.zoneType === 'bag' ? mediaLimePlan({
+        readings: [limeForm.ph1, limeForm.ph2, limeForm.ph3],
+        texture: limeForm.texture,
+        volumeM3: Number(limeForm.volumeM3) || 0,
+        covered: !!limeForm.solarised,
+        holdSince: limeForm.holdSince || null,
+        today: isoDate(),
+      }) : limePlan({
         readings: [limeForm.ph1, limeForm.ph2, limeForm.ph3],
         texture: limeForm.texture,
         areaM2: Number(limeForm.areaM2) || 0,
@@ -545,13 +553,18 @@ function limeCard(ctx) {
     + field('pH point 2', input('ph2', { type: 'number', step: '0.1', value: f.ph2 || '' }))
     + field('pH point 3', input('ph3', { type: 'number', step: '0.1', value: f.ph3 || '' }))
     + '</div>'
-    + field('Soil texture', select('texture',
-      TEXTURES.map((t) => ({ value: t.id, label: t.label || t.name || t.id })), f.texture || ''))
+    + field('Soil texture', select('texture', [
+      ...TEXTURES.map((t) => ({ value: t.id, label: t.label || t.name || t.id })),
+      { value: 'other', label: 'Bag media not in the table (no rate can be derived)' },
+    ], f.texture || ''))
     + field('Area to treat (m²)', input('areaM2', { type: 'number', value: f.areaM2 || '' }),
       'Greenhouse: the bed area only. Open field: the full cropped area.')
+    + field('Volume of the media batch (m³)', input('volumeM3', { type: 'number', step: '0.1', value: f.volumeM3 || '' }),
+      'Plant-bag media only: lime goes by volume, not bed area.')
     + field('Where', select('zoneType', [
       { value: 'greenhouse', label: 'Greenhouse — bed area only' },
       { value: 'field', label: 'Open field — full cropped area' },
+      { value: 'bag', label: 'Plant-bag media batch — by volume' },
     ], f.zoneType || 'greenhouse'))
     + `<label class="tick ${f.solarised ? 'on' : ''}">`
     + `<input type="checkbox" name="solarised" ${f.solarised ? 'checked' : ''} `
@@ -570,7 +583,8 @@ function limeCard(ctx) {
 
 function limeOut(result) {
   if (!result.ok) {
-    return card(note('danger', result.why, `<small>${esc(result.fix || '')}</small>`));
+    return card(note('danger', result.why, `<small>${esc(result.fix || '')}`
+      + `${result.derivable === false && result.rule ? `<br><b>${esc(result.rule)}</b>` : ''}</small>`));
   }
   const tone = result.band === 'in-range' ? 'ok' : result.band === 'hold' ? 'warn' : 'danger';
   return card(
@@ -584,7 +598,10 @@ function limeOut(result) {
         + `Gate is ${esc(String(result.gateMin))}–${esc(String(result.gateMax))}.</small></p>`
       : '')
     + (result.kgText ? `<div class="dose-big">${esc(result.kgText)}</div>` : '')
-    + (result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
+    + (result.product && result.basis === 'volume'
+      ? `<p><small>of ${esc(result.product)} mixed through ${esc(String(result.volumeM3))} m³ of media `
+        + `(${esc(String(result.perM3Low))}–${esc(String(result.perM3High))} kg per m³).</small></p>`
+      : result.product ? `<p><small>of ${esc(result.product)} over ${esc(String(result.areaM2))} m².</small></p>` : '')
     + ((result.locks || []).length
       ? '<ul class="list">' + result.locks.map((l) => `<li><div class="grow"><b>${esc(l.what || l.label || '')}</b>`
         + `<small>${esc(l.why || l.detail || '')}</small></div></li>`).join('') + '</ul>'

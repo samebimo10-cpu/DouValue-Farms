@@ -4,7 +4,7 @@
 | Sources | Farm Operations Schedule Rev 5 (July 2026); Rev 5.1 Acid Soil Correction |
 | Precedence | Rev 5.1 wins where the two disagree |
 | Machine-readable copy | `douvalue_rules_rev5_1.json` (same content) |
-| Rules version | rules-1.3 (decisions C-1 to C-18 applied; clean-restart protocol transcribed from Rev 5 p16–17) |
+| Rules version | rules-1.4 (decisions C-1 to C-19 applied; clean-restart protocol transcribed from Rev 5 p16–17; plant-bag zones added) |
 This extract turns the schedule into rules the app can enforce. It covers gates, thresholds, rotations, spray and mixing rules, soil and water targets, triage, and diagnosis cards. **Section 1 records how each gap or contradiction in the source was settled.** Rules below already reflect those decisions.
 
 ---
@@ -30,6 +30,7 @@ This extract turns the schedule into rules the app can enforce. It covers gates,
 | C-16 | OF-02 status | **OF-02 is the nursery**, not a cropping block. Nursery hygiene rules added, and a seedling release check is now part of Gate 1. | Seedlings are the first route for thrips, virus and damping-off into every block. | Settled |
 | C-17 | No site agronomist | **The Farm Doctor takes the agronomist's day-to-day role.** It diagnoses, plans and checks gate evidence; people confirm. Gate 0 and Gate 4 need Farm Manager confirmation and Owner approval. | Keeps a human accountable for every gate and treatment. The nematode assay still needs a lab. | Settled |
 | C-18 | Brand labels unknown | **Treatments are chosen by active ingredient** from a fixed catalogue with groups built in. Managers attach brand labels (rate, PHI, REI, photo) to an active. Punch, Vanguish and Lion Seal are removed until entered this way. | The rotation gate works on groups, which the active ingredient fixes; brands can follow later. | Settled |
+| C-19 | *New:* some zones grow in plant bags, not bed soil | **Each zone has a media type: bed soil or plant bag.** For a bag zone, Gate 0 clears on the **media batch**, not the bed; every fill is traced batch → bags → zone; lime is by **media volume**, derived from the Route A rate over its 15–20 cm incorporation depth, and where no rate can be derived the batch is corrected or rejected before filling. Bed zones are unchanged. | In a bag zone the roots never meet the bed, so testing the bed would clear the wrong ground. The volume rate uses only numbers the schedule already gives. | Settled — Owner instruction 24 Sep 2026; lime derivation to review at the Gate 4 cycle review |
 
 ---
 
@@ -142,6 +143,49 @@ A between-cycle reset that breaks the previous crop's thrips, tospovirus and nem
 *Superseded in the source:* Rev 5 says 'signed off by the agronomist' (now C-17), neem cake '2 weeks in' (now C-14) and names Punch/Vanguish/Lion Seal (now C-18).
 
 *Source:* Rev 5 p16-17
+
+### Plant-bag zones · media type per zone (C-19)
+
+Each zone has a media type. **Bed soil:** the crop grows in the zone's own bed soil; Gate 0 clears on the bed, as before. **Plant bag:** the crop grows in plant bags filled from a media batch; Gate 0 clears on the media batch, not the bed.
+
+In a bag zone the roots never meet the bed. The media batch is the ground: a nematode or acid load arrives with the batch and goes into every bag it fills.
+
+**Gate 0 for a bag zone — pass only when all are true:**
+- media batch on record with supplier and delivery date, filling the bags after the previous cycle here ended
+- media pH 5.5-7.0 from a three-point test of the batch (meter calibrated that morning, with meter photo), after any lime correction
+- nematode lab report on the media batch returned CLEAR
+- if the heap was covered: solarisation dates recorded (plastic on, plastic lifted)
+- whether the bags stand on a barrier recorded: ground cover, polythene, or none
+- Farm Doctor check passed, confirmed by Farm Manager and approved by Owner (C-17), as for a bed zone.
+
+*Freshness:* Batch results are sampled on or after the delivery date and no more than 90 days before transplant (FR-GATE-01's window, applied to the batch).
+
+**Filling:** No bag is filled from a batch until the batch has cleared its own lines: supplier and delivery date, three-point pH, nematode CLEAR, and solarisation dates if the heap was covered. A rejected, failed, untested or failing batch cannot fill bags (FR-GATE-03).
+
+**Trace:** Every fill records batch -> bags -> zone. A batch that fails after filling names every zone it filled, with the bags and any crop planted in them. A batch fails later when a nematode result on it comes back not clear after its first fill, or when a failure is recorded against it (for example galls traced to the batch).
+
+**Barrier:** ground cover, polythene, or none. Bags on bare ground can root through the drainage holes into bed soil nobody tested.
+
+**Lime by media volume (m3), not bed area:**
+- kg per m3 = Route A kg per 100 m2 / (100 m2 x incorporation depth); the depth is 15-20 cm from route_A.timing. Low end: the low rate over 20 cm; high end: the high rate over 15 cm.
+- Route A only: dolomitic lime mixed through the heap before filling. Route B gives no incorporation depth, so no rate per m3 derives from it; a covered (solarised) heap needing lime has no derived rate.
+- If a rate cannot be derived (media texture not in the lime table, Route B, or no batch volume), the app says so and the batch is corrected or rejected before any bag is filled. It never guesses a dose (FR-DOC-08).
+- Re-test the batch at three points after the lime has worked in; a reading from before the lime does not open the gate.
+
+| Texture | Route A kg/100 m² | Derived kg/m³ of media |
+|---|---|---|
+| loamy sand | 10-13.5 | 0.5–0.9 |
+| sandy loam | 16.5-23.5 | 0.83–1.57 |
+| loam / clay loam | 26.5-33.5 | 1.33–2.23 |
+
+**Clean restart in a bag zone (GH-04, GH-05):** step 3 is replaced by **Fresh or re-treated media for Gate 0** (before the bags are filled):
+- bags filled for this restart from a fresh or a re-treated batch; media left in the bags from the last crop does not count
+- a re-treated batch records how it was treated
+- bags from a galled crop are discarded, not refilled; their media is not re-treated for reuse
+
+A crop is galled when the Gate 4 root inspection found galls, a root-knot nematode diagnosis was confirmed on it, or the batch in its bags failed on nematodes. Steps 1, 2, 4 and 5 are unchanged.
+
+*Source:* Owner instruction, 24 Sep 2026 (C-19); lime rate derived from Rev 5.1 Route A
 
 ## 4. Recurrence test (KPIs)
 

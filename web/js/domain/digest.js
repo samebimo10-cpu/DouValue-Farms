@@ -20,6 +20,7 @@ import { isoDate } from '../util.js';
 import { alerts, kpis, OWNER_LEVELS, risingWarnings, straightToOwner } from './alerts.js';
 import { ownerNotifications } from './doctor.js';
 import { gateBoard } from './gates.js';
+import { batchName, failedBatches, traceText } from './media.js';
 import { sampleDataCheck } from './readiness.js';
 import { uncoveredToday } from './positions.js';
 import { lowStock } from './stock.js';
@@ -87,6 +88,18 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
         detail: 'Test it now — the result decides what happens to the next cycle in that ground.',
       });
     }
+  }
+
+  // 3a. C-19 — a plant-bag media batch that failed after it filled bags. The
+  //     line names every zone it went into, because that list is the job:
+  //     each of those houses is carrying the failed media, planted or not.
+  for (const { batch, failure, trace } of failedBatches(state, { today })) {
+    out.push({
+      severity: 'critical',
+      line: `Media batch ${batchName(batch)} failed ${failure.date} (${failure.why}) — filled ${
+        trace.zones.map((z) => z.name).join(', ')}`,
+      detail: `${traceText(trace)}. Bags from it are not refilled; any crop in them is at risk.`,
+    });
   }
 
   // 3b. A house with nobody on it today. FR-ROLE-02 moves work to the backup

@@ -39,7 +39,10 @@ import {
 } from './catalogue.js';
 import { rotationVerdict, week10Actives } from './rotation.js';
 import { PROBLEM_BY_ID } from './pests.js';
-import { gateSignoff, latestSoilTest, nematodeGate, phGate, zoneWindow } from './gates.js';
+import {
+  BAG_G0_ITEMS, bagG0, bagG0Label, gateSignoff, latestSoilTest, nematodeGate, phGate, zoneWindow,
+} from './gates.js';
+import { mediaOf } from './media.js';
 import { releasedFor } from './nursery.js';
 
 /**
@@ -1161,10 +1164,15 @@ export function gateEvidence(state, {
   const out = [];
   const w = zoneWindow(state || { plots: {} }, zoneId, today);
 
+  // C-19: a bag zone's Gate 0 is the media batch's lines, then the sign-off.
+  const bag = mediaOf(state || { plots: {} }, zoneId, w.active) === 'bag';
+
   for (const gateId of gates) {
     const spec = gateSpec(gateId, rules);
-    const labels = (spec && spec.pass_all) || [];
-    const ids = GATE_ITEMS[gateId] || labels.map((_, i) => `item_${i + 1}`);
+    const bagG0Items = bag && gateId === 'G0';
+    const labels = bagG0Items ? [...BAG_G0_ITEMS.map((id) => bagG0Label(id, rules)), (spec && spec.pass_all || [])[2]]
+      : (spec && spec.pass_all) || [];
+    const ids = bagG0Items ? [...BAG_G0_ITEMS, 'doctor_check'] : GATE_ITEMS[gateId] || labels.map((_, i) => `item_${i + 1}`);
     const items = ids.map((id, i) => {
       const label = labels[i] || id.replace(/_/g, ' ');
       // G4 is about the cycle it closes; the others about this planting.
@@ -1215,6 +1223,7 @@ export function gateEvidence(state, {
       { kind: 'rules', what: `gates ${gates.join(', ')} in the rules file` },
       { kind: 'soil-tests', what: `${(((state && state.soilTests) || []).filter((t) => t.zoneId === zoneId)).length} soil tests for this zone` },
       { kind: 'gate-evidence', what: `${((state && state.gateEvidence) || []).filter((e) => e.zoneId === zoneId).length} evidence entries recorded` },
+      ...(bag ? [{ kind: 'media-fills', what: `${((state && state.mediaFills) || []).filter((f) => f.zoneId === zoneId && !f.refused).length} bag fills into this zone, and the media batches behind them` }] : []),
       { kind: 'stock', what: `${Object.keys((state && state.inputs) || {}).length} items on the store shelf` },
     ],
     summary: missing.length
@@ -1263,6 +1272,16 @@ function checkGateItem(state, {
   const recorded = recordedEvidence(state, gateId, zoneId, itemId, { cycleId, since, until });
 
   switch (itemId) {
+    // --- Gate 0, plant-bag lines (C-19) ------------------------------------
+    case 'media_batch':
+    case 'heap_solarisation':
+    case 'bag_barrier': {
+      const c = bagG0(state, zoneId, { today })[itemId];
+      return item(itemId, label, c.state === 'pass' ? 'have' : 'missing', {
+        why: c.why, fix: c.fix || '', from: c.batch ? { kind: 'media-batch', id: c.batch.id } : null,
+      });
+    }
+
     // --- Gate 0 -----------------------------------------------------------
     case 'lab_report': {
       const nem = nematodeGate(state, zoneId, { today });
