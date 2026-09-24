@@ -11,7 +11,6 @@ import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
 import { auditView } from './ui/audit.js';
-import { doctorView } from './ui/doctor.js';
 import { gatesView } from './ui/gates.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView, zoneCodesView } from './ui/zones.js';
