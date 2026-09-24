@@ -168,6 +168,12 @@ const EMPTY = () => ({
   // C-19 — plant-bag media: batches keyed by id, and every fill batch → bags → zone.
   mediaBatches: {},
   mediaFills: [],
+  // FR-ONB-03 — entries typed in on the day the farm went live, for crops
+  // already in the ground. Kept apart from the live lists on purpose: a
+  // backfilled spray is not a treatment the app gated. domain/onboarding.js
+  // is what reads them, and hands the sprays to the rotation and the PHI.
+  backfills: [],
+  onboardRefused: [],
   // §6.14 — the Farm Doctor. Its outputs, the evidence people record against
   // gates, and the samples that went to a lab.
   doctorOutputs: [],
@@ -209,7 +215,7 @@ export function reduce(events) {
   /** What an event creates, if anything. */
   const creates = (type, p) => {
     switch (type) {
-      case 'cycle.start': return `cycle:${p.id}`;
+      case 'cycle.start': case 'cycle.onboard': return `cycle:${p.id}`;
       case 'task.create': return `task:${p.id}`;
       case 'harvest.record': return `harvest:${p.id}`;
       case 'report.record': return `report:${p.id}`;
@@ -235,6 +241,7 @@ export function reduce(events) {
   const requires = (type, p) => {
     switch (type) {
       case 'cycle.update': case 'cycle.close': return `cycle:${p.id}`;
+      case 'backfill.record': return p.cycleId ? `cycle:${p.cycleId}` : null;
       case 'task.update': case 'task.complete': case 'task.cancel': return `task:${p.id}`;
       case 'harvest.verify': return `harvest:${p.id}`;
       case 'report.resolve': return `report:${p.id}`;
@@ -492,6 +499,63 @@ export function reduce(events) {
           && !batch.usedByCycleId) {
           batch.usedByCycleId = p.id;
           batch.plantedAt = p.transplantDate || isoDate(new Date(e.at));
+        }
+        break;
+      }
+      // FR-ONB-01/02/06 — a crop already in the ground on the day the farm
+      // went live. It becomes an ordinary active cycle, so the week, the
+      // Week 10 rule and the task schedule all derive from its transplant
+      // date; it is marked onboarded, which is what the Gates screen reads to
+      // show "planted before the gates" instead of a violation.
+      //
+      // That status opens nothing that is shut, but it does stand in for the
+      // transplant gates of this one crop, so replay checks it rather than
+      // trusting the screen: the Farm Manager or Owner only, a transplant date
+      // before the day of setup, and no crop already growing in the zone.
+      case 'cycle.onboard': {
+        const plot = state.plots[p.plotId];
+        const person = state.people[e.by];
+        // Never later than the day the record was made: a setup day in the
+        // future would let a crop planted today skip the gates.
+        const madeOn = isoDate(new Date(e.at));
+        const setupDate = p.setupDate && p.setupDate < madeOn ? p.setupDate : madeOn;
+        const refuse = (why) => state.onboardRefused.push({ id: p.id, plotId: p.plotId, why, by: e.by, at: e.at });
+        if (!person || roleRank(person) < ROLES.manager.rank) { refuse('Only the Farm Manager or the Owner sets up a crop that is already growing.'); break; }
+        if (!plot || plot.type === 'nursery') { refuse('That is not a cropping zone on record.'); break; }
+        if (!p.cropId || !p.transplantDate) { refuse('A crop and a transplant date are both needed.'); break; }
+        if (!(p.transplantDate < setupDate)) { refuse('A crop set up here was planted before today. One planted today goes through the gates.'); break; }
+        if (Object.values(state.cycles).some((c) => c.plotId === p.plotId && c.status === 'active')) {
+          refuse('There is already a crop growing in that zone.'); break;
+        }
+        const { setupDate: _s, ...fields } = p;
+        state.cycles[p.id] = {
+          ...fields,
+          media: p.media || (plot.media === 'bag' ? 'bag' : 'bed'),
+          status: 'active', events: {}, startedBy: e.by, startedAt: e.at,
+          onboarded: { date: setupDate, by: e.by, at: e.at },
+        };
+        break;
+      }
+      // FR-ONB-03 — one backfilled entry. Marked backfilled whatever the
+      // payload says, and never pushed onto the live lists: sprays, harvests
+      // and gate evidence stay in `backfills`. Stock is the exception that
+      // proves the rule — the store holds one number per item — so the count
+      // lands as an opening balance, a stock move of its own kind that no
+      // usage figure reads.
+      case 'backfill.record': {
+        if (!['spray', 'harvest', 'stock', 'evidence', 'declare'].includes(p.kind)) break;
+        const entry = { ...p, id: p.id || e.id, backfilled: true, by: e.by, at: e.at };
+        state.backfills.push(entry);
+        if (p.kind === 'stock' && p.itemId) {
+          const item = state.inputs[p.itemId]
+            || (state.inputs[p.itemId] = { id: p.itemId, name: p.name || p.itemId, unit: p.unit || '', qty: 0, backfilled: true });
+          const counted = Number(p.qty) || 0;
+          const delta = counted - (Number(item.qty) || 0);
+          item.qty = counted;
+          state.stockMoves.push({
+            id: entry.id, itemId: p.itemId, qty: delta, counted, direction: 'opening', backfilled: true,
+            date: p.date || isoDate(new Date(e.at)), by: e.by, at: e.at,
+          });
         }
         break;
       }
@@ -799,6 +863,17 @@ export function reduce(events) {
   for (const h of state.harvests) {
     const c = state.cycles[h.cycleId];
     if (c) c.harvestedKg = (c.harvestedKg || 0) + (Number(h.kg) || 0);
+  }
+  // FR-ONB-03: the harvest to date on an onboarded crop. The latest figure
+  // entered stands; it is kept on the cycle as its own number as well, so
+  // nothing mistakes it for pickings the app saw weighed.
+  for (const c of Object.values(state.cycles)) {
+    const latest = state.backfills
+      .filter((b) => b.kind === 'harvest' && b.cycleId === c.id)
+      .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1))[0];
+    if (!latest) continue;
+    c.backfilledKg = Number(latest.kg) || 0;
+    c.harvestedKg = (c.harvestedKg || 0) + c.backfilledKg;
   }
   for (const c of Object.values(state.cycles)) {
     if (c.status === 'closed') c.actualKg = c.harvestedKg || 0;

@@ -16,6 +16,7 @@
 import { daysBetween, isoDate } from '../util.js';
 import { getRules, ref } from '../rules.js';
 import { buildCatalogue, canUseActive, parseGroup, resolveActive, sameGroup, groupOfSpray } from './catalogue.js';
+import { backfilledSprays, sprayHistory, treatmentHistoryBlock } from './onboarding.js';
 
 const norm = (s) => String(s || '').toLowerCase();
 
@@ -108,10 +109,13 @@ const countsForRotation = (spray) => !/wound/.test(norm(spray.purpose || spray.t
 /**
  * The sprays already on this zone that the rotation has to reckon with, newest
  * first, in the same resistance system as the product being considered.
+ *
+ * FR-ONB-04: backfilled sprays count. Spinosad typed in on setup day went on
+ * the same thrips as spinosad logged live, and a second IRAC 5 after it is the
+ * same resistance risk whichever screen the first one came through.
  */
 export function priorSprays(state, cycleId, system, catalogue, today = isoDate()) {
-  return (state.sprays || [])
-    .filter((s) => s.cycleId === cycleId)
+  return sprayHistory(state, cycleId, { catalogue })
     .filter((s) => s.date && s.date <= today)
     .filter(countsForRotation)
     .map((s) => ({ spray: s, ...groupOfSpray(catalogue, s) }))
@@ -134,6 +138,12 @@ export function rotationVerdict(state, cycleId, productRef, opts = {}) {
   const sources = [];
 
   if (!productRef) return { ok: true, sources };
+
+  // FR-ONB-05 — an onboarded zone with no spray history on record. The last
+  // group is unknown, and unknown is not pass: nothing is judged against a
+  // history nobody has entered.
+  const missingHistory = treatmentHistoryBlock(state, cycleId, { catalogue });
+  if (missingHistory) return missingHistory;
 
   const active = resolveActive(catalogue, productRef);
   if (!active) {
@@ -289,7 +299,7 @@ export function groupUsage(state, { rules = getRules(), catalogue = null, within
   const cat = catalogue || buildCatalogue(state, rules);
   const byGroup = new Map();
 
-  for (const spray of state.sprays || []) {
+  for (const spray of [...(state.sprays || []), ...backfilledSprays(state, null, { catalogue: cat })]) {
     if (!spray.date || daysBetween(spray.date, today) > withinDays) continue;
     if (!countsForRotation(spray)) continue;
     const { group, active } = groupOfSpray(cat, spray);

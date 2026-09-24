@@ -4,10 +4,11 @@ import {
   badge, bar, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
   input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
-import { activeCycles, can, closedCycles, cycleLabel, spraysForCycle } from '../store.js';
+import { activeCycles, can, closedCycles, cycleLabel } from '../store.js';
 import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, waterDemandMmPerDay } from '../domain/crops.js';
 import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../domain/predict.js';
-import { harvestClearance, reentryClearance, knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
+import { knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
+import { harvestCheck, isOnboarded, reentryCheck, sprayHistory } from '../domain/onboarding.js';
 import { buildCatalogue, canUseActive, rateFor, resolveActive, usableActives } from '../domain/catalogue.js';
 import { cropWeek, rotationVerdict, WEEK_10, week10Actives } from '../domain/rotation.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
@@ -106,9 +107,9 @@ export const fieldView = {
       const dat = daysBetween(cycle.transplantDate, today);
       const stage = stageAt(cycle.cropId, dat);
       const forecast = harvestForecast(cycle, { today, calibration: cal });
-      const sprays = spraysForCycle(state, cycle.id);
-      const clearance = harvestClearance(sprays);
-      const reentry = reentryClearance(sprays);
+      // FR-ONB-04/05: backfilled sprays count, and no history means no picking.
+      const clearance = harvestCheck(state, cycle.id);
+      const reentry = reentryCheck(state, cycle.id);
       const progress = Math.min(1, Math.max(0, dat / crop.cycleDays));
       const picked = cycle.harvestedKg || 0;
 
@@ -127,7 +128,8 @@ export const fieldView = {
             : friendlyDate(forecast.milestones.firstHarvest),
           dat >= crop.daysToFirstHarvest ? '' : `${forecast.milestones.daysToFirstHarvest} days`)
         + '</div>'
-        + (!clearance.safe ? note('danger', `Do not pick until ${clearance.clearOn}`, `<small>${esc(clearance.reason)}</small>`) : '')
+        + (!clearance.safe ? note('danger', clearance.historyMissing ? 'Do not pick or spray: spray history missing'
+          : `Do not pick until ${clearance.clearOn}`, `<small>${esc(clearance.reason)}</small>`) : '')
         + (!reentry.safe ? note('warn', `Keep out for ${reentry.hoursLeft} more hours`, '') : '')
         + `<div class="note info" style="margin:12px 0 0"><b>${esc(stage.name)}</b><small>${esc(stage.job)}</small></div>`
         + '<div class="row wrap" style="margin-top:12px">'
@@ -206,10 +208,11 @@ export const cycleView = {
       seasonality: state.settings.seasonality,
       gradeOutPct: state.settings.gradeOutPct,
     });
-    const sprays = spraysForCycle(state, cycle.id);
+    // Live and backfilled together, in date order; the backfilled ones say so.
+    const sprays = sprayHistory(state, cycle.id).sort((a, b) => ((a.date || '') < (b.date || '') ? -1 : 1));
     const scouts = state.scouts.filter((s) => s.cycleId === cycle.id).slice(-5).reverse();
     const harvests = state.harvests.filter((h) => h.cycleId === cycle.id);
-    const clearance = harvestClearance(sprays);
+    const clearance = harvestCheck(state, cycle.id);
     const plants = cycle.plants || plantsForArea(cycle.cropId, cycle.areaM2 || 0);
 
     // Prices and crop values are commercial. A role without money authority is
@@ -222,8 +225,11 @@ export const cycleView = {
       + badge(forecast.stage.name) + '</div>'
       + `<p><small>${esc(crop.emoji)} ${esc(crop.name)} (${esc(crop.localName)}) · ${esc(cycle.variety || 'variety not recorded')}<br>`
       + `Transplanted ${esc(friendlyDate(cycle.transplantDate))} · day ${dat} · ${plants.toLocaleString('en-NG')} plants</small></p>`
-      + (!clearance.safe ? note('danger', `Spray waiting period: no picking until ${clearance.clearOn}`,
+      + (!clearance.safe ? note('danger', clearance.historyMissing ? 'Spray history missing: no picking or spraying'
+        : `Spray waiting period: no picking until ${clearance.clearOn}`,
         `<small>${esc(clearance.reason)}</small>`) : '')
+      + (isOnboarded(cycle) ? `<p><small>Set up mid-season on ${esc(cycle.onboarded.date)}. Entries from before then `
+        + 'are marked backfilled.</small></p>' : '')
       + '<div class="grid">'
       + stat('Forecast', kg(forecast.totalKg, 0), `${round(forecast.perPlantKg, 2)} kg/plant`)
       + stat('Picked', kg(cycle.harvestedKg || 0, 0), `${harvests.length} pickings`)
@@ -312,7 +318,7 @@ export const cycleView = {
             const phi = s.phiDays ?? (active ? active.phiDays : 0);
             return [s.date, active ? active.name : s.productName || s.productId || '—',
               isoDate(addDays(s.date, phi)),
-              stampOf(s), s.photo ? 'yes' : 'no'];
+              s.backfilled ? 'backfilled on setup' : stampOf(s), s.photo ? 'yes' : 'no'];
           }))
         : '<p><small>Nothing sprayed on this bed yet.</small></p>'),
     );
@@ -722,6 +728,14 @@ async function saveSpray(ctx, form) {
     closeSheet();
     const refusedOnProduct = ['rotation', 'week-10', 'thrips-programme', 'no-rate', 'interval',
       'metalaxyl-interval', 'not-in-catalogue'].includes(allowed.reason);
+    if (allowed.reason === 'spray-history-missing') {
+      openSheet('<h2>Spray history missing</h2>'
+        + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
+        + (can(ctx.user, 'settings')
+          ? `<div style="margin-top:12px">${button('Enter it now', 'go',
+            { cls: 'btn-block btn-lg', data: { to: '#/setup' } })}</div>` : ''));
+      return;
+    }
     openSheet(`<h2>${refusedOnProduct ? 'Not this product' : 'Diagnose it first'}</h2>`
       + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
       + (allowed.reason === 'rotation'

@@ -95,6 +95,12 @@ const EVENT_POLICY = {
   'cycle.start':       { write: 'manageCycles',  read: ANY },
   'cycle.update':      { write: 'manageCycles',  read: ANY },
   'cycle.close':       { write: 'manageCycles',  read: ANY },
+  // FR-ONB-01/03 — mid-season onboarding. A crop set up as already growing is
+  // shown as planted before the gates, so setting one up is the Farm
+  // Manager's or the Owner's call (`settings`), never a hand's; so is every
+  // backfilled entry, because the rotation and the PHI read them.
+  'cycle.onboard':     { write: 'settings',      read: ANY, guard: guardOnboard },
+  'backfill.record':   { write: 'settings',      read: ANY, guard: guardBackfill },
   'task.create':       { write: 'assignTasks',   read: ANY },
   'task.update':       { write: 'assignTasks',   read: ANY },
   'task.complete':     { write: 'viewOwnTasks',  read: ANY },
@@ -724,6 +730,29 @@ function guardDoctorConfirm(event, author) {
 }
 
 /** FR-DOC-06 — evidence has to say which gate and which line of it. */
+function guardOnboard(event) {
+  const p = event.payload || {};
+  if (!p.id || !p.plotId) return { ok: false, why: 'Say which zone the crop is in' };
+  if (!p.cropId || !p.transplantDate) return { ok: false, why: 'A crop and a transplant date are both needed' };
+  const madeOn = String(event.at || '').slice(0, 10);
+  const setup = p.setupDate && madeOn && p.setupDate < madeOn ? p.setupDate : madeOn;
+  if (!(String(p.transplantDate) < setup)) {
+    return { ok: false, why: 'Only a crop planted before setup day is onboarded; one planted today goes through the gates' };
+  }
+  return { ok: true };
+}
+
+const BACKFILL_KINDS = ['spray', 'harvest', 'stock', 'evidence', 'declare'];
+function guardBackfill(event) {
+  const p = event.payload || {};
+  if (!BACKFILL_KINDS.includes(p.kind)) return { ok: false, why: 'Unknown kind of backfilled entry' };
+  if (['spray', 'harvest'].includes(p.kind) && !p.cycleId) return { ok: false, why: 'Say which crop it is about' };
+  if (p.kind === 'spray' && !p.date) return { ok: false, why: 'A backfilled spray needs the day it went on' };
+  if (p.kind === 'stock' && !p.itemId) return { ok: false, why: 'Say which store item was counted' };
+  if (p.kind === 'evidence' && !p.zoneId) return { ok: false, why: 'Evidence must name the zone it is about' };
+  return { ok: true };
+}
+
 function guardGateEvidence(event) {
   const p = event.payload || {};
   if (!p.gate || !p.itemId) return { ok: false, why: 'Evidence must name the gate and which line of it' };

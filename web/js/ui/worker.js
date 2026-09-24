@@ -6,9 +6,10 @@ import {
   readForm, select, stat, textarea, toast, tick,
 } from './kit.js';
 import { t, local, getLang } from '../i18n.js';
-import { activeCycles, can, cycleLabel, isClockedIn, openTasks, spraysForCycle } from '../store.js';
+import { activeCycles, can, cycleLabel, isClockedIn, openTasks } from '../store.js';
 import { getCrop, stageAt } from '../domain/crops.js';
-import { harvestClearance, reentryClearance, SPRAY_RULES } from '../domain/safety.js';
+import { SPRAY_RULES } from '../domain/safety.js';
+import { harvestCheck, reentryCheck } from '../domain/onboarding.js';
 import { forecastHeadline, seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -39,11 +40,12 @@ function bedOptions(state) {
   return activeCycles(state).map((c) => ({ value: c.id, label: cycleLabel(state, c.id) }));
 }
 
+// FR-TREAT-02 with FR-ONB-04/05: the PHI and re-entry read backfilled sprays
+// too, and a zone onboarded without its spray history cannot be picked.
 function cycleSafety(state, cycleId, at = new Date()) {
-  const sprays = spraysForCycle(state, cycleId);
   return {
-    harvest: harvestClearance(sprays, at),
-    reentry: reentryClearance(sprays, at),
+    harvest: harvestCheck(state, cycleId, at),
+    reentry: reentryCheck(state, cycleId, at),
   };
 }
 
@@ -85,7 +87,9 @@ export const todayView = {
         + blocked.map(({ cycle, safety }) => {
           const parts = [];
           if (!safety.harvest.safe) {
-            parts.push(note('danger', `${cycleLabel(state, cycle.id)}: do not pick until ${safety.harvest.clearOn}`,
+            parts.push(note('danger', safety.harvest.historyMissing
+              ? `${cycleLabel(state, cycle.id)}: do not pick — spray history missing`
+              : `${cycleLabel(state, cycle.id)}: do not pick until ${safety.harvest.clearOn}`,
               `<small>${esc(safety.harvest.reason)}</small>`));
           }
           if (!safety.reentry.safe) {
@@ -397,6 +401,14 @@ function renderHarvestBody(ctx, sheetEl, cycleId) {
   const crop = getCrop(cycle.cropId);
   const crateKg = state.settings.crateKg || 12;
 
+  if (!safety.harvest.safe && safety.harvest.historyMissing) {
+    body.innerHTML = note('danger', 'Spray history missing',
+      `<p>${esc(safety.harvest.reason)}</p>`
+      + '<p>Nobody picks this zone until the Farm Manager or Owner enters its spray history on the Setup screen.</p>')
+      + button('Close', 'close-sheet-btn', { cls: 'btn-ghost btn-block' });
+    body.querySelector('[data-act="close-sheet-btn"]').onclick = () => closeSheet();
+    return;
+  }
   if (!safety.harvest.safe) {
     body.innerHTML = note('danger', t('harvest.blocked'),
       `<p>${esc(safety.harvest.reason)}</p>`
@@ -440,7 +452,11 @@ async function saveHarvest(ctx, form) {
   if (kgValue <= 0) { toast('Enter crates or kilograms', true); return; }
 
   const safety = cycleSafety(state, data.cycleId);
-  if (!safety.harvest.safe) { toast('That bed is still inside its spray waiting period', true); return; }
+  if (!safety.harvest.safe) {
+    toast(safety.harvest.historyMissing ? 'That zone has no spray history on record yet'
+      : 'That bed is still inside its spray waiting period', true);
+    return;
+  }
 
   await ctx.store.dispatch('harvest.record', {
     id: uid('h'),
