@@ -17,8 +17,11 @@
 //
 // It is a step, not a wall. "Use in the browser for now" is always there: a
 // manager at an office laptop, a browser that cannot install anything, a phone
-// with no room left. After that, a slim bar keeps saying the app is not
-// installed, every time it is opened in a tab, until it is.
+// with no room left. After that, a strip across the top keeps saying the app is
+// not installed, on every screen and every open in a tab, until it is. It has
+// no close button, and it is part of the page rather than floating over it: it
+// takes its own space and the screen moves down, so it never covers a field,
+// a Save button or the tab bar.
 //
 // The step quotes the phone's own menu labels, which are English on these
 // phones whatever the app's language, so it is written in English (UX-17).
@@ -253,12 +256,11 @@ export function installStepHtml(platform, { canPrompt = false, installedBefore =
     + '</div>';
 }
 
-/** The reminder on every later open in a tab. */
+/** The reminder on every later open in a tab. Persistent: no way to hide it but installing. */
 export function installBarHtml() {
   return '<div class="install-bar" role="status">'
     + '<b>Not installed — you are in a browser tab</b>'
     + '<button type="button" data-act="install-show">Install</button>'
-    + '<button type="button" class="later" data-act="install-hide" aria-label="Hide for now">✕</button>'
     + '</div>';
 }
 
@@ -332,8 +334,8 @@ export function mountInstallPrompt({ scope = globalThis } = {}) {
     host.className = 'install-host';
     host.innerHTML = installBarHtml();
     host.querySelector('[data-act="install-show"]').onclick = showStep;
-    host.querySelector('[data-act="install-hide"]').onclick = close;
-    // Before the update bar, so the CSS can stack the two rather than overlap them.
+    // In the page's flow, ahead of the app, not fixed over it: the app below
+    // moves down by the strip's height instead of being covered by it.
     doc.body.insertBefore(host, doc.body.firstChild);
   };
 

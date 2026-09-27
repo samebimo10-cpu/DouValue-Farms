@@ -125,10 +125,22 @@ test('where the browser can install it, the step is one button', () => {
   assert.match(installStepHtml('android-chrome', { installedBefore: true }), /already installed/);
 });
 
-test('the reminder bar says it is a browser tab and offers the step again', () => {
+test('the reminder bar says it is a browser tab, offers the step again, and cannot be hidden', () => {
   const html = installBarHtml();
   assert.match(html, /browser tab/);
   assert.match(html, /data-act="install-show"/);
+  assert.doesNotMatch(html, /install-hide/, 'persistent until the app is installed');
+});
+
+test('the reminder takes its own space instead of floating over the page', () => {
+  const css = readFileSync(new URL('../web/css/app.css', import.meta.url), 'utf8');
+  const rules = [...css.matchAll(/([^{}]*\.install-(?:host|bar)[^{}]*)\{([^}]*)\}/g)]
+    .filter(([, sel]) => !/@media|print/.test(sel));
+  assert.ok(rules.length >= 2, 'the bar is styled');
+  for (const [, sel, body] of rules) {
+    assert.doesNotMatch(body, /position:\s*(fixed|absolute|sticky)/, `${sel.trim()} must stay in the page flow`);
+  }
+  assert.doesNotMatch(css, /\.install-host\s*~/, 'nothing needs moving out of its way');
 });
 
 // --- The browser's own install dialog --------------------------------------
@@ -201,7 +213,7 @@ function fakeDom() {
       body: {
         firstChild: null,
         appendChild: (el) => nodes.push(el),
-        insertBefore: (el) => nodes.unshift(el),
+        insertBefore: (el, before) => { assert.equal(before, null, 'ahead of everything else'); nodes.unshift(el); },
       },
     },
   };
