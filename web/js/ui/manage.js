@@ -22,13 +22,12 @@ import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
 import { lowStock, lowStockSummary, reorderLevel } from '../domain/stock.js';
 import { maySignOff, signOffPayload, trialRecord } from '../domain/supervision.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
-import { harvestClearance } from '../domain/safety.js';
+import { harvestCheck, setupStatus } from '../domain/onboarding.js';
 import {
   buildCatalogue, canUseActive, checkAddActive, checkAddLabel, migrateStockToActives,
   planStockMigration, rateFor,
 } from '../domain/catalogue.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
-import { spraysForCycle } from '../store.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { hashPin } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
@@ -106,6 +105,22 @@ export const dashboardView = {
       + spark(days, { caption: `Total ${kg(sum(days, (d) => d.value), 0)} over the fortnight.` }),
     );
 
+    // FR-ONB-08: until every zone is set up, the Owner sees what is missing.
+    if (can(ctx.user, 'settings')) {
+      const setup = setupStatus(state, { today });
+      const left = setup.incomplete.length + (setup.farm.complete ? 0 : 1);
+      // Shown while onboarding is under way, or on a farm with no crop yet
+      // started in the app — not forever on a farm that has moved past it.
+      const begun = (state.backfills || []).length || setup.rows.some((r) => r.cycle && r.cycle.onboarded);
+      const fresh = !Object.values(state.cycles || {}).some((c) => !c.onboarded);
+      if (left && (begun || fresh)) {
+        out += card(note('warn', `Setup: ${left} still to finish`,
+          `<small>${esc(setup.incomplete.map((r) => `${r.zone.name}: ${r.missing.map((m) => m.label).join('; ')}`)
+            .concat(setup.farm.complete ? [] : ['Stock on hand not counted']).join(' · '))}</small>`)
+          + button('Open setup', 'go', { cls: 'btn-block', data: { to: '#/setup' } }), { tight: true });
+      }
+    }
+
     if (alerts.length) {
       out += card(
         cardHead('Needs you', badge(`${alerts.length}`, 'warn'))
@@ -170,10 +185,11 @@ function buildAlerts(ctx, cycles, cal) {
   const alerts = [];
 
   for (const c of cycles) {
-    const clearance = harvestClearance(spraysForCycle(state, c.id));
+    const clearance = harvestCheck(state, c.id);
     if (!clearance.safe) {
       alerts.push({
-        title: `${cycleLabel(state, c.id)}: no picking until ${clearance.clearOn}`,
+        title: clearance.historyMissing ? `${cycleLabel(state, c.id)}: no picking — spray history missing`
+          : `${cycleLabel(state, c.id)}: no picking until ${clearance.clearOn}`,
         detail: clearance.reason, to: `#/field/cycle?id=${c.id}`,
       });
     }
@@ -667,7 +683,7 @@ export const storeView = {
           [...state.stockMoves].reverse().slice(0, 12).map((m) => [
             (m.date || m.at || '').slice(0, 10),
             state.inputs[m.itemId]?.name || m.itemId,
-            m.direction === 'in' ? 'received' : 'issued',
+            m.direction === 'in' ? 'received' : m.direction === 'opening' ? 'opening count (backfilled)' : 'issued',
             round(m.qty, 2)]))
         : '<p><small>Nothing moved yet.</small></p>'))
     + catalogueCard(ctx, catalogue);

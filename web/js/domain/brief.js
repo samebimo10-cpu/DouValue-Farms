@@ -15,7 +15,7 @@
 //      brief unless the reader is allowed to see it.
 
 import { addDays, daysBetween, isoDate, round, sum } from '../util.js';
-import { can, inputUsage, inputsList, spraysForCycle } from '../store.js';
+import { can, inputUsage, inputsList } from '../store.js';
 import { getCrop, stageAt, waterDemandMmPerDay } from './crops.js';
 import {
   climateFor, drynessIndex, FARM_LOCATION, irrigationGapMmPerDay, priceIndexOn,
@@ -25,6 +25,7 @@ import { bedPerformance, gradeMix, harvestTrend, labourProductivity, unitEconomi
 import { audit } from './integrity.js';
 import { gateBoard } from './gates.js';
 import { harvestClearance, reentryClearance } from './safety.js';
+import { sprayHistory } from './onboarding.js';
 import { groupUsage } from './rotation.js';
 import { forecastAccuracy, stockForecast } from './predict.js';
 import { PROBLEM_BY_ID } from './pests.js';
@@ -143,7 +144,8 @@ function chemicals(state, today) {
   const keepOut = [];
   for (const cycle of Object.values(state.cycles)) {
     if (cycle.status !== 'active') continue;
-    const mine = spraysForCycle(state, cycle.id);
+    // FR-ONB-04: backfilled sprays carry waiting periods too.
+    const mine = sprayHistory(state, cycle.id);
     if (!mine.length) continue;
     const phi = harvestClearance(mine, now);
     if (!phi.safe) {

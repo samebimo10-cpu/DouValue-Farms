@@ -50,6 +50,19 @@ app and keeps working with the data switched off.
 
 To start a real farm instead, skip the sample and create the manager account.
 
+### Starting mid-season
+
+If crops are already in the ground when the farm starts using the app, the CEO or
+manager opens **Setup** (from the dashboard, or `#/setup`). For each zone they enter
+the media type, crop, variety and transplant date; the week and the task schedule
+follow from that date. Then they backfill what the gates need from before that day:
+the last insecticide and last fungicide with group and date, every spray in the
+last 21 days, harvest to date, stock on hand, and any gate evidence that exists.
+These entries are marked backfilled and kept apart from live records. A zone with
+no spray history cannot be sprayed or picked until it is entered. A crop planted
+before the app shows as **planted before the gates**. That is not a violation and
+needs no override.
+
 ---
 
 ## Who is who
