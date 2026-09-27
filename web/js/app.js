@@ -25,6 +25,11 @@ import { loadRules } from './rules.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
+import { captureInstallPrompt, mountInstallPrompt } from './ui/install.js';
+
+// NFR-DEV-01: the browser offers its install dialog once, early, and only to a
+// page already listening — so this is the first thing the app does.
+captureInstallPrompt();
 
 registerRoute('#/today', todayView);
 registerRoute('#/field', fieldView);
@@ -126,6 +131,11 @@ async function migrateCatalogue(ctx) {
 }
 
 async function main() {
+  // NFR-DEV-01: on first open in a browser tab, "Install this app" comes before
+  // sign-in and before anything is typed — on an iPhone a tab's records never
+  // reach the installed app.
+  try { mountInstallPrompt(); } catch { /* never stops the app opening */ }
+
   // UX-25 has to be decided before anything is loaded: a practice session must
   // never open the real log at all.
   let practising = false;

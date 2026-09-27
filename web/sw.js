@@ -9,7 +9,7 @@
 // rules file is cached with it: the plan checks, the gate checks and both
 // calculators are required to work with no signal (FR-DOC-03), and they cannot
 // do that if their own rule book needs a network.
-const CACHE = 'douvalue-v20';
+const CACHE = 'douvalue-v21';
 
 const SHELL = [
   './',
@@ -50,6 +50,7 @@ const SHELL = [
   './js/ui/scan.js',
   './js/ui/shift.js',
   './js/ui/update.js',
+  './js/ui/install.js',
   './js/rules.js',
   './js/domain/adviser.js',
   './js/domain/doctor.js',

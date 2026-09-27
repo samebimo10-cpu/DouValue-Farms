@@ -690,7 +690,7 @@ pre.working {
 @media print {
   .qr-sheet { grid-template-columns: repeat(2, 1fr); gap: 0; }
   .qr-card { border-style: dashed; border-color: #000; margin: 0; padding: 10mm 4mm; }
-  .update-host, .scan-box { display: none !important; }
+  .update-host, .install-host, .install-back, .scan-box { display: none !important; }
 }
 
 /* --- Scanning a door code — UX-12 ---------------------------------------- */
@@ -716,6 +716,41 @@ pre.working {
   background: var(--brand-green); color: #fff; font-weight: 700; }
 .update-bar button.later { background: transparent; color: var(--topbar-ink-2);
   padding: 0 6px; font-weight: 600; }
+/* "Install this app" — NFR-DEV-01. A full screen, not a corner banner: on
+   first open in a browser tab it is the first thing anybody sees, above the
+   sign-in, so nobody starts out using the app as a browser tab by accident. */
+.install-back { position: fixed; inset: 0; z-index: 90; overflow-y: auto;
+  background: var(--brand-navy); display: flex; justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+.inst-step { width: 100%; max-width: 480px; margin: auto 0; background: var(--surface); color: var(--ink);
+  border-radius: 20px; padding: 20px 18px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+.inst-mark { display: block; margin: 0 auto 8px; border-radius: 16px; }
+.inst-step h1 { text-align: center; font-size: 1.75rem; line-height: 1.15; margin: 4px 0 10px; }
+.inst-lead { font-size: 1.05rem; line-height: 1.45; margin: 0 0 14px; }
+.inst-go { width: 100%; min-height: var(--tap); font-size: 1.15rem; }
+.inst-or { font-weight: 700; margin: 14px 0 6px; color: var(--ink-2); }
+.inst-list { margin: 0; padding-left: 1.5em; font-size: 1.05rem; line-height: 1.45; }
+.inst-list li { margin: 0 0 10px; padding-left: 4px; }
+.inst-ico { width: 22px; height: 22px; vertical-align: -5px; color: var(--info); }
+.inst-key { display: inline-block; min-width: 26px; padding: 0 5px; border: 2px solid var(--line);
+  border-radius: 6px; text-align: center; font-weight: 800; line-height: 22px; }
+.inst-note { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 10px 12px;
+  line-height: 1.4; margin: 12px 0 0; }
+.inst-copy { width: 100%; min-height: var(--tap); margin-top: 12px; word-break: break-all; }
+.inst-later { display: block; width: 100%; min-height: var(--tap); margin-top: 12px; border: 0;
+  background: transparent; color: var(--ink-2); font-size: 1rem; text-decoration: underline; }
+/* Every later open in a tab: a bar that says so, stacked above the update bar
+   when both are up. */
+.install-host { position: fixed; left: 0; right: 0; bottom: 74px; z-index: 60;
+  display: flex; justify-content: center; padding: 0 12px; }
+.install-host ~ .update-host { bottom: 138px; }
+.install-bar { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 480px;
+  padding: 10px 12px; border-radius: 12px; background: var(--warn-bg); color: var(--warn);
+  border: 2px solid var(--warn); box-shadow: 0 6px 20px rgba(0, 0, 0, .2); }
+.install-bar b { flex: 1; font-size: .95rem; }
+.install-bar button { min-height: 44px; padding: 0 14px; border: 0; border-radius: 8px;
+  background: var(--brand-navy); color: #fff; font-weight: 700; }
+.install-bar button.later { background: transparent; color: var(--warn); padding: 0 8px; }
 /* FR-TREAT-04 — the protective gear, as pictures big enough to read at arm's
    length in the sun, and at least 56 dp apart so a gloved thumb can tap past
    them (UX-03). */

@@ -46,7 +46,10 @@ Every sample person signs in with PIN **1234**:
 | Emeka Okoro / Blessing Amadi | Farm hands | Today |
 
 On a phone, open the URL and use **Add to home screen**. It then launches like any other
-app and keeps working with the data switched off.
+app and keeps working with the data switched off. The first time the app is opened in a
+browser tab it shows an **Install this app** step with that phone's own steps (Safari,
+Chrome, Samsung Internet, or "open in your browser" for a link tapped inside WhatsApp),
+and after that a bar says it is still in a tab until it is installed.
 
 To start a real farm instead, skip the sample and create the manager account.
 
