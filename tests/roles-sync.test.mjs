@@ -545,4 +545,8 @@ test('the generated Deno servers have not drifted from the core', async () => {
       `${path} is generated: run node scripts-build-deno.mjs and commit the result`);
   });
   assert.equal(before[0], before[1], 'both copies of the server must be the same file');
+  // Deno 2 hides Deno.openKv behind a flag; a repository deploy of server/deploy
+  // only boots if its deno.json turns KV on.
+  const deployConfig = JSON.parse(readFileSync(new URL('../server/deploy/deno.json', import.meta.url), 'utf8'));
+  assert.ok((deployConfig.unstable || []).includes('kv'), 'server/deploy/deno.json must enable kv');
 });

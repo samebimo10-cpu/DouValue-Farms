@@ -106,22 +106,33 @@ writeFileSync(join(here, 'server/deno-sync.ts'), built);
 
 // A second copy under deploy/, named main.ts, so Deno Deploy's "clone this
 // folder" flow finds it by convention with nothing to configure. That folder
-// holds exactly one file on purpose: pointed at it, the clone produces a small
+// holds only the server on purpose: pointed at it, the clone produces a small
 // repository containing the server and nothing else.
 mkdirSync(join(here, 'server/deploy'), { recursive: true });
 writeFileSync(join(here, 'server/deploy/main.ts'), built);
+// Deno.openKv is still behind the kv unstable flag in Deno 2. The Playground
+// turns it on by itself; a repository deploy does not, and without this file
+// the server dies at boot with "Deno.openKv is not a function".
+writeFileSync(join(here, 'server/deploy/deno.json'), `{
+  "unstable": ["kv"]
+}
+`);
 writeFileSync(join(here, 'server/deploy/README.md'), `# DouValue farm sync server
 
 GENERATED. Do not edit \`main.ts\` here: change \`../core.mjs\` and run
 
     node scripts-build-deno.mjs
 
-This folder exists so it can be deployed on its own. It holds one file, which is
-the whole server, so pointing Deno Deploy at this directory needs no entry point
-and no configuration.
+This folder exists so it can be deployed on its own. \`main.ts\` is the whole
+server and the entry point. \`deno.json\` turns on Deno KV, which the server
+stores everything in; without it the deploy fails at boot with
+"Deno.openKv is not a function". Keep both files together.
+
+On Deno Deploy, also create a Deno KV database under Databases and assign it
+to the app.
 
 The farm app then connects to whatever address the deployment is given, under
 Settings, Sync, Connect the farm.
 `);
 
-console.log('server/deno-sync.ts and server/deploy/main.ts rebuilt from server/core.mjs');
+console.log('server/deno-sync.ts and server/deploy/{main.ts,deno.json} rebuilt from server/core.mjs');
