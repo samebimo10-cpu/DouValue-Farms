@@ -30,7 +30,11 @@ const adapter = `
 
 // --- Storage on Deno KV ----------------------------------------------------
 
-const kv = await Deno.openKv();
+// Opened on the first request, not at boot. If the database cannot be opened
+// (no Deno KV database assigned to the app, or KV not switched on), a crash at
+// boot fails the deploy with nothing to see. This way the deploy succeeds and
+// every request answers 503 with the reason, readable in a phone's browser.
+let kv = null;
 
 const store = {
   async getFarm(farmId) { return (await kv.get(["farm", farmId, "meta"])).value; },
@@ -98,7 +102,21 @@ const store = {
   async countEvents(farmId) { return (await kv.get(["farm", farmId, "count"])).value || 0; },
 };
 
-Deno.serve((req) => handleRequest(req, store));
+Deno.serve(async (req) => {
+  if (!kv) {
+    try {
+      kv = await Deno.openKv();
+    } catch (err) {
+      return json({
+        error: 'The farm server cannot open its database, so it is not storing anything yet.',
+        detail: String((err && err.message) || err),
+        fix: 'In Deno Deploy, open this app, go to Databases, create a Deno KV database and assign it to this app. '
+          + 'Also check that deno.json with "unstable": ["kv"] sits next to main.ts.',
+      }, 503);
+    }
+  }
+  return handleRequest(req, store);
+});
 `;
 
 const built = header + core + adapter;
