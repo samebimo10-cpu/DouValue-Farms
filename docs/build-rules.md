@@ -519,3 +519,16 @@ Seedlings carry thrips, tospovirus and damping-off into every block; the nursery
 | sunscald_cracking | disorder | Sunscald: exposed fruit burns. Cracking: dry spell then flood. | Keep fruit-shading canopy; steady irrigation; steady Ca. | Pale papery sun-side patch; ring/radial splits. | Restore canopy; regular irrigation; harvest promptly in wet spells. | — |
 | acid_soil | soil | pH <5.5: Al/Mn toxic to root tips; P locked; Ca/Mg leached (Rev 5.1). | Gate 0 pH test; lime in solarisation window; re-test every cycle. | Stunted, pale; stubby thickened roots, dead tips, NO galls; purpling older leaves; pH test. | No mid-cycle fix: nitrate nutrition + Ca Nitrate; place P; lime post-harvest. | — |
 | bacterial_spot | disease | Bacteria (Xanthomonas) spread by rain splash, wet handling, tools and infected transplants; worst in warm wet weather. | Clean seedlings; copper in the fungicide rotation; drip not overhead water; don't work plants when wet; sanitise tools; remove crop debris. | Small water-soaked leaf spots turning dark and scabby with a yellow halo; raised scabby spots on fruit; spreads after rain. | Copper sprays (M1) in rotation; remove worst leaves; stop handling wet plants. Infected tissue does not recover. | drafted from Rev 5 triage + standard agronomy; review at the Gate 4 cycle review |
+
+---
+## 16. Sources behind the rules (knowledge layer K1)
+
+Every entry in the list sections of the JSON (gates, KPIs, thresholds, spray rules, PHI, mixing rules, irrigation, grading, the 23 triage rows, the 22 diagnosis cards and the active ingredients) carries a `sources` array. The zone register does not: it is the farm's layout, not agronomy with an outside source.
+
+- A `sources` entry is an ID in `rules/sources.json`, the source registry (docs/knowledge-layer.md §3). Every ID must resolve; the test suite fails if one does not (FR-KNOW-04).
+- `sources` is separate from the older `source` string on gates and some sections. `source` says where in the farm's own schedule (Rev 5 / Rev 5.1) a rule comes from. `sources` names outside references such as extension guides, labels and regulatory lists.
+- The Farm Doctor's "What it looked at" lists the sources behind an answer, with the licence line for bundled ones (FR-KNOW-05).
+- `docs/references.md` is generated from the registry with `npm run references` (FR-KNOW-06).
+- Licensing (docs/knowledge-layer.md §2): a bundled source must have a licence recorded, and a non-commercial (NC) source is never bundled. The test suite enforces both (FR-KNOW-00, FR-KNOW-02).
+
+No source has been entered yet, so every `sources` array is empty. Gathering sources is session K2, and the Owner approves each change.

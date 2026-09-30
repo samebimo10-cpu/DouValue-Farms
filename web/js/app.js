@@ -23,6 +23,7 @@ import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
 import { missingTasks } from './domain/schedule.js';
 import { missingFollowUps } from './domain/doctor.js';
 import { loadRules } from './rules.js';
+import { loadSources } from './sources.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
 import { isoDate } from './util.js';
@@ -155,6 +156,9 @@ async function main() {
   await loadRules().catch((err) => {
     console.error('Could not read the rules file', err);
   });
+  // The source registry only names what an answer rests on (FR-KNOW-05). Without
+  // it the Farm Doctor lists the bare ids, so it never holds the app up.
+  await loadSources();
 
   const store = await createStore();
 

@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "version": "sources-1.0",
+    "spec": "docs/knowledge-layer.md §2 (licensing) and §3 (source registry)",
+    "purpose": "Every outside source behind the rules, the triage rows and the diagnosis cards, listed once. Rules entries point here by id through their `sources` array (FR-KNOW-04). docs/references.md is generated from this file (FR-KNOW-06): run `npm run references`.",
+    "fields": {
+      "id": "lower-case slug, unique; what a `sources` array names",
+      "title": "the source's own title",
+      "publisher": "who publishes it",
+      "kind": "one of `kinds` below",
+      "region": "where the guidance applies, e.g. West Africa",
+      "licence": "the licence as the source states it, e.g. CC BY-SA 4.0; `unknown` or `not stated` when it has none",
+      "url": "where to read it",
+      "bundled": "true only if a copy ships inside the app; false means link only",
+      "retrieved": "YYYY-MM-DD the source was read",
+      "covers": "the rules ids it speaks to: diagnosis card ids, active ingredients, gate ids",
+      "attribution": "required when bundled under a CC BY licence (FR-KNOW-01): the credit line shown with it"
+    },
+    "kinds": [
+      "decision-guide",
+      "factsheet",
+      "technical-factsheet",
+      "crop-guide",
+      "extension-bulletin",
+      "label",
+      "regulatory-list",
+      "dataset",
+      "book",
+      "paper",
+      "farm-own"
+    ],
+    "licence_rules": [
+      "FR-KNOW-00: a bundled item records its source, licence and URL; an item with no licence recorded is link only.",
+      "FR-KNOW-01: a CC BY-SA item we adapt ships with its attribution and the same licence.",
+      "FR-KNOW-02: an item whose licence carries NC (non-commercial) is never bundled. The test suite fails if one is.",
+      "FR-KNOW-03: our own words, written from reading a source, are DouValue's content, attributed as 'summarised from [source]'."
+    ]
+  },
+  "sources": []
+}

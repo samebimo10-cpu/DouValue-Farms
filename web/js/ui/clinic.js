@@ -3,7 +3,7 @@
 
 import {
   badge, bar, button, card, cardHead, closeSheet, empty, esc, field, input, note,
-  openSheet, readForm, select, table, textarea, tick, toast,
+  openSheet, readForm, select, sourceItems, table, textarea, tick, toast,
 } from './kit.js';
 import {
   canConfirm, cardFor, cardPhoto, cardSlot, CARDS, CARD_TO_PROBLEM, CUES, FARM_DOCTOR_ROLE,
@@ -594,6 +594,11 @@ function stepCard(ctx) {
     + `<h3>Treatment</h3><p><small>${esc(c.treatment)}</small></p>`
     + '<details><summary><b>Stop it coming back</b></summary>'
     + `<p><small>${esc(c.prevention)}</small></p></details>`
+    + '<details><summary><small>What it looked at</small></summary><ul class="list">'
+    + `<li><small>Triage row ${named.row.n}: ${esc(named.row.see)}</small></li>`
+    + `<li><small>The ${esc(c.name.toLowerCase())} diagnosis card in the rules (${esc(c.id)})</small></li>`
+    + sourceItems(named.sources)
+    + '</ul></details>'
     + (named.labRecommended
       ? note('danger', 'Send a sample to the lab',
         '<small>The rules require a lab for this one, and the Owner is notified '
@@ -670,6 +675,7 @@ async function saveDiagnosis(ctx) {
     reasoning: draft.reasoning,
     lookalikes: named.lookalikes.map((l) => l.cardId),
     labRecommended: named.labRecommended,
+    sources: named.sources || [],
     confidence: wiz.match && wiz.match.rows.length ? wiz.match.rows[0].confidence.label : 'Medium',
     date: isoDate(),
   });

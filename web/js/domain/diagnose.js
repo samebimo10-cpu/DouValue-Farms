@@ -33,6 +33,7 @@
 // so asking it here costs one read shared with everybody else rather than a
 // second copy of the file.
 import { loadRules, peekRules, rulesVersion } from '../rules.js';
+import { sourcesOf } from '../sources.js';
 
 const RULES = peekRules() || await loadRules();
 
@@ -166,6 +167,7 @@ export const TRIAGE = RULES.triage.map((raw) => {
     likely: raw.likely,
     confirm: raw.confirm,
     firstAction: raw.first_action,
+    sources: raw.sources || [],
     cardId,
     cues: clausesOf(raw.see).map((c) => c.trim()).filter(Boolean),
     signs: termsOf(signText),
@@ -549,6 +551,8 @@ export function nameCause(draft = {}) {
   };
   // FR-DOC-01: no cause is named until the photos and the confirm step are in.
   out.card = gate.ok ? card : null;
+  // FR-KNOW-05: the registry ids behind the row and the card it names.
+  out.sources = gate.ok ? sourcesOf([row, card]) : [];
   return out;
 }
 
