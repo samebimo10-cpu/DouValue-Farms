@@ -97,6 +97,7 @@ A new file, `rules/sources.json`, listing every source once.
 - **FR-KNOW-14 (MUST):** Reachable two ways: from the diagnosis flow, and from a browsable list for reading during a break.
 - **FR-KNOW-15 (MUST):** Fully offline, with the farm's own reference photos.
 - **FR-KNOW-16 (SHOULD):** Bundled CC BY-SA decision guides attach as "read the full guide" on the relevant card.
+- **Hand-level card text (K4):** the text a Farm hand sees on a card is authored explicitly for each of the 22 cards, not derived from the full card by filtering out steps a hand may not take. The derived filter is retired as the source of that text. It stays as a backstop test: no crop-removal instruction (pull, uproot, destroy or burn plants) ever reaches a hand's card.
 
 ### 4.3 One thing a day
 
@@ -165,6 +166,7 @@ The risk of a knowledge layer is that it becomes a pile of half-remembered facts
 - The whole knowledge layer renders and searches with the network disabled
 - The bundle is under the size cap
 - A Why text never blocks the action it explains
+- No crop-removal instruction reaches a hand's card (backstop for the authored hand-level text, K4)
 
 ---
 
@@ -175,7 +177,7 @@ The risk of a knowledge layer is that it becomes a pile of half-remembered facts
 | K1 | Source registry, `sources` fields, references generation, licence tests. No content yet. |
 | K2 | Gather and enter data: REI/PHI, missing groups, NAFDAC registered status. Owner approves each change. |
 | K3 | Why texts for every enforced rule, offline. |
-| K4 | Learn sections on all 22 cards, plus the offline search. |
+| K4 | Learn sections on all 22 cards, with hand-level text authored explicitly (§4.2), plus the offline search. |
 | K5 | One-thing-a-day, and learning from their own records. |
 
 K1 and K2 are worth doing before the team starts week 1, because they close real safety gaps. K3 to K5 can land during the season.
