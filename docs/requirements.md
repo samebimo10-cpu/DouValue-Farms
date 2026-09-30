@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.6 (draft for restructuring) |
+| Version | 1.7 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -54,8 +54,8 @@ Roles are **positions, not people**. A person can be moved between positions wit
 | Role | What they do in the app |
 |---|---|
 | Owner | Sees everything, receives digest, sets thresholds, approves overrides |
-| Farm Manager | Plans work, assigns zones, closes alerts, approves treatments |
-| Field Supervisor (2IC) | Checks work, performs confirm tests, confirms diagnoses, covers for Farm Manager |
+| Farm Manager | Plans work, assigns zones (including to himself), closes alerts, approves treatments — and works zones of his own |
+| Field Supervisor (2IC) | Checks work, performs confirm tests, confirms diagnoses, covers for Farm Manager — and works zones of his own |
 | Farm Doctor (in-app) | Not a person. Diagnoses, plans treatments and checks gate evidence in place of a site agronomist; every output is confirmed by a person (§6.14) |
 | Greenhouse Hand (×4, rising to more) | Does tasks in one primary zone and one backup zone |
 
@@ -63,6 +63,32 @@ Roles are **positions, not people**. A person can be moved between positions wit
 - **FR-ROLE-02 (MUST):** When a person is absent, their tasks move to the backup holder automatically.
 - **FR-ROLE-03 (MUST):** Each role sees only the screens and buttons it needs. Greenhouse Hands never see settings, costs or other people's records.
 - **FR-ROLE-04 (SHOULD):** The Farm Manager can reassign a position to a different person in under one minute.
+
+### 4.1 Authority and field work are separate
+
+On a farm this size everyone works the ground, including the people who supervise it. Holding authority does not mean being exempt from a scouting round, and doing a scouting round does not reduce the authority.
+
+So the app keeps two things apart:
+
+- **Role** — what a person may approve, confirm, override or see. Unchanged by any of the below.
+- **Field assignment** — which zones a person works, and the daily tasks that come with them.
+
+- **FR-ROLE-05 (MUST):** Any person, in any role, can hold field assignments. The Farm Manager and Field Supervisor each get a daily task list for their assigned zones, exactly as a Greenhouse Hand does.
+- **FR-ROLE-06 (MUST):** The Farm Manager assigns zones to people by name, and can assign zones to himself. The Field Supervisor can do the same when covering for the Farm Manager.
+- **FR-ROLE-07 (MUST):** A zone can carry more than one assigned person, and a person can hold more than one zone. Primary and backup holders (FR-ROLE-01) still apply per zone.
+- **FR-ROLE-08 (MUST):** A person in a supervising role sees both views without switching accounts: **My work** (their own tasks for today) and **The farm** (everyone's tasks, alerts, gates and records). The Greenhouse Hand sees only My work.
+- **FR-ROLE-09 (MUST):** Their own tasks are held to the same rules as anyone else's: proof photos, overdue escalation, end-of-shift report. A Farm Manager's missed scouting is a missed scouting.
+- **FR-ROLE-10 (MUST):** Overdue escalation (FR-TASK-03) skips any rung held by the person whose task is overdue, and goes to the next one up. The Field Supervisor's own overdue task goes to the Farm Manager; the Farm Manager's goes to the Owner.
+- **FR-ROLE-11 (SHOULD):** The Farm Manager can see, in one screen, how the week's work is spread across people, so assignment is a decision rather than a habit.
+
+### 4.2 Checking your own work
+
+A supervisor who scouts a zone may end up confirming his own finding. That is normal on a small farm, and refusing it would stop work. But it must be visible, because unchecked self-confirmation is how a wrong call becomes a farm-wide decision.
+
+- **FR-ROLE-12 (MUST):** Confirmation of a diagnosis prefers a second person. If the only qualified person available is the one who raised it, the app allows it and marks the record **self-confirmed**.
+- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner. Approval can be given from the phone and is not a blocking wait for routine cases.
+- **FR-ROLE-14 (MUST):** Gate 0 and Gate 4 clearance is unchanged (FR-GATE-00): Farm Manager confirmation plus Owner approval, whoever did the field work.
+- **FR-ROLE-15 (SHOULD):** The Owner digest counts self-confirmed diagnoses for the week. Not an alert — just visible, so the pattern is known.
 
 ---
 
@@ -175,7 +201,7 @@ Fixes treatment by guesswork.
 
 - **FR-DIAG-01 (MUST):** The 23 triage rows and 22 diagnosis cards in the rules JSON (Rev 5 plus the acid-soil and bacterial-spot additions) are built in as guided questions with reference photos ("Leaves curled? Yes / No").
 - **FR-DIAG-02 (MUST):** A diagnosis records the card used, answers given, photos, written reasoning, and who confirmed it.
-- **FR-DIAG-03 (MUST):** A Greenhouse Hand can start a diagnosis, but only the Field Supervisor or Farm Manager can confirm it.
+- **FR-DIAG-03 (MUST):** A Greenhouse Hand can start a diagnosis, but only the Field Supervisor or Farm Manager can confirm it. Where the confirmer is also the person who raised it, §4.2 applies.
 - **FR-DIAG-04 (MUST):** Suspected virus (e.g. tospovirus) triggers a red alert straight to the Owner, with isolation and removal steps.
 - **FR-DIAG-05 (MUST):** Samples sent to a lab are tracked with send date, lab, and result. The Farm Doctor recommends a lab sample in the cases listed in §6.14.
 - **FR-DIAG-06 (MUST):** Diagnoses are run through the Farm Doctor (§6.14).
@@ -293,7 +319,8 @@ The farm starts using the app with cycles already running. This section says how
 
 | Entity | Key fields |
 |---|---|
-| Person | name, face photo, PIN, language, position |
+| Person | name, face photo, PIN, language, position, assigned zones |
+| Assignment | person, zone, primary or backup, from date, assigned by |
 | Position | role, primary zone, backup zone |
 | Zone | ID, type (greenhouse/field), QR code, status |
 | Crop cycle | zone, crop, variety, planting date, harvest window |
@@ -353,6 +380,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.7 | 30 Sep 2026 | Authority and field work separated (§4.1, FR-ROLE-05 to FR-ROLE-11); self-confirmation rules (§4.2, FR-ROLE-12 to FR-ROLE-15); Assignment entity; FR-DIAG-03 points to §4.2 |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
 | 1.4 | 16 Sep 2026 | Field usability trial moved to after build, with a fix round (UX-26, UX-27, §9a) |
