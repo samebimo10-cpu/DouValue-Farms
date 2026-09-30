@@ -532,6 +532,8 @@ async function readJson(req) {
  *   POST /api/farms/:id/events      file records, each checked against the author
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
+ *   GET  /api/farms/:id/notify      which Owner channels are set up, and what went lately
+ *   POST /api/farms/:id/notify      send the Owner the digest or a straight-to-Owner item (FR-REP-02)
  */
 async function handleRequest(req, store) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -579,6 +581,10 @@ async function handleRequest(req, store) {
   // FR-DOC-03: photo review. Online only, by design — the app's guided
   // diagnosis is what answers when this cannot be reached.
   if (action === 'photo-review' && req.method === 'POST') return photoReview(farmId, body, me, store);
+  // FR-REP-02: the Owner's messages. The phones decide what to say; the keys
+  // for WhatsApp and email live here and nowhere else (NFR-SEC-03).
+  if (action === 'notify' && req.method === 'GET') return json(await notifyStatus(farmId, store));
+  if (action === 'notify' && req.method === 'POST') return json(await notifyOwner(farmId, body, me, store));
 
   return json({ error: 'Not found' }, 404);
 }
@@ -1305,6 +1311,192 @@ function envVar(name) {
     if (typeof process !== 'undefined' && process.env) return process.env[name] || '';
   } catch { /* not Node */ }
   return '';
+}
+
+// --- Messages to the Owner — FR-REP-02 ---------------------------------------
+//
+// D-1 is settled: WhatsApp, text first, with an email copy if one is set up.
+// The server holds no farm model, so the phones work out what to say — the
+// digest and the straight-to-Owner items — and hand it over with a key. The
+// server sends each key once, whichever phone offers it first, so every phone
+// can safely offer everything it has seen.
+//
+// Set on the server (Deno dashboard → Settings → Environment Variables):
+//   WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID   WhatsApp Cloud API credentials
+//   OWNER_WHATSAPP                             the Owner's number(s), e.g. 2348030000000
+//   WHATSAPP_TEMPLATE, WHATSAPP_TEMPLATE_LANG  an approved template with one body
+//                                              variable, used when WhatsApp's 24-hour
+//                                              rule refuses a plain text
+//   RESEND_API_KEY, OWNER_EMAIL, EMAIL_FROM    the optional email copy
+
+const NOTIFY_MAX_ITEMS = 20;
+const NOTIFY_MAX_CHARS = 4096;           // WhatsApp's own ceiling on a text body
+const NOTIFY_PER_DAY = 60;               // a bound on what one farm can send in a day
+const NOTIFY_KEEP = 200;                 // sent keys remembered, newest kept (Deno KV caps a value at 64 KiB)
+const NOTIFY_TIMEOUT_MS = 15000;
+const NOTIFY_KEY = /^(now|digest):[A-Za-z0-9_:.-]{1,120}$/;
+// WhatsApp says a business-started message needs a template once the Owner
+// has not written to the number for 24 hours. These are its codes for that.
+const WA_OUTSIDE_WINDOW = new Set([131047, 470]);
+
+/** What is set up. Numbers are kept to digits; nothing here ever leaves the server. */
+function notifyChannels(env = envVar) {
+  const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const whatsapp = {
+    token: env('WHATSAPP_TOKEN'),
+    phoneId: env('WHATSAPP_PHONE_NUMBER_ID'),
+    to: list(env('OWNER_WHATSAPP')).map((n) => n.replace(/\D/g, '')).filter(Boolean),
+    template: env('WHATSAPP_TEMPLATE'),
+    lang: env('WHATSAPP_TEMPLATE_LANG') || 'en',
+    version: env('WHATSAPP_API_VERSION') || 'v22.0',
+  };
+  const email = { key: env('RESEND_API_KEY'), to: list(env('OWNER_EMAIL')), from: env('EMAIL_FROM') };
+  return {
+    whatsapp: whatsapp.token && whatsapp.phoneId && whatsapp.to.length ? whatsapp : null,
+    email: email.key && email.to.length && email.from ? email : null,
+  };
+}
+
+/** A template variable may not hold line breaks or long runs of spaces. */
+function templateParameter(text) {
+  const flat = String(text).replace(/\s*\n+\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim();
+  return flat.length <= 900 ? flat : `${flat.slice(0, 890).trimEnd()} …`;
+}
+
+async function sendWhatsApp(wa, to, text, fetchFn) {
+  const post = (message) => fetchFn(`https://graph.facebook.com/${wa.version}/${wa.phoneId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${wa.token}` },
+    signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, ...message }),
+  });
+  const errorOf = async (res) => {
+    try { const body = await res.json(); return (body && body.error) || {}; } catch { return {}; }
+  };
+
+  // Text first: the whole message, line breaks and all, as the Owner reads it.
+  const res = await post({ type: 'text', text: { body: text, preview_url: false } });
+  if (res.ok) return { ok: true, via: 'text' };
+  const error = await errorOf(res);
+  if (!WA_OUTSIDE_WINDOW.has(Number(error.code)) || !wa.template) {
+    return { ok: false, why: `WhatsApp refused it: ${error.message || res.status}` };
+  }
+  // Outside the 24-hour window: the approved template, carrying the same words.
+  const again = await post({
+    type: 'template',
+    template: {
+      name: wa.template,
+      language: { code: wa.lang },
+      components: [{ type: 'body', parameters: [{ type: 'text', text: templateParameter(text) }] }],
+    },
+  });
+  if (again.ok) return { ok: true, via: 'template' };
+  const second = await errorOf(again);
+  return { ok: false, why: `WhatsApp refused the template: ${second.message || again.status}` };
+}
+
+async function sendEmail(mail, subject, text, fetchFn) {
+  const res = await fetchFn('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mail.key}` },
+    signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+    body: JSON.stringify({ from: mail.from, to: mail.to, subject, text }),
+  });
+  return res.ok ? { ok: true, via: 'email' } : { ok: false, why: `Email refused it: ${res.status}` };
+}
+
+/** Which channels are set up, and the last few keys that went. For the Owner's screen. */
+async function notifyStatus(farmId, store, { env = envVar } = {}) {
+  const channels = notifyChannels(env);
+  const farm = (await store.getFarm(farmId)) || {};
+  const sent = Object.entries(farm.notified || {})
+    .sort((a, b) => (a[1].at < b[1].at ? 1 : -1)).slice(0, 10)
+    .map(([key, rec]) => ({ key, at: rec.at, done: Object.keys(rec.done || {}).length }));
+  return { ok: true, configured: { whatsapp: !!channels.whatsapp, email: !!channels.email }, sent };
+}
+
+/**
+ * Send what the phones offered. Each item is `{ key, kind, text }`. Anyone may
+ * raise a straight-to-Owner item; the digest comes from a role that runs the
+ * work. Each key goes once to each target, so a phone that retries on a bad
+ * connection, or five phones offering the same virus, still means one message.
+ */
+async function notifyOwner(farmId, body, me, store, {
+  env = envVar, fetchFn = fetch, now = new Date().toISOString(),
+} = {}) {
+  const channels = notifyChannels(env);
+  const items = Array.isArray(body && body.items) ? body.items.slice(0, NOTIFY_MAX_ITEMS) : [];
+  const configured = { whatsapp: !!channels.whatsapp, email: !!channels.email };
+  if (!channels.whatsapp && !channels.email) {
+    return { ok: false, reason: 'not-configured', configured,
+      message: 'No channel to the Owner is set up on the farm server yet. Until it is, copy the digest '
+        + 'into WhatsApp from the Alerts screen.',
+      results: items.map((i) => ({ key: i && i.key, status: 'not-configured' })) };
+  }
+
+  const targets = [
+    ...(channels.whatsapp ? channels.whatsapp.to.map((to) => ({ id: `wa:${to}`, to })) : []),
+    ...(channels.email ? [{ id: 'email' }] : []),
+  ];
+  const farm = (await store.getFarm(farmId)) || {};
+  const notified = { ...(farm.notified || {}) };
+  const day = now.slice(0, 10);
+  let budget = farm.notifyDay && farm.notifyDay.day === day ? farm.notifyDay.count : 0;
+  const results = [];
+
+  for (const item of items) {
+    const key = String((item && item.key) || '');
+    const kind = item && item.kind;
+    // Plain text, and nothing that is not: no control characters but the line break.
+    const text = String((item && item.text) || '').replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, '').trim();
+    if (!NOTIFY_KEY.test(key) || !['immediate', 'digest'].includes(kind) || kind !== (key.startsWith('digest:') ? 'digest' : 'immediate')) {
+      results.push({ key, status: 'refused', why: 'Not a message this server sends' });
+      continue;
+    }
+    if (!text || text.length > NOTIFY_MAX_CHARS) {
+      results.push({ key, status: 'refused', why: 'A message is text, up to 4096 characters' });
+      continue;
+    }
+    if (kind === 'digest' && !can(me.role, 'assignTasks')) {
+      results.push({ key, status: 'refused', why: 'The digest comes from a phone that runs the work' });
+      continue;
+    }
+    const rec = notified[key] || { at: null, done: {} };
+    const owed = targets.filter((t) => !rec.done[t.id]);
+    if (!owed.length) { results.push({ key, status: 'already-sent' }); continue; }
+    if (budget >= NOTIFY_PER_DAY) {
+      results.push({ key, status: 'failed', why: `That is ${NOTIFY_PER_DAY} messages today; the rest wait for tomorrow` });
+      continue;
+    }
+
+    const lines = text.split('\n');
+    const subject = (kind === 'digest' ? lines[0] : `${lines[0]}: ${lines[1] || ''}`).slice(0, 150);
+    const failures = [];
+    const via = [];
+    for (const target of owed) {
+      let sent;
+      try {
+        sent = target.id === 'email'
+          ? await sendEmail(channels.email, subject, text, fetchFn)
+          : await sendWhatsApp(channels.whatsapp, target.to, text, fetchFn);
+      } catch (err) {
+        sent = { ok: false, why: `Could not reach ${target.id === 'email' ? 'email' : 'WhatsApp'}: ${err.message || err}` };
+      }
+      if (sent.ok) { rec.done[target.id] = now; via.push(sent.via); } else failures.push(sent.why);
+    }
+    if (via.length) { rec.at = now; budget++; }
+    notified[key] = rec;
+    results.push(failures.length
+      ? { key, status: via.length ? 'partly-sent' : 'failed', via, why: failures.join('; ') }
+      : { key, status: 'sent', via });
+  }
+
+  // Remember the newest keys only; a farm running for years does not need all of them.
+  const kept = Object.entries(notified)
+    .sort((a, b) => ((a[1].at || '') < (b[1].at || '') ? 1 : -1)).slice(0, NOTIFY_KEEP);
+  await store.setFarm(farmId, { ...farm, notified: Object.fromEntries(kept), notifyDay: { day, count: budget } });
+  return { ok: true, configured, results };
 }
 
 /** Count one use against this person's day, and refuse once they are over. */

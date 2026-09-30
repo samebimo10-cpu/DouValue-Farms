@@ -190,7 +190,7 @@ export function digestText(state, opts = {}) {
 
   const critical = items.filter((i) => i.severity === 'critical');
   const lines = [head, ''];
-  if (critical.length) lines.push(`${critical.length} thing${critical.length === 1 ? '' : 's'} need you today.`, '');
+  if (critical.length) lines.push(`${critical.length} thing${critical.length === 1 ? ' needs' : 's need'} you today.`, '');
 
   for (const i of items) {
     lines.push(`${i.severity === 'critical' ? '!!' : i.severity === 'warn' ? '!' : '-'} ${i.line}`);

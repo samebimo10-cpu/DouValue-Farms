@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.8 (draft for restructuring) |
+| Version | 1.9 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -237,7 +237,8 @@ Fixes treatment by guesswork.
 
 ### 6.11 Owner oversight
 - **FR-REP-01 (MUST):** **Exceptions-only daily digest** for the Owner: missed tasks, open alerts, gate overrides, virus suspicions, low stock. If nothing is wrong, it says so in one line.
-- **FR-REP-02 (MUST):** The digest is small enough to receive over a weak or expensive connection (text first, photos on request) and can be sent by WhatsApp or email **[choose channel]**.
+- **FR-REP-02 (MUST):** The digest is small enough to receive over a weak or expensive connection (text first, photos on request) and is sent to the Owner by WhatsApp each morning, with an email copy where one is set up (D-1). A message that does not get through is retried; the same message is never sent twice.
+- **FR-REP-06 (MUST):** Items on the straight-to-Owner list (rules `escalation.immediate_to_owner`) and a treatment marked treated before approval (`FR-ROLE-13`) are sent to the Owner on the same channel as soon as a phone that has recorded or received them has a connection, not held for the next digest.
 - **FR-REP-03 (MUST):** A KPI screen shows the measures in section 3, per week and per zone.
 - **FR-REP-04 (SHOULD):** A weekly summary per zone with photo highlights.
 - **FR-REP-05 (SHOULD):** Records can be exported for EBIMS, funders, and audits.
@@ -347,7 +348,7 @@ The farm starts using the app with cycles already running. This section says how
 - [ ] Threshold breach escalates correctly with times shortened for testing (`FR-SCOUT-04`)
 - [ ] All field screens work in airplane mode, then sync (`NFR-OFF-01/02`)
 - [ ] Sample farm erased and real PINs set (`NFR-SEC-01/02`)
-- [ ] Owner digest received on the chosen channel (`FR-REP-02`)
+- [ ] Owner digest received on WhatsApp, and a straight-to-Owner item received as it happened (`FR-REP-02`, `FR-REP-06`)
 - [ ] Injection tests pass (`NFR-SEC-04`)
 
 ---
@@ -364,7 +365,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | # | Decision | Owner |
 |---|---|---|
-| D-1 | Digest channel: WhatsApp, email, or both | Owner |
+| D-1 | ~~Digest channel: WhatsApp, email, or both~~ Settled: WhatsApp, text first, with an optional email copy (FR-REP-02) | Done |
 | D-2 | ~~Pest thresholds and rotation rules~~ Settled in Build Rules Extract rules-1.1 | Done |
 | D-3 | Whether to add Pidgin and other languages at launch | Farm Manager |
 | D-4 | ~~Escalation timings~~ Settled: 4 h / 12 h / 24 h (C-12) | Done |
@@ -380,6 +381,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.9 | 30 Sep 2026 | D-1 settled: digest by WhatsApp with optional email copy (FR-REP-02); straight-to-Owner items sent as they happen (FR-REP-06) |
 | 1.8 | 30 Sep 2026 | FR-ROLE-13: approval is a hard block, except a treatment that closes an alert due before the next spray window, which proceeds flagged "treated before approval" with the Owner notified at once |
 | 1.7 | 30 Sep 2026 | Authority and field work separated (§4.1, FR-ROLE-05 to FR-ROLE-11); self-confirmation rules (§4.2, FR-ROLE-12 to FR-ROLE-15); Assignment entity; FR-DIAG-03 points to §4.2 |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |

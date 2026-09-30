@@ -450,6 +450,17 @@ The one-line version works because the site serves that file as JavaScript,
 which is what Deno needs to import it. Deno fetches it once at deploy time and
 caches it, so the running server does not depend on this site staying up.
 
+**The Owner's digest on WhatsApp (FR-REP-02, FR-REP-06).** Once the server has
+`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` and `OWNER_WHATSAPP` set, the digest
+goes to the Owner by WhatsApp from 7 AM. Anything on the straight-to-Owner list
+goes the moment a phone that has seen it has signal: a suspected virus, bacterial
+wilt, a gate override, pod borer on more than ten plants, a synthetic from Week 10,
+or a treatment made before its approval. Messages are text only. Add
+`WHATSAPP_TEMPLATE` (an approved template with one variable) so messages still get
+through when the Owner has not written to the number for 24 hours. Add
+`RESEND_API_KEY`, `OWNER_EMAIL` and `EMAIL_FROM` for an email copy. The setup page
+walks through all of these. Each message goes once, however many phones offer it.
+
 Prefer your own machine? `server/node-sync.mjs` serves the same contract
 and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
 Put either behind HTTPS: tokens and PINs travel in the request, and plain HTTP

@@ -763,8 +763,12 @@ async function saveSpray(ctx, form) {
   const cycle = ctx.state.cycles[data.cycleId];
   const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
   const rate = rateFor(catalogue, data.activeId);
-  const goAhead = await confirmSheet('Record this spray?',
-    confirmSummary([
+  // FR-ROLE-13's exception: said plainly before the spray is recorded, because
+  // it goes on the record and to the Owner the moment it is saved.
+  const early = allowed.beforeApproval;
+  const goAhead = await confirmSheet(early ? 'Record this spray before approval?' : 'Record this spray?',
+    (early ? note('warn', 'Treated before approval', `<small>${esc(early.why)}</small>`) : '')
+    + confirmSummary([
       ['Zone', zone ? zone.name : 'not named'],
       ['Against', allowed.diagnosis
         ? (PROBLEM_BY_ID[allowed.diagnosis.problemId] || {}).name || allowed.diagnosis.problemId
@@ -776,12 +780,17 @@ async function saveSpray(ctx, form) {
       ['No picking until', phiDays
         ? isoDate(addDays(new Date(data.date || isoDate()), phiDays)) : 'no waiting period'],
       ['Keep people out for', reiHours ? `${reiHours} hours` : 'no re-entry period'],
+      ['Approval', early ? `still owed by the ${early.approvalFrom === 'ceo' ? 'Owner' : 'Farm Manager'}` : null],
     ]), 'Yes, record it');
   if (!goAhead) return;
 
   const sprayId = uid('sp');
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
+    // FR-ROLE-13: what the screen saw. The Gates screen and the Owner's list
+    // re-judge it from the records; this is here so the record reads plainly.
+    treatedBeforeApproval: !!early,
+    alertId: early ? early.alert.id : null,
     // UX-27: who was watching, while the trial round is still open.
     supervision: supervisionStamp(sprayWatch),
     id: sprayId, cycleId: data.cycleId,

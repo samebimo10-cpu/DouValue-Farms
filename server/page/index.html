@@ -180,6 +180,36 @@ does the same job.</small></p>
 </div>
 
 <div class="card">
+  <h2>The Owner's digest on WhatsApp</h2>
+  <p>Every morning from 7 AM the Owner gets a short text: what needs them today, or one
+  line saying nothing does. A suspected virus, bacterial wilt, a gate override, pod borer
+  on more than ten plants, a synthetic from Week 10, or a spray that went on before its
+  approval does not wait for the morning: it goes the moment a phone that has seen it has
+  signal. Text only, a few hundred bytes, so it arrives on one bar.</p>
+  <ol>
+    <li>In Meta's WhatsApp Business platform, set up the WhatsApp Cloud API for a
+    business number. Note its <b>phone number ID</b> and make a <b>permanent access
+    token</b>.</li>
+    <li>In the Deno dashboard: <b>Settings</b>, then <b>Environment Variables</b>. Add
+    <b>WHATSAPP_TOKEN</b>, <b>WHATSAPP_PHONE_NUMBER_ID</b>, and <b>OWNER_WHATSAPP</b>,
+    the Owner's number with the country code and no plus sign, such as 2348030000000.
+    Separate two numbers with a comma.</li>
+    <li>WhatsApp only lets a business send plain text to someone who has written to it in
+    the last 24 hours. So the morning digest gets through on the other days too, make a
+    <b>Utility</b> message template with a single variable, such as
+    <i>DouValue farm: {{1}}</i>. Once Meta approves it, add <b>WHATSAPP_TEMPLATE</b> with
+    its name (and <b>WHATSAPP_TEMPLATE_LANG</b> if it is not <i>en</i>). The server
+    sends plain text first and uses the template only when WhatsApp asks for it.</li>
+  </ol>
+  <p><b>An email copy, if you want one.</b> Add <b>RESEND_API_KEY</b> (from resend.com),
+  <b>OWNER_EMAIL</b>, and <b>EMAIL_FROM</b>, an address on a domain you have verified
+  with Resend.</p>
+  <p>These keys stay on the server, and no phone ever holds them. The Owner's number is
+  set here, not in the app, so nobody on the farm can redirect the Owner's alerts. The
+  server sends each message once however many phones offer it, and at most 60 a day.</p>
+</div>
+
+<div class="card">
   <h2>If something looks different</h2>
   <p>Deno Deploy changes its screens from time to time, so the buttons may not be
   worded exactly as above. What you are looking for is any way to create a

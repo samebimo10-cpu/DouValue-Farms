@@ -34,7 +34,7 @@
 import { addDays, daysBetween, isoDate } from '../util.js';
 import { gateSpec, peekRules } from '../rules.js';
 import { rotationVerdict } from './rotation.js';
-import { alerts } from './alerts.js';
+import { alertThatCannotWait, alerts, approvalStatus, farmHour } from './alerts.js';
 import { GATE_ITEMS, gateItem } from './doctor.js';
 import { isNursery, protocolOf } from './farm.js';
 import { releasedFor } from './nursery.js';
@@ -42,7 +42,7 @@ import {
   BARRIERS, bagRules, batchFailure, batchName, batchesIn, fillsFor, galledCycle, mediaOf,
 } from './media.js';
 import { mediaLimePlan } from './calc.js';
-import { approverTitle, awaitingApproval, readDiagnosis, treatable, treatableAt } from './diagnose.js';
+import { approverTitle, awaitingApproval, readDiagnosis, treatable } from './diagnose.js';
 import { PRE_GATES, PRE_GATES_LABEL, plantedBeforeGates, preGatesEvidence, treatmentHistoryBlock } from './onboarding.js';
 
 /**
@@ -965,19 +965,26 @@ function diagnosisFirst(state, w) {
   const sprays = (state.sprays || []).filter((s) => s.cycleId === cycle.id);
   const bare = sprays.filter((s) => !s.diagnosisId && !s.woundCare);
   // FR-ROLE-13 — a self-confirmed diagnosis clears nothing on its own. A spray
-  // logged against one before the next level up approved it counts as
-  // unapproved here, however the record reached the log.
-  const byId = new Map((state.diagnoses || []).map((d) => [d.id, d]));
-  const unapproved = sprays.filter((s) => {
-    const d = s.diagnosisId && byId.get(s.diagnosisId);
-    return d && d.selfConfirmed && d.approvalFrom && !treatableAt(d, s.at);
-  });
+  // logged against one before the next level up approved it is red, however
+  // the record reached the log — unless it closed an alert that could not
+  // wait for the next spray window. That one is held (yellow) and flagged
+  // until the approval lands, then passes like any other.
+  const judged = sprays.map((s) => ({ spray: s, status: approvalStatus(state, s) })).filter((x) => x.status);
+  const unapproved = judged.filter((x) => !x.status.exception);
+  const pending = judged.filter((x) => x.status.exception && !x.status.approved);
   if (!bare.length && unapproved.length) {
     return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
       why: `${unapproved.length} spray${unapproved.length === 1 ? '' : 's'} on this cycle went on against a `
         + 'self-confirmed diagnosis before it was approved.',
       fix: 'FR-ROLE-13: the next level up approves a self-confirmed diagnosis before a treatment. '
         + 'Record why these went ahead.' }];
+  }
+  if (!bare.length && pending.length) {
+    const first = pending[0].status;
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'held',
+      why: `Treated before approval: ${pending.length} spray${pending.length === 1 ? '' : 's'} closed an alert `
+        + 'that could not wait for the next spray window. The Owner has been told.',
+      fix: `The ${approverTitle(first.approvalFrom)} approves "${first.label}" on the Clinic screen (FR-ROLE-13).` }];
   }
   return [bare.length
     ? { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
@@ -1218,7 +1225,9 @@ export function canPlant(state, zoneId, opts = {}) {
  * somebody senior to the person who started it.
  */
 export function canTreat(state, cycleId, opts = {}) {
-  const { today = isoDate(), productId = null, activeId = null, maxAgeDays = 14 } = opts;
+  const {
+    today = isoDate(), productId = null, activeId = null, maxAgeDays = 14, now = new Date().toISOString(),
+  } = opts;
 
   // FR-ONB-05 — first, because it is the one nobody on the zone can fix by
   // diagnosing: the history has to be entered on the Setup screen.
@@ -1268,6 +1277,27 @@ export function canTreat(state, cycleId, opts = {}) {
       };
     }
     const who = approverTitle(waiting.approvalFrom);
+    // The one exception: an alert on this pest that is due before the next
+    // spray window. Waiting would miss it, so the treatment goes ahead —
+    // marked, with the Owner told at once and the approval still owed.
+    const urgent = alertThatCannotWait(state, cycleId, waiting, { now, settings: opts.settings || null });
+    if (urgent) {
+      const rotation = rotationCheck(state, cycleId, activeId || productId, { ...opts, today, diagnosis: waiting });
+      if (!rotation.ok) return rotation;
+      return {
+        ok: true,
+        diagnosis: waiting,
+        beforeApproval: {
+          alert: urgent.alert,
+          deadline: urgent.deadline,
+          nextWindow: urgent.nextWindow,
+          approvalFrom: waiting.approvalFrom,
+          why: `The ${urgent.alert.pestName} alert on this zone is due ${farmHour(urgent.deadline)}, before the `
+            + `next spray window. This goes ahead as treated before approval: the Owner is told now, and the `
+            + `${who} still has to approve "${readDiagnosis(waiting).label}".`,
+        },
+      };
+    }
     return {
       ok: false,
       reason: 'awaiting-approval',

@@ -4,7 +4,7 @@
 |---|---|
 | Version | 1.1 |
 | Status | Draft for build |
-| Depends on | requirements.md v1.8, rules-1.4 |
+| Depends on | requirements.md v1.9, rules-1.4 |
 | Save as | `docs/knowledge-layer.md` |
 
 ---

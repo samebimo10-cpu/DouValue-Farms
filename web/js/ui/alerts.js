@@ -17,6 +17,9 @@ import {
   alerts, ALERT_LEVEL, ladderFor, risingWarnings, straightToOwner, zoneTrends,
 } from '../domain/alerts.js';
 import { digest } from '../domain/digest.js';
+import { DIGEST_HOUR } from '../domain/notify.js';
+import { deliverOwnerMessages, isConnected, ownerDelivery, syncNow } from '../sync.js';
+import { render } from './shell.js';
 import { trendChart } from './chart.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 
@@ -232,6 +235,19 @@ export const digestView = {
   },
 
   actions: {
+    // FR-REP-02: offer it now rather than at the next background sync.
+    'digest-send': async (ctx) => {
+      if (!isConnected()) { toast('Connect the farm server first, or copy it into WhatsApp', true); return; }
+      await syncNow({ silent: true });
+      let last;
+      try { last = await deliverOwnerMessages(); } catch (err) { toast(err.message || 'Could not reach the farm server', true); return; }
+      const failed = (last.results || []).filter((r) => r.status === 'failed' || r.status === 'partly-sent');
+      if (last.configured && !last.configured.whatsapp && !last.configured.email) {
+        toast('No WhatsApp number is set on the farm server yet — copy it for now', true);
+      } else if (failed.length) toast(failed[0].why || 'WhatsApp did not take it; it will try again', true);
+      else toast('Sent to the Owner');
+      render();
+    },
     'digest-copy': async (ctx) => {
       const d = digest(ctx.state, { now: new Date().toISOString() });
       try {
@@ -279,8 +295,33 @@ function sendBlock(d) {
     + `<pre class="working">${esc(d.text)}</pre>`
     + `<p><small>${bytes} bytes — text only, no photos, so it goes over one bar of signal without `
     + 'costing anything to receive.</small></p>'
-    + `<div class="row wrap">${button('Copy for WhatsApp', 'digest-copy', { icon: '📋' })}</div>`,
+    + `<p><small>${esc(channelLine())}</small></p>`
+    + `<div class="row wrap">${isConnected() ? button('Send to the Owner now', 'digest-send', { icon: '📨' }) : ''}`
+    + `${button('Copy for WhatsApp', 'digest-copy', { icon: '📋', cls: isConnected() ? 'btn-ghost' : '' })}</div>`,
   );
+}
+
+/** Where the digest goes, in a sentence — D-1: WhatsApp, with an email copy if set up. */
+function channelLine() {
+  if (!isConnected()) {
+    return 'This phone is not connected to a farm server, so nothing is sent automatically. Copy it into WhatsApp.';
+  }
+  const last = ownerDelivery();
+  const hour = `${DIGEST_HOUR} AM`;
+  if (!last.configured) {
+    return `Goes to the Owner by WhatsApp from ${hour}, after this phone next syncs. Straight-to-Owner `
+      + 'items go the moment a phone that has seen them has signal.';
+  }
+  if (!last.configured.whatsapp && !last.configured.email) {
+    return 'No WhatsApp number is set on the farm server yet, so nothing is being sent. Until the CEO sets '
+      + 'OWNER_WHATSAPP and the WhatsApp keys on the server, copy it in by hand.';
+  }
+  const how = [last.configured.whatsapp ? 'WhatsApp' : null, last.configured.email ? 'an email copy' : null]
+    .filter(Boolean).join(' with ');
+  const went = (last.results || []).filter((r) => r.status === 'sent').length;
+  return `Goes to the Owner by ${how}, from ${hour} and whenever something is straight-to-Owner.`
+    + (last.at ? ` Last checked ${new Date(last.at).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })}`
+      + `${went ? `, ${went} sent` : ', nothing new to send'}.` : '');
 }
 
 /** FR-REP-03 — the success measures from section 3, computed from the records. */

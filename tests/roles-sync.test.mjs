@@ -516,6 +516,18 @@ test("FR-ROLE-13: a manager's self-confirmed diagnosis is approved by the Owner,
   assert.deepEqual(byOwner.body.refused, []);
 });
 
+test('FR-REP-02: the notify route is live, needs a token, and says when no channel is set up', async () => {
+  const anon = await call(`/api/farms/${FARM}/notify`, { method: 'POST', body: { items: [] } });
+  assert.equal(anon.status, 401);
+  const status = await call(`/api/farms/${FARM}/notify`, { token: ceoToken });
+  assert.deepEqual(status.body.configured, { whatsapp: false, email: false });
+  const sent = await call(`/api/farms/${FARM}/notify`, {
+    method: 'POST', token: ceoToken,
+    body: { items: [{ key: 'now:virus:dx9', kind: 'immediate', text: 'VIRUS SUSPECTED on GH-01' }] },
+  });
+  assert.equal(sent.body.reason, 'not-configured');
+});
+
 test('what survives the wire still replays into a farm', async () => {
   const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
   const rebuilt = store.reduce(page.body.events);

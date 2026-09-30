@@ -149,10 +149,11 @@ export function readiness(state, { today = isoDate(), now = new Date().toISOStri
     },
     {
       id: 'FR-REP-02',
-      label: 'Owner receives the digest on the chosen channel',
+      label: 'Owner receives the digest on WhatsApp',
       ok: null,
-      detail: 'Open decision D-1: WhatsApp, email, or both. The digest is ready to copy; how it '
-        + 'is sent is still yours to choose.',
+      detail: 'D-1 settled: WhatsApp, text first, with an optional email copy. Set WHATSAPP_TOKEN, '
+        + 'WHATSAPP_PHONE_NUMBER_ID and OWNER_WHATSAPP on the farm server, then check the Owner '
+        + 'actually received one. Only the Owner\'s phone can answer that.',
     },
   ];
 

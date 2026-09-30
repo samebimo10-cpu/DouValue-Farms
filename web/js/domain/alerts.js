@@ -22,6 +22,7 @@
 import { addDays, daysBetween, isoDate } from '../util.js';
 import { PROBLEM_BY_ID } from './pests.js';
 import { PRODUCT_BY_ID } from './safety.js';
+import { CARD_TO_PROBLEM, approverTitle, readDiagnosis, treatableAt } from './diagnose.js';
 
 /**
  * Action thresholds — FR-SCOUT-02.
@@ -602,7 +603,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const name = d.problemName || d.problemId || 'something';
     if (VIRUS_RE.test(text)) {
       out.push({
-        kind: 'virus', rule: IMMEDIATE_TO_OWNER[0], at: d.at || `${date}T12:00:00.000Z`, date,
+        kind: 'virus', id: d.id, rule: IMMEDIATE_TO_OWNER[0], at: d.at || `${date}T12:00:00.000Z`, date,
         zoneName: where(d.cycleId), cycleId: d.cycleId || null,
         line: `VIRUS SUSPECTED: ${name} on ${where(d.cycleId)}`,
         detail: 'Isolate those plants, do not move tools or hands between houses, pull and burn '
@@ -610,7 +611,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
       });
     } else if (BACTERIAL_WILT_RE.test(text)) {
       out.push({
-        kind: 'bacterial_wilt', rule: IMMEDIATE_TO_OWNER[1], at: d.at || `${date}T12:00:00.000Z`, date,
+        kind: 'bacterial_wilt', id: d.id, rule: IMMEDIATE_TO_OWNER[1], at: d.at || `${date}T12:00:00.000Z`, date,
         zoneName: where(d.cycleId), cycleId: d.cycleId || null,
         line: `BACTERIAL WILT SUSPECTED on ${where(d.cycleId)}`,
         detail: 'Do not irrigate from that bed into the others. A lab sample decides it — the '
@@ -628,7 +629,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const date = (o.at || '').slice(0, 10);
     const zone = (state.plots || {})[o.zoneId];
     out.push({
-      kind: 'gate_override', rule: IMMEDIATE_TO_OWNER[2], at: o.at, date,
+      kind: 'gate_override', id: o.id, rule: IMMEDIATE_TO_OWNER[2], at: o.at, date,
       zoneName: zone ? zone.name : 'a zone', cycleId: null,
       line: `Gate override on ${zone ? zone.name : 'a zone'} — ${o.gate}`,
       detail: `Reason given: ${o.reason || 'none recorded'}`,
@@ -646,7 +647,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const plants = Number(sc.plantsAffected ?? NaN);
     if (!Number.isFinite(plants) || plants <= POD_BORER_TO_OWNER) continue;
     out.push({
-      kind: 'pod_borer', rule: IMMEDIATE_TO_OWNER[3], at: sc.at || `${date}T12:00:00.000Z`, date,
+      kind: 'pod_borer', id: sc.id, rule: IMMEDIATE_TO_OWNER[3], at: sc.at || `${date}T12:00:00.000Z`, date,
       zoneName: where(sc.cycleId), cycleId: sc.cycleId || null,
       line: `Pod borer on ${plants} plants in ${where(sc.cycleId)}`,
       detail: 'Over ten plants with entry holes: spray the whole field today, do not wait for the '
@@ -662,7 +663,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     if (week == null || week < ORGANICS_ONLY_FROM_WEEK) continue;
     if (!isSyntheticFromWeek10(sp.productId)) continue;
     out.push({
-      kind: 'week10_synthetic', rule: IMMEDIATE_TO_OWNER[4], at: sp.at || `${date}T12:00:00.000Z`, date,
+      kind: 'week10_synthetic', id: sp.id, rule: IMMEDIATE_TO_OWNER[4], at: sp.at || `${date}T12:00:00.000Z`, date,
       zoneName: where(sp.cycleId), cycleId: sp.cycleId || null,
       line: `Synthetic sprayed in Week ${week} on ${where(sp.cycleId)}`
         + ` — ${sp.productName || sp.productId}`,
@@ -671,7 +672,130 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     });
   }
 
+  // FR-ROLE-13 — a treatment that went ahead before its self-confirmed
+  // diagnosis was approved, because the alert it closed could not wait. Like an
+  // override it is a state the farm stands in, so it stays on the list until
+  // the approval lands rather than ageing off after a week.
+  for (const sp of state.sprays || []) {
+    const status = approvalStatus(state, sp);
+    if (!status || status.approved || !status.exception) continue;
+    out.push({
+      kind: 'treated_before_approval', id: sp.id, rule: 'FR-ROLE-13', at: sp.at || `${sp.date}T12:00:00.000Z`,
+      date: sp.date || (sp.at || '').slice(0, 10),
+      zoneName: where(sp.cycleId), cycleId: sp.cycleId || null,
+      line: `Treated before approval on ${where(sp.cycleId)} — ${sp.productName || sp.productId || 'a spray'}`
+        + ` for ${status.label}`,
+      detail: `The ${status.pestName} alert was due ${farmHour(status.deadline)}, before the next spray window. `
+        + `The diagnosis was self-confirmed; the ${approverTitle(status.approvalFrom)} still has to approve it.`,
+    });
+  }
+
   return out.sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1));
+}
+
+// --- The spray window and the alert deadline (SR-01, C-3) --------------------
+//
+// SR-01: sprays go on between 4 and 7 PM. C-3 (rules `alert_deadlines`): a
+// thrips breach is treated in that day's window, or the next day's if it was
+// logged after 7 PM; every other breach in the next window, never later than
+// 24 hours. Both come to the same thing: the deadline is the close of the first
+// window that ends after the breach, and never later than the alert's own
+// 24-hour clock. The farm keeps West Africa Time, UTC+1 with no summer time.
+
+/** SR-01, in farm hours. SR-02 opens it at 5 PM on a flowering crop; it still closes at 7. */
+export const SPRAY_WINDOW = { opens: 16, closes: 19 };
+const FARM_UTC_OFFSET_HOURS = 1;
+
+const farmClock = (iso) => {
+  const t = new Date(new Date(iso).getTime() + FARM_UTC_OFFSET_HOURS * 3600000);
+  return { day: t.toISOString().slice(0, 10), hour: t.getUTCHours() + t.getUTCMinutes() / 60 };
+};
+const farmTime = (day, hour) => new Date(
+  Date.parse(`${day}T00:00:00.000Z`) + (hour - FARM_UTC_OFFSET_HOURS) * 3600000,
+).toISOString();
+/** "7 PM on 30 Sep", for a message. */
+export const farmHour = (iso) => {
+  const { day, hour } = farmClock(iso);
+  const h = Math.floor(hour);
+  return `${h % 12 || 12}${h < 12 ? ' AM' : ' PM'} on ${day}`;
+};
+
+/** C-3 — when this alert has to have been treated by. */
+export function sprayDeadline(alert) {
+  const { day, hour } = farmClock(alert.at);
+  const windowDay = hour < SPRAY_WINDOW.closes ? day : isoDate(addDays(day, 1));
+  const close = farmTime(windowDay, SPRAY_WINDOW.closes);
+  return alert.dueAt && alert.dueAt < close ? alert.dueAt : close;
+}
+
+/**
+ * When the next spray window opens after `now`. Inside a window, "next" is
+ * tomorrow's: the one after this one, which is what waiting would cost.
+ */
+export function nextSprayWindow(now) {
+  const { day, hour } = farmClock(now);
+  const openDay = hour < SPRAY_WINDOW.opens ? day : isoDate(addDays(day, 1));
+  return farmTime(openDay, SPRAY_WINDOW.opens);
+}
+
+/** The farm as it stood just before `at`: nothing recorded at or after it counts. */
+function asOf(state, at) {
+  const before = (r) => (r.at || (r.date ? `${r.date}T12:00:00.000Z` : '')) < at;
+  return {
+    ...state,
+    scouts: (state.scouts || []).filter(before),
+    sprays: (state.sprays || []).filter(before),
+    alertDecisions: (state.alertDecisions || []).filter(before),
+    alertAcks: (state.alertAcks || []).filter(before),
+  };
+}
+
+/** The pest an alert would be raised on, for this diagnosis. */
+export const pestOfDiagnosis = (d) => (d ? d.problemId || CARD_TO_PROBLEM[d.cardId] || d.cardId || null : null);
+
+/**
+ * FR-ROLE-13's one exception. Is there an open alert on this cycle, for the
+ * pest this diagnosis names, whose deadline falls before the next spray
+ * window? Then waiting for the approval would miss it, and the treatment may
+ * go ahead flagged. Read as the farm stood at `now`, so a spray is judged by
+ * what was true when it went on, not by the alert it then closed.
+ */
+export function alertThatCannotWait(state, cycleId, diagnosis, { now = new Date().toISOString(), settings = null } = {}) {
+  const pestId = pestOfDiagnosis(diagnosis);
+  if (!cycleId || !pestId) return null;
+  const nextWindow = nextSprayWindow(now);
+  const open = alerts(asOf(state, now), { now, settings })
+    .filter((a) => a.status === 'open' && a.cycleId === cycleId && a.pestId === pestId);
+  for (const alert of open) {
+    const deadline = sprayDeadline(alert);
+    if (deadline < nextWindow) return { alert, deadline, nextWindow };
+  }
+  return null;
+}
+
+/**
+ * Where a spray stands against FR-ROLE-13. Null when its diagnosis needed no
+ * approval, or had it before the spray went on. Otherwise: whether the alert
+ * exception covered it, and whether the approval has landed since.
+ */
+export function approvalStatus(state, spray) {
+  if (!spray || !spray.diagnosisId) return null;
+  const d = (state.diagnoses || []).find((x) => x.id === spray.diagnosisId);
+  if (!d || !d.confirmedBy || !d.selfConfirmed || !d.approvalFrom) return null;
+  const at = spray.at || `${spray.date}T12:00:00.000Z`;
+  if (treatableAt(d, at)) return null;
+  const urgent = alertThatCannotWait(state, spray.cycleId, d, { now: at });
+  return {
+    diagnosis: d,
+    label: readDiagnosis(d).label,
+    approvalFrom: d.approvalFrom,
+    approved: !!d.approvedBy,
+    approvedBy: d.approvedBy || null,
+    exception: !!urgent,
+    alert: urgent ? urgent.alert : null,
+    pestName: urgent ? urgent.alert.pestName : null,
+    deadline: urgent ? urgent.deadline : null,
+  };
 }
 
 /**
