@@ -744,8 +744,11 @@ async function saveSpray(ctx, form) {
         : '')
       + (refusedOnProduct
         ? `<p><small>Read from ${esc((allowed.sources || []).join(', ') || 'the rules file')}.</small></p>`
-        : `<div style="margin-top:12px">${button('Check the plant now', 'go',
-          { cls: 'btn-block btn-lg', icon: '🔍', data: { to: '#/diagnose' } })}</div>`));
+        // FR-DIAG-07: only the Field Supervisor and the Farm Manager run the
+        // guided diagnosis; anyone else reports the plant to them.
+        : `<div style="margin-top:12px">${can(ctx.user, 'guideDiagnosis')
+          ? button('Check the plant now', 'go', { cls: 'btn-block btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
+          : button('Report a sick plant', 'go', { cls: 'btn-block btn-lg', icon: '🌿', data: { to: '#/sick-plant' } })}</div>`));
     return;
   }
 

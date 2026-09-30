@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.7 (draft for restructuring) |
+| Version | 1.9 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -187,10 +187,23 @@ Fixes treatment by guesswork.
 
 - **FR-DIAG-01 (MUST):** The 23 triage rows and 22 diagnosis cards in the rules JSON (Rev 5 plus the acid-soil and bacterial-spot additions) are built in as guided questions with reference photos ("Leaves curled? Yes / No").
 - **FR-DIAG-02 (MUST):** A diagnosis records the card used, answers given, photos, written reasoning, and who confirmed it.
-- **FR-DIAG-03 (MUST):** A Greenhouse Hand can start a diagnosis, but only the Field Supervisor or Farm Manager can confirm it.
+- **FR-DIAG-03 (MUST):** A Greenhouse Hand reports a sick plant (`FR-DIAG-07`); only the Field Supervisor or Farm Manager runs the guided diagnosis, and only the Field Supervisor or Farm Manager can confirm it.
 - **FR-DIAG-04 (MUST):** Suspected virus (e.g. tospovirus) triggers a red alert straight to the Owner, with isolation and removal steps.
 - **FR-DIAG-05 (MUST):** Samples sent to a lab are tracked with send date, lab, and result. The Farm Doctor recommends a lab sample in the cases listed in §6.14.
 - **FR-DIAG-06 (MUST):** Diagnoses are run through the Farm Doctor (§6.14).
+- **FR-DIAG-07 (MUST):** A Greenhouse Hand's sick-plant flow is a short report: zone, photos, where on the plant (picture choices), how many plants affected, send. No triage rows, cards, confirm tests or look-alikes are on that path, and a hand cannot open the guided diagnosis.
+- **FR-DIAG-08 (MUST):** The report ends by naming who it went to: the Field Supervisor holding that zone (every Field Supervisor if none holds it) and the Farm Manager. The guided diagnosis (`FR-DIAG-01`, `FR-DOC-01`) opens from the report, unchanged, for the Field Supervisor and the Farm Manager only.
+- **FR-DIAG-09 (MUST):** A report answering wilting, spreading to neighbouring plants, or more than five plants raises an alert as soon as it is sent, whether or not it has been diagnosed, and climbs the `FR-SCOUT-04` ladder. Starting a diagnosis from it counts as picking it up; only resolving the report closes it.
+- **FR-DIAG-10 (MUST):** When a diagnosis started from a report is confirmed, the hand who reported it sees the confirmed result beside their own photo. An unconfirmed diagnosis is not shown to them.
+
+### 6.6a Learn
+Fixes staff who cannot tell one problem from another until it is too late.
+
+- **FR-LEARN-01 (MUST):** A Learn area for Greenhouse Hands, reachable from the home screen (My work) and never from inside a task or the sick-plant report.
+- **FR-LEARN-02 (MUST):** A hand's problem card shows how to recognise it, how to catch it early, what it is confused with (and the check that tells them apart), and what to do first. It never shows doses, rotation groups, products or treatment plans, and never tells a hand to rogue, remove or discard plants or plant parts, which is the Field Supervisor's or Farm Manager's decision (weeding stays: that is a hand's work); the treatment detail stays on the supervising view of the same card, which a Greenhouse Hand cannot open.
+- **FR-LEARN-03 (MUST):** The cards are browsable by kind and searchable with no network, searching only what the hand's card shows.
+- **FR-LEARN-04 (MUST):** The cards show the reference photos (`FR-DIAG-01`) where they have been added, and read in full without them.
+- **FR-LEARN-05 (MUST):** When a hand's report is diagnosed and confirmed (`FR-DIAG-10`), the result links to that problem's Learn card, and any first step shown with it has the treatment detail removed.
 
 ### 6.7 Treatments and sprays
 - **FR-TREAT-01 (MUST):** A treatment records diagnosis link, product, dose, zone, date, time, person, and weather or greenhouse condition.
@@ -330,6 +343,7 @@ The farm starts using the app with cycles already running. This section says how
 - [ ] Every MUST requirement passes its test
 - [ ] Planting blocked when pH is outside 5.5–7.0 (`FR-GATE-01`)
 - [ ] Treatment blocked without a diagnosis (`FR-GATE-04`)
+- [ ] A Greenhouse Hand cannot open the guided diagnosis; a serious sick-plant report alerts with no diagnosis (`FR-DIAG-07`, `FR-DIAG-09`)
 - [ ] Threshold breach escalates correctly with times shortened for testing (`FR-SCOUT-04`)
 - [ ] All field screens work in airplane mode, then sync (`NFR-OFF-01/02`)
 - [ ] Sample farm erased and real PINs set (`NFR-SEC-01/02`)
@@ -366,6 +380,8 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.9 | 30 Sep 2026 | Learn area for Greenhouse Hands: problem cards without doses, groups or plans; supervising view keeps them; offline search; diagnosed reports link to the card (§6.6a, FR-LEARN-01 to FR-LEARN-05) |
+| 1.8 | 30 Sep 2026 | Sick-plant flow split by role: short report for Greenhouse Hands, guided diagnosis from the report for Field Supervisor and Farm Manager, serious reports alert at once, confirmed result back to the reporter (FR-DIAG-03 amended, FR-DIAG-07 to FR-DIAG-10) |
 | 1.7 | 30 Sep 2026 | Field assignments for every role, My work / The farm, own-rung escalation skip, week spread (§4.1, FR-ROLE-05 to FR-ROLE-11) |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |

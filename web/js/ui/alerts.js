@@ -17,6 +17,7 @@ import {
   alerts, ALERT_LEVEL, ladderFor, risingWarnings, straightToOwner, zoneTrends,
 } from '../domain/alerts.js';
 import { digest } from '../domain/digest.js';
+import { openReportAlerts, WHERE_BY_ID } from '../domain/sickplant.js';
 import { trendChart } from './chart.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 
@@ -31,10 +32,12 @@ export const alertsView = {
     const open = all.filter((a) => a.status === 'open');
     const closed = all.filter((a) => a.status === 'closed').slice(0, 6);
     const rising = risingWarnings(ctx.state, { today: isoDate() });
+    const sick = openReportAlerts(ctx.state, { now });
 
-    return head(open)
+    return head(open, sick)
       + straightBlock(straightToOwner(ctx.state, { now }))
-      + (open.length
+      + sick.map((a) => sickPlantCard(ctx, a)).join('')
+      + (open.length || sick.length
         ? open.map((a) => openCard(ctx, a)).join('')
         : card(empty('✓', 'No open alerts',
           'Every count recorded is under its threshold, and anything that crossed one has been '
@@ -56,11 +59,12 @@ export const alertsView = {
   },
 };
 
-function head(open) {
-  const worst = open.find((a) => a.level === 'owner');
+function head(open, sick = []) {
+  const all = [...open, ...sick];
+  const worst = all.find((a) => a.level === 'owner' || a.level === 'kpi');
   return card(
-    cardHead('Alerts', open.length
-      ? badge(`${open.length} open`, worst ? 'danger' : 'warn')
+    cardHead('Alerts', all.length
+      ? badge(`${all.length} open`, worst ? 'danger' : 'warn')
       : badge('all clear', 'ok'))
     + '<p><small>A count over its threshold opens an alert with a 24-hour clock. It closes when a '
     + 'treatment goes on, or when someone records a decision not to treat — and nothing else '
@@ -94,7 +98,9 @@ function openCard(ctx, a) {
     + '<div class="row wrap" style="margin-top:10px">'
     + (a.ack ? '' : button('I am on it', 'alert-ack',
       { icon: '👍', data: { cycle: a.cycleId, pest: a.pestId } }))
-    + button('Diagnose it', 'go', { cls: 'btn-ghost', icon: '🔍', data: { to: '#/diagnose' } })
+    + (can(ctx.user, 'guideDiagnosis')
+      ? button('Diagnose it', 'go', { cls: 'btn-ghost', icon: '🔍', data: { to: '#/diagnose' } })
+      : '')
     + (can(ctx.user, 'assignTasks')
       ? button('No treatment needed', 'alert-notreat', {
         cls: 'btn-ghost', data: { cycle: a.cycleId, pest: a.pestId, name: a.pestName },
@@ -103,6 +109,36 @@ function openCard(ctx, a) {
     + '</div>'
     + '<p style="margin-top:8px"><small>Raised by ' + esc(nameOf(ctx, a.raisedBy))
     + ` on ${esc(friendlyDate(a.date))}. Treating it is what closes this.</small></p>`,
+  );
+}
+
+/**
+ * FR-DIAG-09 — a serious sick-plant report, as an alert. It is on the board the
+ * moment the report is sent, with or without a diagnosis, and climbs the same
+ * ladder. The guided diagnosis opens from here for whoever may run it.
+ */
+function sickPlantCard(ctx, a) {
+  const level = ALERT_LEVEL[a.level];
+  const ladder = ladderFor(ctx.state.settings);
+  const clock = Math.min(1, a.hoursOpen / ladder.kpiBreachAfterHours);
+  const report = (ctx.state.reports || []).find((r) => r.id === a.reportId) || {};
+  const where = (report.where || []).map((id) => (WHERE_BY_ID[id] || {}).label).filter(Boolean);
+  return card(
+    cardHead(`Sick plants on ${a.zoneName}`, badge(`with the ${level.label}`, level.tone))
+    + `<p class="why"><b>Reported:</b> ${esc(a.reasons.join(', '))}`
+    + (where.length ? ` — ${esc(where.join(', ').toLowerCase())}` : '') + '.</p>'
+    + `<p class="why"><b>Open:</b> ${esc(hoursWord(a.hoursOpen))} of ${esc(ladder.kpiBreachAfterHours)}`
+    + (a.ack ? `, diagnosis started by ${esc(nameOf(ctx, a.ack.by))}` : ', nobody has started a diagnosis yet')
+    + '.</p>'
+    + bar(clock, a.overdue ? 'danger' : clock > 0.5 ? 'warn' : '')
+    + ladderTrail(a)
+    + (can(ctx.user, 'guideDiagnosis')
+      ? `<div class="row wrap" style="margin-top:10px">${button('Diagnose it', 'go', {
+        icon: '🔍', data: { to: `#/diagnose?report=${encodeURIComponent(a.reportId)}` },
+      })}</div>`
+      : '')
+    + `<p style="margin-top:8px"><small>Reported by ${esc(nameOf(ctx, a.raisedBy))} on `
+    + `${esc(friendlyDate(a.date))}. Resolving the report is what closes this.</small></p>`,
   );
 }
 

@@ -7,6 +7,8 @@ import { todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
 import { clinicView, diagnoseView, guideView, guideItemView, photoDeskView } from './ui/clinic.js';
 import { doctorView } from './ui/doctor.js';
+import { sickPlantView } from './ui/sickplant.js';
+import { learnView, learnCardView } from './ui/learn.js';
 import {
   dashboardView, planView, reportsView, peopleView, storeView, moneyView, settingsView,
 } from './ui/manage.js';
@@ -38,6 +40,12 @@ registerRoute('#/field', fieldView);
 registerRoute('#/field/cycle', cycleView);
 registerRoute('#/clinic', clinicView);
 registerRoute('#/diagnose', diagnoseView);
+// FR-DIAG-07: the short report every role can send. The guided diagnosis
+// above is the Field Supervisor's and the Farm Manager's, and opens from it.
+registerRoute('#/sick-plant', sickPlantView);
+// FR-LEARN-01: the problem cards as a hand reads them, from My work only.
+registerRoute('#/learn', learnView);
+registerRoute('#/learn/card', learnCardView);
 registerRoute('#/doctor', doctorView);
 registerRoute('#/guide', guideView);
 registerRoute('#/guide/item', guideItemView);

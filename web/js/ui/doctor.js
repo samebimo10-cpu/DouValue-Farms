@@ -393,13 +393,23 @@ function photoPanel(ctx) {
   return out;
 }
 
+/**
+ * FR-DIAG-07 — the guided diagnosis is the Field Supervisor's and the Farm
+ * Manager's. Anyone else is pointed at the report that brings it to them.
+ */
+function guidedButton(ctx) {
+  return can(ctx.user, 'guideDiagnosis')
+    ? button('Open the guided diagnosis', 'go', { cls: 'btn-block btn-lg', data: { to: '#/diagnose' } })
+    : button('Report a sick plant', 'go', { cls: 'btn-block btn-lg', data: { to: '#/sick-plant' } });
+}
+
 function reviewBlock(ctx, r) {
   if (r.mode === 'offline') {
     return card(
       cardHead('No signal — the guided flow still works')
       + note('info', r.why, `<small>${esc(r.fix)}</small>`)
       + '<ul class="list">' + (r.stillWorks || []).map((s) => `<li><small>${esc(s)}</small></li>`).join('') + '</ul>'
-      + button('Open the guided diagnosis', 'go', { cls: 'btn-block btn-lg', data: { to: '#/diagnose' } }),
+      + guidedButton(ctx),
     );
   }
   if (r.mode === 'failed' || r.ok === false) {
@@ -407,7 +417,7 @@ function reviewBlock(ctx, r) {
       cardHead('Photo review could not answer')
       + note('warn', r.message || 'It could not be reached.',
         '<small>The guided diagnosis, the calculators and the plan checks all work with no signal.</small>')
-      + button('Open the guided diagnosis', 'go', { cls: 'btn-block btn-lg', data: { to: '#/diagnose' } }),
+      + guidedButton(ctx),
     );
   }
 

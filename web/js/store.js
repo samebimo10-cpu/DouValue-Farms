@@ -20,25 +20,35 @@ import { isoDate, sortBy, sum, uid } from './util.js';
  * visibility: you may only create an account below your own rank, so a manager
  * can take on hands and supervisors but cannot appoint another manager or
  * remove the owner. Only the CEO holds `manageOwners`, which lifts that ceiling.
+ *
+ * FR-DIAG-03/07: `guideDiagnosis` — the full guided diagnosis, triage rows to
+ * card to confirm test — is the Field Supervisor's and the Farm Manager's and
+ * nobody else's. A farm hand holds `reportProblem` and reports a sick plant;
+ * the diagnosis opens from that report (domain/sickplant.js).
+ *
+ * FR-LEARN-02: `viewTreatment` is the supervising view of a problem card —
+ * doses, rotation groups, treatment plans. Every role but the farm hand holds
+ * it; a hand reads the same card in Learn, without them.
  */
 export const ROLES = {
   hand: {
     id: 'hand', name: 'Farm hand', pidgin: 'Farm hand', rank: 10,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose'],
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide'],
     home: '#/today',
     blurb: 'Sees today\'s jobs, records work and harvest, reports anything wrong.',
   },
   supervisor: {
     id: 'supervisor', name: 'Supervisor', pidgin: 'Oga for field', rank: 50,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
-      'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout'],
+      'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
+      'guideDiagnosis', 'viewTreatment'],
     home: '#/field',
     blurb: 'Assigns the day\'s work, checks the harvest, records sprays and inputs.',
   },
   agronomist: {
     id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
     can: ['viewOwnTasks', 'viewGuide', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks'],
+      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
     home: '#/clinic',
     blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
   },
@@ -46,7 +56,7 @@ export const ROLES = {
     id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
-      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings'],
+      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis', 'viewTreatment'],
     home: '#/dashboard',
     blurb: 'Runs the farm day to day: work, money, people, planning and reports.',
   },
@@ -55,7 +65,7 @@ export const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
     home: '#/dashboard',
     blurb: 'Owns the farm. Sees everything, appoints the manager and everyone else, '
       + 'and controls the link that keeps every phone in step.',

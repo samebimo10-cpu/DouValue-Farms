@@ -23,6 +23,9 @@ import {
   referencePhotoPayload, resetPhoto,
 } from './photo.js';
 import { navigate, params } from './shell.js';
+import {
+  diagnosesFor, HOW_MANY_BY_ID, isSickPlantReport, seriousReasons, SPREADING_BY_ID, WHERE_BY_ID,
+} from '../domain/sickplant.js';
 
 // The guided flow, in the rules' own order: symptom -> triage rows -> card ->
 // confirm test. Nothing about the plant lives here; it all comes off the rules.
@@ -42,8 +45,37 @@ function resetWizard(ctx) {
     confirmResult: '',
     reasoning: '',
     named: null,
+    reportId: null,
   };
   resetPhoto();
+}
+
+/**
+ * FR-DIAG-08 — the guided flow opened from a sick-plant report. The report's
+ * zone picks the bed and its photos go onto the record; every step after that
+ * is the same guided diagnosis as ever.
+ */
+function startFromReport(ctx, reportId) {
+  const report = (ctx.state.reports || []).find((r) => r.id === reportId);
+  if (!report) return;
+  const cycle = report.cycleId ? ctx.state.cycles[report.cycleId]
+    : activeCycles(ctx.state).find((c) => c.plotId === report.zoneId);
+  wiz.reportId = report.id;
+  if (cycle) { wiz.cycleId = cycle.id; wiz.cropId = cycle.cropId; }
+  wiz.photos = [...(report.photos || (report.photo ? [report.photo] : []))];
+}
+
+/** The report a diagnosis is being run from, as a line above the wizard. */
+function fromReportBanner(ctx) {
+  if (!wiz.reportId) return '';
+  const r = (ctx.state.reports || []).find((x) => x.id === wiz.reportId);
+  if (!r) return '';
+  const who = ctx.state.people[r.by];
+  const zone = ctx.state.plots[r.zoneId];
+  return card(`<p><small>From ${esc(who ? who.name : 'a')}'s report on `
+    + `${esc(zone ? zone.name : 'a zone')}, ${esc(friendlyDate(r.date))}. `
+    + 'Once the diagnosis is confirmed, they see the answer next to their photo.</small></p>',
+  { tight: true });
 }
 
 /** The draft as the domain layer wants it, so one gate decides what is missing. */
@@ -72,6 +104,7 @@ export const clinicView = {
     }));
     const risks = riskForecast(cycles, today);
     const reports = openReports(state);
+    const guided = can(ctx.user, 'guideDiagnosis');
     const recent = [...state.diagnoses].reverse().slice(0, 5);
 
     let out = card(
@@ -79,7 +112,11 @@ export const clinicView = {
       + '<p><small>Start with what you can see. The app narrows it down, tells you how to confirm it, '
       + 'and what to do today.</small></p>'
       + '<div class="row wrap">'
-      + button('Check a sick plant', 'go', { cls: 'btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
+      // FR-DIAG-07: the guided diagnosis is the Field Supervisor's and the Farm
+      // Manager's. Anyone else here reports the plant, and it comes to them.
+      + (guided
+        ? button('Check a sick plant', 'go', { cls: 'btn-lg', icon: '🔍', data: { to: '#/diagnose' } })
+        : button('Report a sick plant', 'go', { cls: 'btn-lg', icon: '🌿', data: { to: '#/sick-plant' } }))
       + button('Browse the guide', 'go', { cls: 'btn-lg btn-ghost', icon: '📖', data: { to: '#/guide' } })
       + '</div>'
       // The clinic answers "what is wrong with this plant". The Farm Doctor
@@ -103,17 +140,9 @@ export const clinicView = {
     if (reports.length) {
       out += card(
         cardHead('Reported from the field', badge(`${reports.length}`, 'warn'))
-        + '<ul class="list">' + reports.slice(0, 6).map((r) => {
-          const who = state.people[r.by];
-          return '<li><div class="grow">'
-            + `<b>${esc(r.note)}</b><small>${esc(r.cycleId ? cycleLabel(state, r.cycleId) : 'General')} — `
-            + `${esc(who ? who.name : 'someone')}, ${esc(friendlyDate(r.date))}</small>`
-            + (r.photo ? `<img src="${r.photo}" alt="Reported problem" style="max-width:160px;border-radius:10px;margin-top:6px">` : '')
-            + '</div>'
-            + badge(r.severity, r.severity === 'high' ? 'danger' : r.severity === 'medium' ? 'warn' : '')
-            + button('Resolve', 'resolve-report', { cls: 'btn-sm btn-ghost', data: { id: r.id } })
-            + '</li>';
-        }).join('') + '</ul>',
+        + '<ul class="list">' + reports.slice(0, 6).map((r) => (isSickPlantReport(r)
+          ? sickPlantItem(ctx, r, guided)
+          : generalReportItem(state, r))).join('') + '</ul>',
       );
     }
 
@@ -135,7 +164,8 @@ export const clinicView = {
       + 'field. It tells you where to walk first, not what is definitely there.</small></p>',
     );
 
-    // FR-DIAG-03 — a hand starts a diagnosis, a Field Supervisor or Farm Manager
+    // FR-DIAG-03 — a hand reports the plant, a Field Supervisor or Farm Manager
+    // runs the guided diagnosis, and one of them — not the one who ran it —
     // performs the confirm test and confirms it. Nothing can be sprayed until
     // that happens, so the queue belongs on the front of the clinic.
     const senior = can(ctx.user, 'verifyHarvest');
@@ -181,6 +211,8 @@ export const clinicView = {
   },
 
   actions: {
+    // FR-DIAG-08: the guided diagnosis opens from the report.
+    'diagnose-report': (ctx, el) => navigate(`#/diagnose?report=${encodeURIComponent(el.dataset.id)}`),
     'resolve-report': async (ctx, el) => {
       await ctx.store.dispatch('report.resolve', { id: el.dataset.id, note: 'Handled' });
       toast('Report closed');
@@ -189,6 +221,53 @@ export const clinicView = {
     'save-confirm': (ctx, form) => saveConfirm(ctx, form),
   },
 };
+
+/** A free-text problem report, as it always was. */
+function generalReportItem(state, r) {
+  const who = state.people[r.by];
+  const src = r.photo && (typeof r.photo === 'string' ? r.photo : r.photo.dataUrl);
+  return '<li><div class="grow">'
+    + `<b>${esc(r.note)}</b><small>${esc(r.cycleId ? cycleLabel(state, r.cycleId) : 'General')} — `
+    + `${esc(who ? who.name : 'someone')}, ${esc(friendlyDate(r.date))}</small>`
+    + (src ? `<img src="${src}" alt="Reported problem" style="max-width:160px;border-radius:10px;margin-top:6px">` : '')
+    + '</div>'
+    + badge(r.severity, r.severity === 'high' ? 'danger' : r.severity === 'medium' ? 'warn' : '')
+    + button('Resolve', 'resolve-report', { cls: 'btn-sm btn-ghost', data: { id: r.id } })
+    + '</li>';
+}
+
+/**
+ * A sick-plant report (FR-DIAG-07): the reporter's answers and photos, and for
+ * the Field Supervisor or Farm Manager the way into the guided diagnosis.
+ */
+function sickPlantItem(ctx, r, guided) {
+  const { state } = ctx;
+  const who = state.people[r.by];
+  const zone = state.plots[r.zoneId];
+  const reasons = seriousReasons(r);
+  const where = (r.where || []).map((id) => (WHERE_BY_ID[id] || {}).label).filter(Boolean);
+  const many = HOW_MANY_BY_ID[r.howMany];
+  const spread = SPREADING_BY_ID[r.spreading];
+  const started = diagnosesFor(state, r.id);
+  const confirmed = started.find((d) => d.confirmed);
+  return '<li><div class="grow">'
+    + `<b>Sick plant on ${esc(zone ? zone.name : 'a zone')}</b> `
+    + (reasons.length ? badge(`alert: ${reasons.join(', ')}`, 'danger') : badge('report', 'warn'))
+    + `<small>${esc(who ? who.name : 'someone')}, ${esc(friendlyDate(r.date))}</small>`
+    + `<small>${esc(where.join(', '))}${many ? ` · ${esc(many.label.toLowerCase())}` : ''}`
+    + `${spread && spread.id === 'yes' ? ' · spreading' : ''}</small>`
+    + (confirmed ? `<small>Confirmed: <b>${esc(confirmed.label)}</b></small>`
+      : started.length ? `<small>Diagnosis started: ${esc(started[0].label)}, waiting to be confirmed</small>` : '')
+    + '<div class="row wrap">' + (r.photos || []).map((ph) => photoThumb(ph, { small: true, alt: 'Reported plant' })).join('') + '</div>'
+    + '<div class="row wrap" style="margin-top:8px">'
+    + (guided && !confirmed
+      ? button(started.length ? 'Diagnose again' : 'Diagnose', 'diagnose-report', { cls: 'btn-sm', data: { id: r.id } })
+      : '')
+    + (can(ctx.user, 'assignTasks')
+      ? button('Resolve', 'resolve-report', { cls: 'btn-sm btn-ghost', data: { id: r.id } })
+      : '')
+    + '</div></div></li>';
+}
 
 /**
  * The rules: "Field Supervisor or Farm Manager performs the confirm test and
@@ -350,12 +429,18 @@ function coverageLine(cov) {
 // with the app instead of going and looking.
 
 export const diagnoseView = {
-  perm: 'diagnose',
-  enter(ctx) { resetWizard(ctx); },
+  // FR-DIAG-03/07: the Field Supervisor and the Farm Manager only. A farm hand
+  // reports the plant (#/sick-plant) and this opens from that report.
+  perm: 'guideDiagnosis',
+  enter(ctx) {
+    resetWizard(ctx);
+    const from = params().report;
+    if (from) startFromReport(ctx, from);
+  },
 
   render(ctx) {
     if (!wiz) resetWizard(ctx);
-    const steps = `<div class="wizard-steps">${[1, 2, 3, 4].map((n) =>
+    const steps = fromReportBanner(ctx) + `<div class="wizard-steps">${[1, 2, 3, 4].map((n) =>
       `<i class="${wiz.step >= n ? 'on' : ''}"></i>`).join('')}</div>`;
 
     if (wiz.step === 1) return steps + stepCrop(ctx);
@@ -678,6 +763,8 @@ async function saveDiagnosis(ctx) {
     sources: named.sources || [],
     confidence: wiz.match && wiz.match.rows.length ? wiz.match.rows[0].confidence.label : 'Medium',
     date: isoDate(),
+    // FR-DIAG-10: the report it answers, so the reporter sees it once confirmed.
+    reportId: wiz.reportId || null,
   });
   toast('Diagnosis recorded — a supervisor confirms it next');
   navigate('#/clinic');
@@ -736,7 +823,9 @@ async function saveTask(ctx, form) {
 let guideFilter = { category: '', query: '', noPhoto: false };
 
 export const guideView = {
-  perm: 'viewGuide',
+  // FR-LEARN-02: the supervising view of the cards — treatment, products, the
+  // spray table. A Greenhouse Hand reads the same cards in Learn (#/learn).
+  perm: 'viewTreatment',
   render(ctx) {
     const cov = photoCoverage(ctx.state);
     const gaps = new Set(cov.cards.missing.map((m) => m.cardId));
@@ -818,7 +907,7 @@ function catalogueStanding(state, product) {
 }
 
 export const guideItemView = {
-  perm: 'viewGuide',
+  perm: 'viewTreatment',
   render(ctx) {
     const c = cardFor(params().id);
     if (!c) return card(empty('📖', 'Not in the rules', 'Go back and pick from the list.'));
