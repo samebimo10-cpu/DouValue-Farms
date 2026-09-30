@@ -18,7 +18,7 @@ import {
   bestSowingWindow, calibrate, cashflowForecast, forecastAccuracy, harvestForecast,
   labourForecast, revenueForecast, stockForecast, breakEven,
 } from '../domain/predict.js';
-import { riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
+import { canApprove, riskForecast, RISK_DRIVER_TEXT } from '../domain/diagnose.js';
 import { lowStock, lowStockSummary, reorderLevel } from '../domain/stock.js';
 import { maySignOff, signOffPayload, trialRecord } from '../domain/supervision.js';
 import { CROP_LIST, getCrop, stageAt } from '../domain/crops.js';
@@ -200,6 +200,16 @@ function buildAlerts(ctx, cycles, cal) {
     alerts.push({
       title: `${reports.length} problem report${reports.length === 1 ? '' : 's'} waiting`,
       detail: reports.slice(0, 2).map((r) => r.note).join(' · '), to: '#/clinic',
+    });
+  }
+
+  // FR-ROLE-13: a self-confirmed diagnosis this person may approve. Until they
+  // do, nothing can be sprayed on it, so it goes on their board.
+  const toApprove = (state.diagnoses || []).filter((d) => canApprove(d, ctx.user).ok);
+  if (toApprove.length) {
+    alerts.push({
+      title: `${toApprove.length} self-confirmed diagnos${toApprove.length === 1 ? 'is' : 'es'} waiting for your approval`,
+      detail: toApprove.slice(0, 2).map((d) => d.problemName || d.problemId || d.cardId).join(' · '), to: '#/clinic',
     });
   }
 

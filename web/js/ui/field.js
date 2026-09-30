@@ -736,6 +736,14 @@ async function saveSpray(ctx, form) {
             { cls: 'btn-block btn-lg', data: { to: '#/setup' } })}</div>` : ''));
       return;
     }
+    if (allowed.reason === 'awaiting-approval') {
+      // FR-ROLE-13 — diagnosed and confirmed, but by the person who raised it.
+      openSheet('<h2>Waiting for approval</h2>'
+        + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
+        + `<div style="margin-top:12px">${button('Open the clinic', 'go',
+          { cls: 'btn-block btn-lg', data: { to: '#/clinic' } })}</div>`);
+      return;
+    }
     openSheet(`<h2>${refusedOnProduct ? 'Not this product' : 'Diagnose it first'}</h2>`
       + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
       + (allowed.reason === 'rotation'

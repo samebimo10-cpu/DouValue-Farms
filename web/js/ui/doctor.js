@@ -35,6 +35,7 @@ import { activeCycles, can, cycleLabel } from '../store.js';
 import { reviewPhotos } from '../sync.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 import { params } from './shell.js';
+import { treatable } from '../domain/diagnose.js';
 
 const TABS = [
   { id: 'ask', label: 'Ask', icon: '🧠' },
@@ -491,7 +492,7 @@ function planPanel(ctx) {
 /** The confirmed diagnosis a plan hangs off — Gate 3 (FR-GATE-04). */
 function latestConfirmedDiagnosis(state, cycleId) {
   const found = state.diagnoses
-    .filter((d) => d.cycleId === cycleId && d.confirmedBy)
+    .filter((d) => d.cycleId === cycleId && treatable(d))
     .sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))[0];
   return found ? found.id : null;
 }

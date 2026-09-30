@@ -482,6 +482,40 @@ test('one farm cannot read another', async () => {
   assert.equal(crossing.status, 401, "another farm's token is worthless here");
 });
 
+test("FR-ROLE-13: a manager's self-confirmed diagnosis is approved by the Owner, and the server holds that", async () => {
+  const invited = await call(`/api/farms/${FARM}/invite`, {
+    method: 'POST', token: ceoToken, body: { name: 'Dayo Self', role: 'manager' },
+  });
+  const joined = await call(`/api/farms/${FARM}/join`, {
+    method: 'POST',
+    body: { joinCode: invited.body.joinCode, joinPassword: invited.body.joinPassword, pin: '6262' },
+  });
+  const managerToken = joined.body.token;
+  const push = (token, events) => call(`/api/farms/${FARM}/events`, { method: 'POST', token, body: { events } });
+
+  const raised = await push(managerToken, [
+    { id: 'e_dx_self', type: 'diagnosis.record', at: '2026-09-30T09:00:00Z',
+      payload: { id: 'dx_self', cycleId: 'c1', date: '2026-09-30', cardId: 'acid_soil', triageRow: 23,
+        photos: [{ dataUrl: 'data:image/jpeg;base64,AA' }], confirmTest: 'Three-point pH',
+        confirmResult: 'pH 5.1', reasoning: 'Yellowing across the bed and pH read low at three points' } },
+    { id: 'e_dx_self_ok', type: 'diagnosis.confirm', at: '2026-09-30T10:00:00Z',
+      payload: { id: 'dx_self', confirmTest: 'Three-point pH', confirmResult: 'pH 5.1' } },
+  ]);
+  assert.equal(raised.body.accepted, 2, 'confirming your own is allowed (FR-ROLE-12)');
+
+  const own = await push(managerToken, [
+    { id: 'e_dx_self_ap1', type: 'diagnosis.approve', at: '2026-09-30T11:00:00Z', payload: { id: 'dx_self' } },
+  ]);
+  assert.equal(own.body.accepted, 0);
+  assert.match(own.body.refused[0].why, /confirmed themselves/);
+
+  const byOwner = await push(ceoToken, [
+    { id: 'e_dx_self_ap2', type: 'diagnosis.approve', at: '2026-09-30T11:05:00Z', payload: { id: 'dx_self' } },
+  ]);
+  assert.equal(byOwner.body.accepted, 1);
+  assert.deepEqual(byOwner.body.refused, []);
+});
+
 test('what survives the wire still replays into a farm', async () => {
   const page = await call(`/api/farms/${FARM}/events?since=0`, { token: ceoToken });
   const rebuilt = store.reduce(page.body.events);

@@ -592,12 +592,114 @@ export function confirmStepDone(d) {
     && (d.photos || []).length > 0;
 }
 
+// --- Checking your own work (FR-ROLE-12, FR-ROLE-13) -----------------------
+//
+// On a farm this size the supervisor who scouts a zone is often the only
+// qualified person there to confirm what they found. Refusing that would stop
+// work, so it is allowed — but marked, and a treatment that follows it waits
+// for the next level up. The Owner has nobody above them, so an Owner's own
+// confirmation is recorded as self-confirmed and goes no further.
+
+/** The Farm Doctor's account id. It is not a person and confirms nothing (FR-DOC-08). */
+const FARM_DOCTOR_ID = 'farm-doctor';
+
+/** Authority order, lowest first. Mirrors the ranks in store.js and server/core.mjs. */
+const ROLE_ORDER = ['hand', 'supervisor', 'agronomist', 'manager', 'ceo'];
+
+const ROLE_TITLE = { manager: 'Farm Manager', ceo: 'Owner' };
+
+/**
+ * Who approves a treatment from a diagnosis this role confirmed on itself —
+ * FR-ROLE-13. The Field Supervisor's goes to the Farm Manager, the Farm
+ * Manager's to the Owner, and the Owner's to nobody (null): it is recorded.
+ * A role the app does not know goes to the Owner, the safe end of the ladder.
+ */
+export function selfConfirmApprover(role) {
+  if (role === 'ceo') return null;
+  if (role === 'manager') return 'ceo';
+  return ROLE_ORDER.includes(role) ? 'manager' : 'ceo';
+}
+
+/** True when `role` sits at or above `needed`. */
+export function roleAtLeast(role, needed) {
+  const have = ROLE_ORDER.indexOf(role);
+  return have >= 0 && have >= ROLE_ORDER.indexOf(needed);
+}
+
+/** The words for a role in a sentence ("the Farm Manager approves it"). */
+export const approverTitle = (role) => ROLE_TITLE[role] || 'Farm Manager';
+
+/**
+ * Is this diagnosis self-confirmed and still waiting on the next level up?
+ * An Owner's self-confirmation never waits: there is no level above it.
+ */
+export function awaitingApproval(d) {
+  return !!(d && d.confirmedBy && d.selfConfirmed && d.approvalFrom && !d.approvedBy);
+}
+
+/**
+ * May a treatment be logged against this diagnosis? — FR-GATE-04 with
+ * FR-ROLE-13. Confirmed by a second person, or self-confirmed and approved, or
+ * self-confirmed by the Owner. The Farm Doctor's own name never counts.
+ */
+export function treatable(d) {
+  return !!(d && d.confirmedBy && d.confirmedBy !== FARM_DOCTOR_ID && !awaitingApproval(d));
+}
+
+/**
+ * Was this diagnosis treatable at a given moment? For reading back sprays: a
+ * spray logged before the approval landed was logged against a diagnosis
+ * nobody above had seen, and an approval afterwards does not change that.
+ */
+export function treatableAt(d, at) {
+  if (!treatable(d)) return false;
+  if (!(d.selfConfirmed && d.approvalFrom)) return true;
+  return !at || !d.approvedAt || d.approvedAt <= at;
+}
+
+/**
+ * FR-ROLE-13 — may this person approve a self-confirmed diagnosis?
+ *
+ * `approver` is { id, role }. The next level up approves, or anyone above it.
+ * Not the person who confirmed it, and never the Farm Doctor.
+ */
+export function canApprove(diagnosis, approver) {
+  if (!diagnosis) return { ok: false, reason: 'missing', why: 'There is no such diagnosis.' };
+  if (!diagnosis.confirmedBy) {
+    return { ok: false, reason: 'unconfirmed', why: 'Nobody has confirmed this diagnosis yet.' };
+  }
+  if (!diagnosis.selfConfirmed || !diagnosis.approvalFrom) {
+    return { ok: false, reason: 'not-needed',
+      why: diagnosis.selfConfirmed
+        ? 'The Owner confirmed this one. It is recorded as self-confirmed; there is nobody above to approve it.'
+        : 'A second person confirmed this one, so it needs no approval.' };
+  }
+  if (diagnosis.approvedBy) return { ok: false, reason: 'done', why: 'This one is already approved.' };
+  if (!approver || approver.id === FARM_DOCTOR_ID || approver.role === 'doctor') {
+    return { ok: false, reason: 'doctor', why: 'The Farm Doctor does not approve anything (FR-DOC-08).' };
+  }
+  if (approver.id === diagnosis.confirmedBy) {
+    return { ok: false, reason: 'self',
+      why: `You confirmed this yourself, so the ${approverTitle(diagnosis.approvalFrom)} approves it.` };
+  }
+  if (!roleAtLeast(approver.role, diagnosis.approvalFrom)) {
+    return { ok: false, reason: 'rank',
+      why: `A self-confirmed diagnosis from this level is approved by the ${approverTitle(diagnosis.approvalFrom)}.` };
+  }
+  return { ok: true };
+}
+
 /**
  * FR-DIAG-03 — a hand may start a diagnosis; a Field Supervisor or Farm Manager
  * performs the confirm test and confirms it. FR-DOC-08 — the Farm Doctor never
- * confirms its own. And nobody signs off their own work.
+ * confirms its own.
+ *
+ * FR-ROLE-12 — the person who raised it may confirm it when nobody else
+ * qualified is there. That is allowed, and the answer says so: `self` is true,
+ * and `approver` names who must approve before a treatment (null for the
+ * Owner, whose own confirmation is recorded rather than sent up).
  */
-export function canConfirm(diagnosis, { by = null, senior = true } = {}) {
+export function canConfirm(diagnosis, { by = null, senior = true, role = null } = {}) {
   if (!diagnosis) return { ok: false, reason: 'missing', why: 'There is no such diagnosis.' };
   if (isLegacyDiagnosis(diagnosis)) {
     return {
@@ -616,13 +718,26 @@ export function canConfirm(diagnosis, { by = null, senior = true } = {}) {
       missing: gate.missing.length ? gate.missing : [{ id: 'confirmTest', need: 'Record the confirm test and what it showed' }],
     };
   }
-  if (by && diagnosis.by && by === diagnosis.by) {
-    return { ok: false, reason: 'self', why: 'The person who started a diagnosis does not confirm it.' };
+  if (by === FARM_DOCTOR_ID) {
+    return { ok: false, reason: 'doctor', why: 'The Farm Doctor never confirms its own diagnosis (FR-DOC-08).' };
   }
   if (!senior) {
     return { ok: false, reason: 'rank', why: 'Only the Field Supervisor or the Farm Manager confirms a diagnosis.' };
   }
-  return { ok: true };
+  if (by && diagnosis.by && by === diagnosis.by) {
+    const approver = selfConfirmApprover(role);
+    return {
+      ok: true,
+      self: true,
+      approver,
+      why: approver
+        ? 'You raised this one. A second person should confirm it if one is here. If you confirm it '
+          + `yourself it is marked self-confirmed, and the ${approverTitle(approver)} approves it before `
+          + 'any treatment.'
+        : 'You raised this one. Your confirmation is recorded as self-confirmed.',
+    };
+  }
+  return { ok: true, self: false, approver: null };
 }
 
 // --- Old records ----------------------------------------------------------
@@ -704,6 +819,11 @@ export function readDiagnosis(record) {
     mapping: legacy ? (mapped ? 'mapped' : 'legacy') : 'rules',
     confirmed: Boolean(record.confirmedBy),
     confirmStep: confirmStepDone(record),
+    // FR-ROLE-12/13 — confirmed by the person who raised it, and whether a
+    // treatment is still waiting on the next level up.
+    selfConfirmed: Boolean(record.confirmedBy && record.selfConfirmed),
+    awaitingApproval: awaitingApproval(record),
+    treatable: treatable(record),
   };
 }
 

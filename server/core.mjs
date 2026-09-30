@@ -58,6 +58,18 @@ export const ROLES = {
 export const can = (role, permission) => !!ROLES[role] && ROLES[role].can.includes(permission);
 export const rankOf = (role) => (ROLES[role] ? ROLES[role].rank : -1);
 
+/**
+ * FR-ROLE-13 — who approves a treatment from a diagnosis a person confirmed
+ * on themselves. Mirrors selfConfirmApprover in web/js/domain/diagnose.js: the
+ * Field Supervisor's goes to the Farm Manager, the Farm Manager's to the
+ * Owner, and the Owner's is recorded with nobody above it (null).
+ */
+export function selfConfirmApprover(role) {
+  if (role === 'ceo') return null;
+  if (role === 'manager') return 'ceo';
+  return ROLES[role] ? 'manager' : 'ceo';
+}
+
 /** Which roles a person may hand out: the CEO anyone, everyone else below themselves. */
 export function assignableRoles(role) {
   if (!can(role, 'managePeople')) return [];
@@ -148,6 +160,10 @@ export const EVENT_POLICY = {
   // step that makes the confirmation mean something: the senior performs the
   // confirm test the card names and records what it showed.
   'diagnosis.confirm': { write: 'verifyHarvest', read: ANY, guard: guardConfirmDiagnosis },
+  // FR-ROLE-13: a self-confirmed diagnosis waits for the next level up before
+  // a treatment. Who that is depends on who confirmed it, which only the log
+  // knows, so writeEvents checks it against the stored record as well.
+  'diagnosis.approve': { write: 'prescribe',     read: ANY, guard: guardDoctorConfirm },
   // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
   // the record. `manageOwners` is held by the CEO and nobody else.
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
@@ -313,6 +329,54 @@ export async function mayWritePerson(event, author, farmId, store) {
     if (owners.length <= 1) return { ok: false, why: 'That is the only CEO account' };
   }
 
+  return { ok: true };
+}
+
+/**
+ * FR-ROLE-12/13 — may this person approve this self-confirmed diagnosis?
+ *
+ * Read from the stored log rather than the payload: the diagnosis was raised
+ * by one person and confirmed by the same person, and the approver is neither
+ * of them and sits at or above the next level up from the confirmer. An
+ * Owner's own confirmation is recorded, not sent up, so there is nothing to
+ * approve. The app judges the same thing on replay; this is the fence.
+ */
+export async function mayApproveDiagnosis(event, author, farmId, store) {
+  if (!event || event.type !== 'diagnosis.approve') return { ok: true };
+  const id = (event.payload || {}).id;
+  let raisedBy = null;
+  let confirmedBy = null;
+  let self = false;
+  for (let since = 0; ;) {
+    const page = await store.listEvents(farmId, since, MAX_PULL);
+    for (const e of page.events) {
+      if (!e || !e.payload || e.payload.id !== id) continue;
+      if (e.type === 'diagnosis.record') raisedBy = e.by;
+      if (e.type === 'diagnosis.confirm' && e.by !== 'farm-doctor') {
+        const own = !!raisedBy && e.by === raisedBy;
+        // A second person's confirmation is not undone by a later self one.
+        if (own && confirmedBy && !self) continue;
+        confirmedBy = e.by; self = own;
+      }
+    }
+    if (!page.more || page.cursor <= since) break;
+    since = page.cursor;
+  }
+  if (!raisedBy || !confirmedBy) {
+    return { ok: false, why: 'That diagnosis has not been confirmed on the farm server yet' };
+  }
+  if (!self) return { ok: false, why: 'A second person confirmed that diagnosis; it needs no approval' };
+  const confirmer = await store.getMember(farmId, confirmedBy);
+  const needed = selfConfirmApprover(confirmer ? confirmer.role : null);
+  if (!needed) {
+    return { ok: false, why: "The Owner's own confirmation is recorded, not sent up for approval" };
+  }
+  if ((author.memberId || author.id) === confirmedBy) {
+    return { ok: false, why: 'Nobody approves a diagnosis they confirmed themselves (FR-ROLE-13)' };
+  }
+  if (rankOf(author.role) < rankOf(needed)) {
+    return { ok: false, why: `That self-confirmed diagnosis is approved by the ${needed === 'ceo' ? 'Owner' : 'Farm Manager'}` };
+  }
   return { ok: true };
 }
 
@@ -625,9 +689,12 @@ function guardShift(event, author) {
  * confirm test and confirms". Performing it is the point, so the confirmation
  * carries what the confirmer saw, not just their name.
  */
-function guardConfirmDiagnosis(event) {
+function guardConfirmDiagnosis(event, author = {}) {
   const p = event.payload || {};
   if (!p.id) return { ok: false, why: 'Say which diagnosis is being confirmed' };
+  if ((author.memberId || author.id) === 'farm-doctor') {
+    return { ok: false, why: 'The Farm Doctor does not confirm its own diagnosis (FR-DOC-08)' };
+  }
   if (!String(p.confirmTest || '').trim()) {
     return { ok: false, why: 'Say which confirm test you did' };
   }
@@ -1116,6 +1183,9 @@ async function writeEvents(farmId, body, me, store) {
     // in the record, so this check cannot be folded into the table above.
     const overPerson = await mayWritePerson(event, me, farmId, store);
     if (!overPerson.ok) { refused.push({ id: event.id, why: overPerson.why }); continue; }
+    // Likewise an approval: who may give it depends on who confirmed.
+    const approval = await mayApproveDiagnosis(event, me, farmId, store);
+    if (!approval.ok) { refused.push({ id: event.id, why: approval.why }); continue; }
     // Authorship is the server's to decide, never the client's claim.
     allowed.push({ ...event, by: me.id, serverAt: new Date().toISOString() });
   }

@@ -42,6 +42,7 @@ import {
   BARRIERS, bagRules, batchFailure, batchName, batchesIn, fillsFor, galledCycle, mediaOf,
 } from './media.js';
 import { mediaLimePlan } from './calc.js';
+import { approverTitle, awaitingApproval, readDiagnosis, treatable, treatableAt } from './diagnose.js';
 import { PRE_GATES, PRE_GATES_LABEL, plantedBeforeGates, preGatesEvidence, treatmentHistoryBlock } from './onboarding.js';
 
 /**
@@ -963,6 +964,21 @@ function diagnosisFirst(state, w) {
   }
   const sprays = (state.sprays || []).filter((s) => s.cycleId === cycle.id);
   const bare = sprays.filter((s) => !s.diagnosisId && !s.woundCare);
+  // FR-ROLE-13 — a self-confirmed diagnosis clears nothing on its own. A spray
+  // logged against one before the next level up approved it counts as
+  // unapproved here, however the record reached the log.
+  const byId = new Map((state.diagnoses || []).map((d) => [d.id, d]));
+  const unapproved = sprays.filter((s) => {
+    const d = s.diagnosisId && byId.get(s.diagnosisId);
+    return d && d.selfConfirmed && d.approvalFrom && !treatableAt(d, s.at);
+  });
+  if (!bare.length && unapproved.length) {
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
+      why: `${unapproved.length} spray${unapproved.length === 1 ? '' : 's'} on this cycle went on against a `
+        + 'self-confirmed diagnosis before it was approved.',
+      fix: 'FR-ROLE-13: the next level up approves a self-confirmed diagnosis before a treatment. '
+        + 'Record why these went ahead.' }];
+  }
   return [bare.length
     ? { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
       why: `${bare.length} spray${bare.length === 1 ? '' : 's'} on this cycle with no diagnosis behind ${bare.length === 1 ? 'it' : 'them'}.`,
@@ -1215,6 +1231,8 @@ export function canTreat(state, cycleId, opts = {}) {
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const confirmed = recent.filter((d) => d.confirmedBy);
+  // FR-ROLE-13 — self-confirmed and not yet approved is not enough to spray on.
+  const usable = confirmed.filter(treatable);
 
   if (!recent.length) {
     return {
@@ -1237,7 +1255,30 @@ export function canTreat(state, cycleId, opts = {}) {
     };
   }
 
-  const diagnosis = confirmed[0];
+  if (!usable.length) {
+    const waiting = confirmed.find(awaitingApproval);
+    // Only the Farm Doctor's name on it: not a confirmation at all (FR-DOC-08).
+    if (!waiting) {
+      return {
+        ok: false,
+        reason: 'unconfirmed',
+        diagnosis: confirmed[0],
+        why: `"${readDiagnosis(confirmed[0]).label}" has no person's confirmation behind it.`,
+        fix: 'The Field Supervisor or Farm Manager confirms the diagnosis, then the treatment can be logged.',
+      };
+    }
+    const who = approverTitle(waiting.approvalFrom);
+    return {
+      ok: false,
+      reason: 'awaiting-approval',
+      diagnosis: waiting,
+      why: `"${readDiagnosis(waiting).label}" was confirmed by the person who raised it, `
+        + `so the ${who} approves it before a treatment.`,
+      fix: `Ask the ${who} to approve it from their phone, on the Clinic screen (FR-ROLE-13).`,
+    };
+  }
+
+  const diagnosis = usable[0];
   const rotation = rotationCheck(state, cycleId, activeId || productId, { ...opts, today, diagnosis });
   if (!rotation.ok) return rotation;
 

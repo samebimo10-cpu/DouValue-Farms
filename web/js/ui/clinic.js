@@ -6,7 +6,7 @@ import {
   openSheet, readForm, select, table, textarea, tick, toast,
 } from './kit.js';
 import {
-  canConfirm, cardFor, cardPhoto, cardSlot, CARDS, CARD_TO_PROBLEM, CUES, FARM_DOCTOR_ROLE,
+  approverTitle, canApprove, canConfirm, cardFor, cardPhoto, cardSlot, CARDS, CARD_TO_PROBLEM, CUES, FARM_DOCTOR_ROLE,
   lookalikesFor, matchTriage, nameCause, namingGate, photoCoverage, photoCues,
   PHOTO_SLOT_BY_ID, PHOTO_SLOTS, readDiagnosis, referencePhoto, riskForecast, RISK_DRIVER_TEXT, ROOT_READ,
   rowPhoto, rowsForCard, rowSlot, RULES_VERSION, searchCards, separatingSymptom, TRIAGE_BY_N,
@@ -156,6 +156,31 @@ export const clinicView = {
       );
     }
 
+    // FR-ROLE-13 — self-confirmed diagnoses waiting on the next level up. A
+    // treatment from one stays blocked until it is approved, so the approver
+    // needs to see the queue where they already look.
+    const toApprove = state.diagnoses.map(readDiagnosis)
+      .filter((d) => d.awaitingApproval)
+      .reverse();
+    if (toApprove.length) {
+      out += card(
+        cardHead('Self-confirmed, waiting for approval', badge(`${toApprove.length}`, 'warn'))
+        + '<ul class="list">' + toApprove.slice(0, 6).map((d) => {
+          const who = state.people[d.confirmedBy];
+          const mine = canApprove(d, ctx.user).ok;
+          return `<li><div class="grow"><b>${esc(d.label)}</b>`
+            + `<small>${esc(d.cycleId ? cycleLabel(state, d.cycleId) : 'No bed recorded')} — `
+            + `raised and confirmed by ${esc(who ? who.name : 'the same person')}, ${esc(friendlyDate(d.date))}`
+            + `<br>Test result: ${esc(d.confirmResult || 'none recorded')}</small></div>`
+            + (mine
+              ? button('Approve', 'open-approve', { cls: 'btn-sm', data: { id: d.id } })
+              : badge(approverTitle(d.approvalFrom), ''))
+            + '</li>';
+        }).join('') + '</ul>'
+        + '<p><small>Nothing can be sprayed on these until the next level up approves.</small></p>',
+      );
+    }
+
     if (recent.length) {
       out += card(
         cardHead('Recent diagnoses')
@@ -164,7 +189,9 @@ export const clinicView = {
           + `<small>${esc(d.cycleId ? cycleLabel(state, d.cycleId) : 'No bed recorded')} — `
           + `${esc(friendlyDate(d.date))}, ${esc(d.confidence || 'no confidence recorded')}`
           + (d.legacy ? ` · ${d.mapping === 'mapped' ? 'legacy, read as a card' : 'legacy record'}` : '')
-          + (d.confirmed ? ' · confirmed' : ' · not confirmed') + '</small></div>'
+          + (d.confirmed ? (d.selfConfirmed ? ' · self-confirmed' : ' · confirmed') : ' · not confirmed')
+          + (d.awaitingApproval ? ` · waiting for the ${approverTitle(d.approvalFrom)}` : '')
+          + '</small></div>'
           + (d.cardId
             ? `<a class="btn btn-sm btn-ghost" href="#/guide/item?id=${esc(d.cardId)}">Open</a>`
             : badge('legacy', ''))
@@ -187,6 +214,8 @@ export const clinicView = {
     },
     'open-confirm': (ctx, el) => openConfirmSheet(ctx, el.dataset.id),
     'save-confirm': (ctx, form) => saveConfirm(ctx, form),
+    'open-approve': (ctx, el) => openApproveSheet(ctx, el.dataset.id),
+    'save-approve': (ctx, form) => saveApprove(ctx, form),
   },
 };
 
@@ -198,7 +227,9 @@ export const clinicView = {
 function openConfirmSheet(ctx, id) {
   const record = readDiagnosis(ctx.state.diagnoses.find((d) => d.id === id));
   if (!record) { toast('That diagnosis is gone', true); return; }
-  const verdict = canConfirm(record, { by: ctx.user && ctx.user.id, senior: true });
+  const verdict = canConfirm(record, {
+    by: ctx.user && ctx.user.id, senior: true, role: ctx.user && ctx.user.role,
+  });
   const row = record.triageRow != null ? TRIAGE_BY_N.get(Number(record.triageRow)) : null;
 
   openSheet(`<h2>Confirm: ${esc(record.label)}</h2>`
@@ -206,6 +237,9 @@ function openConfirmSheet(ctx, id) {
     + `recorded ${esc(friendlyDate(record.date))}</small></p>`
     + (record.reasoning ? note('info', 'What they wrote', `<small>${esc(record.reasoning)}</small>`) : '')
     + (record.photos || []).map((ph) => photoThumb(ph, { small: true })).join('')
+    // FR-ROLE-12: a second person is preferred; confirming your own is allowed
+    // and marked, and the sheet says what follows from it before you do.
+    + (verdict.ok && verdict.self ? note('warn', 'You raised this one', `<small>${esc(verdict.why)}</small>`) : '')
     + (verdict.ok
       ? `<p><b>Do this test yourself:</b><br>${esc(row ? row.confirm : record.confirmTest)}</p>`
         + '<form data-act="save-confirm">'
@@ -228,7 +262,46 @@ async function saveConfirm(ctx, form) {
     note: data.note || '',
   });
   closeSheet();
-  toast('Confirmed — treatment can now be planned');
+  const saved = readDiagnosis(ctx.store.state.diagnoses.find((d) => d.id === data.id));
+  toast(saved && saved.awaitingApproval
+    ? `Confirmed as self-confirmed — the ${approverTitle(saved.approvalFrom)} approves it before any treatment`
+    : saved && saved.selfConfirmed
+      ? 'Confirmed and recorded as self-confirmed — treatment can now be planned'
+      : 'Confirmed — treatment can now be planned');
+}
+
+/**
+ * FR-ROLE-13 — the next level up approves a self-confirmed diagnosis. They
+ * see what was found and what the test showed; approving is a judgement on
+ * that, not a formality.
+ */
+function openApproveSheet(ctx, id) {
+  const record = readDiagnosis(ctx.state.diagnoses.find((d) => d.id === id));
+  if (!record) { toast('That diagnosis is gone', true); return; }
+  const verdict = canApprove(record, ctx.user);
+  const who = ctx.state.people[record.confirmedBy];
+  openSheet(`<h2>Approve: ${esc(record.label)}</h2>`
+    + `<p><small>${esc(record.cycleId ? cycleLabel(ctx.state, record.cycleId) : 'No bed recorded')} — `
+    + `raised and confirmed by ${esc(who ? who.name : 'the same person')}, ${esc(friendlyDate(record.date))}</small></p>`
+    + (record.reasoning ? note('info', 'What they wrote', `<small>${esc(record.reasoning)}</small>`) : '')
+    + (record.photos || []).map((ph) => photoThumb(ph, { small: true })).join('')
+    + `<p><b>Confirm test:</b> ${esc(record.confirmTest || 'none recorded')}<br>`
+    + `<b>What it showed:</b> ${esc(record.confirmResult || 'none recorded')}</p>`
+    + (verdict.ok
+      ? '<form data-act="save-approve">'
+        + `<input type="hidden" name="id" value="${esc(record.id)}">`
+        + field('Anything to add?', textarea('note', { rows: 2 }))
+        + '<button class="btn-block btn-lg" type="submit">Approve — treatment may go ahead</button></form>'
+      : note('danger', 'You cannot approve this one', `<small>${esc(verdict.why)}</small>`)));
+}
+
+async function saveApprove(ctx, form) {
+  const data = readForm(form);
+  await ctx.store.dispatch('diagnosis.approve', { id: data.id, note: data.note || '' });
+  closeSheet();
+  const saved = ctx.store.state.diagnoses.find((d) => d.id === data.id);
+  if (saved && saved.approvedBy) toast('Approved — treatment can now be planned');
+  else toast((saved && saved.approveRefused) || 'Not approved', true);
 }
 
 // --- Reference photos (FR-DIAG-01, UX-11) --------------------------------

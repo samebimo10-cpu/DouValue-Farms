@@ -43,6 +43,7 @@ import {
   BAG_G0_ITEMS, bagG0, bagG0Label, gateSignoff, latestSoilTest, nematodeGate, phGate, zoneWindow,
 } from './gates.js';
 import { mediaOf } from './media.js';
+import { approverTitle, readDiagnosis, treatable } from './diagnose.js';
 import { releasedFor } from './nursery.js';
 
 /**
@@ -608,7 +609,15 @@ function treatableDiagnosis(state, cycleId, { today = isoDate(), maxAgeDays = 14
     return { ok: false, why: 'Nothing has been diagnosed on this bed in the last two weeks.',
       fix: 'Run the Farm Doctor on a sick plant, then have the diagnosis confirmed.' };
   }
-  const confirmed = recent.find((d) => d.confirmedBy && d.confirmedBy !== DOCTOR.id);
+  const confirmed = recent.find((d) => d.confirmedBy && d.confirmedBy !== DOCTOR.id && treatable(d));
+  const waiting = recent.find((d) => d.confirmedBy && d.confirmedBy !== DOCTOR.id);
+  if (!confirmed && waiting) {
+    // FR-ROLE-13 — self-confirmed, and the next level up has not approved it.
+    return { ok: false,
+      why: `"${readDiagnosis(waiting).label}" was confirmed by the person who raised it, `
+        + `and the ${approverTitle(waiting.approvalFrom)} has not approved it yet.`,
+      fix: `The ${approverTitle(waiting.approvalFrom)} approves it on the Clinic screen, then the plan can go ahead.` };
+  }
   if (!confirmed) {
     return { ok: false,
       why: `"${recent[0].problemName || recent[0].problemId}" was diagnosed on ${recent[0].date}, `

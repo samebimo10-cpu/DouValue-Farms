@@ -278,9 +278,16 @@ test('no diagnosis can be confirmed without the confirm step', () => {
   assert.equal(dx.canConfirm(recorded(), { by: 'u_sup', senior: true }).ok, true);
 });
 
-test('nobody confirms their own diagnosis (FR-DIAG-03, FR-DOC-08)', () => {
-  assert.equal(dx.canConfirm(recorded(), { by: 'u_hand', senior: true }).reason, 'self');
+test('confirming your own diagnosis is allowed and marked; rank and the Doctor still refused (FR-ROLE-12, FR-DIAG-03, FR-DOC-08)', () => {
+  const own = dx.canConfirm(recorded({ by: 'u_sup' }), { by: 'u_sup', senior: true, role: 'supervisor' });
+  assert.equal(own.ok, true);
+  assert.equal(own.self, true);
+  assert.equal(own.approver, 'manager', "a Field Supervisor's own goes to the Farm Manager");
+  assert.equal(dx.canConfirm(recorded({ by: 'u_mgr' }), { by: 'u_mgr', senior: true, role: 'manager' }).approver, 'ceo');
+  assert.equal(dx.canConfirm(recorded({ by: 'u_ceo' }), { by: 'u_ceo', senior: true, role: 'ceo' }).approver, null);
+  assert.equal(dx.canConfirm(recorded(), { by: 'u_mgr', senior: true, role: 'manager' }).self, false);
   assert.equal(dx.canConfirm(recorded(), { by: 'u_hand2', senior: false }).reason, 'rank');
+  assert.equal(dx.canConfirm(recorded({ by: 'farm-doctor' }), { by: 'farm-doctor', senior: true }).reason, 'doctor');
 });
 
 test('the event log refuses a confirmation with no confirm step behind it', () => {
