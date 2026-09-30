@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.7 (draft for restructuring) |
+| Version | 1.8 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -86,7 +86,7 @@ So the app keeps two things apart:
 A supervisor who scouts a zone may end up confirming his own finding. That is normal on a small farm, and refusing it would stop work. But it must be visible, because unchecked self-confirmation is how a wrong call becomes a farm-wide decision.
 
 - **FR-ROLE-12 (MUST):** Confirmation of a diagnosis prefers a second person. If the only qualified person available is the one who raised it, the app allows it and marks the record **self-confirmed**.
-- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner. Approval can be given from the phone and is not a blocking wait for routine cases.
+- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner. Approval can be given from the phone. Until it lands the treatment is blocked, with one exception: where the treatment closes an open alert (`FR-SCOUT-03`) whose deadline falls before the next spray window (rules SR-01, C-3), the treatment proceeds, is marked **treated before approval**, and the Owner is notified at once. The approval is still required afterwards, and the record stays flagged until it lands.
 - **FR-ROLE-14 (MUST):** Gate 0 and Gate 4 clearance is unchanged (FR-GATE-00): Farm Manager confirmation plus Owner approval, whoever did the field work.
 - **FR-ROLE-15 (SHOULD):** The Owner digest counts self-confirmed diagnoses for the week. Not an alert — just visible, so the pattern is known.
 
@@ -380,6 +380,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.8 | 30 Sep 2026 | FR-ROLE-13: approval is a hard block, except a treatment that closes an alert due before the next spray window, which proceeds flagged "treated before approval" with the Owner notified at once |
 | 1.7 | 30 Sep 2026 | Authority and field work separated (§4.1, FR-ROLE-05 to FR-ROLE-11); self-confirmation rules (§4.2, FR-ROLE-12 to FR-ROLE-15); Assignment entity; FR-DIAG-03 points to §4.2 |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
