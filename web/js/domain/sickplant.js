@@ -26,6 +26,7 @@
 import { escalationFor, levelFor, ALERT_LEVEL, ladderFor } from './alerts.js';
 import { zoneHolders } from './assignments.js';
 import { readDiagnosis, TRIAGE_BY_N } from './diagnose.js';
+import { handSafe } from './learn.js';
 
 /** What makes a report a sick-plant report rather than a general problem. */
 export const SICK_PLANT = 'sick-plant';
@@ -272,9 +273,12 @@ export function reportsBy(state, personId) {
         result: result ? {
           id: result.id,
           label: result.label,
+          cardId: result.cardId || null,
           confirmedBy: result.confirmedBy,
           confirmedAt: result.confirmedAt,
-          doNow: row ? row.firstAction : '',
+          // FR-LEARN-02: the rules' first action with the doses, products and
+          // groups taken out. The spray itself is the supervisor's to decide.
+          doNow: row ? handSafe(row.firstAction).join('; ') : '',
         } : null,
       };
     })

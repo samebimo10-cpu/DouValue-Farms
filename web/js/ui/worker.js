@@ -157,6 +157,15 @@ export const todayView = {
 
     out += myPlantReports(state, user);
 
+    // FR-LEARN-01: Learn opens from here, the home screen, in its own card —
+    // never from inside a task, where it would only get in the way of the job.
+    out += card(
+      cardHead(t('today.learn'))
+      + '<p><small>What the common problems look like, how to catch them early, and what to do '
+      + 'first. Works with no signal.</small></p>'
+      + button(t('today.learn'), 'go', { cls: 'btn-block btn-ghost', icon: '📖', data: { to: '#/learn' } }),
+    );
+
     // FR-TASK-05 / UX-09 — the end of the day, in their own words. Its own
     // card at the bottom of the screen, where the shift ends.
     const filedToday = (state.shifts || [])
@@ -528,6 +537,10 @@ function myPlantReports(state, user) {
         + (result
           ? `<small><b>Confirmed: ${esc(result.label)}</b>, by ${esc(nameOf(result.confirmedBy))}</small>`
             + (result.doNow ? `<small>What happens now: ${esc(result.doNow)}</small>` : '')
+            // FR-LEARN-05: the answer links to the hand's card for it in Learn.
+            + (result.cardId
+              ? `<small><a href="#/learn/card?id=${esc(result.cardId)}">Learn about ${esc(result.label)}</a></small>`
+              : '')
           : `<small>${esc(where.join(', '))}. Sent to ${esc(sentTo.length
             ? namesLine(sentTo.map((p) => ({ person: p, title: roleTitle(p) })))
             : namesLine(recipientsFor(state, r.zoneId, { reporterId: r.by })))}.`

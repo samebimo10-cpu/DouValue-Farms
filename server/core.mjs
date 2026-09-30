@@ -34,25 +34,25 @@ export const ROLES = {
     rank: 50,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
-      'guideDiagnosis'],
+      'guideDiagnosis', 'viewTreatment'],
   },
   agronomist: {
     rank: 60,
     can: ['viewOwnTasks', 'viewGuide', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks'],
+      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
   },
   manager: {
     rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
-      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis'],
+      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis', 'viewTreatment'],
   },
   ceo: {
     rank: 100,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
   },
 };
 

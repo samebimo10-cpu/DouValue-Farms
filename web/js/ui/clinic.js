@@ -823,7 +823,9 @@ async function saveTask(ctx, form) {
 let guideFilter = { category: '', query: '', noPhoto: false };
 
 export const guideView = {
-  perm: 'viewGuide',
+  // FR-LEARN-02: the supervising view of the cards — treatment, products, the
+  // spray table. A Greenhouse Hand reads the same cards in Learn (#/learn).
+  perm: 'viewTreatment',
   render(ctx) {
     const cov = photoCoverage(ctx.state);
     const gaps = new Set(cov.cards.missing.map((m) => m.cardId));
@@ -905,7 +907,7 @@ function catalogueStanding(state, product) {
 }
 
 export const guideItemView = {
-  perm: 'viewGuide',
+  perm: 'viewTreatment',
   render(ctx) {
     const c = cardFor(params().id);
     if (!c) return card(empty('📖', 'Not in the rules', 'Go back and pick from the list.'));

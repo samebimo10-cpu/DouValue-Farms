@@ -272,7 +272,7 @@ test('FR-DIAG-10: the reporter sees the confirmed answer with their own photo', 
   assert.equal(mine.result.label, 'Acid soil');
   assert.equal(mine.result.confirmedBy, 'u_mgr');
   assert.equal(mine.photo.dataUrl, PHOTO.dataUrl, 'with the reporter\'s own photo');
-  assert.ok(mine.result.doNow, 'and what happens now, from the rules');
+  assert.equal(mine.result.cardId, 'acid_soil', 'and which card it is, for Learn');
 
   const html = todayView.render(ctxFor(after, after.people.u_hand));
   assert.match(html, /Confirmed: Acid soil<\/b>, by Ada Briggs/);

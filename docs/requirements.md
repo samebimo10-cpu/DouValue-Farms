@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.8 (draft for restructuring) |
+| Version | 1.9 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -196,6 +196,15 @@ Fixes treatment by guesswork.
 - **FR-DIAG-09 (MUST):** A report answering wilting, spreading to neighbouring plants, or more than five plants raises an alert as soon as it is sent, whether or not it has been diagnosed, and climbs the `FR-SCOUT-04` ladder. Starting a diagnosis from it counts as picking it up; only resolving the report closes it.
 - **FR-DIAG-10 (MUST):** When a diagnosis started from a report is confirmed, the hand who reported it sees the confirmed result beside their own photo. An unconfirmed diagnosis is not shown to them.
 
+### 6.6a Learn
+Fixes staff who cannot tell one problem from another until it is too late.
+
+- **FR-LEARN-01 (MUST):** A Learn area for Greenhouse Hands, reachable from the home screen (My work) and never from inside a task or the sick-plant report.
+- **FR-LEARN-02 (MUST):** A hand's problem card shows how to recognise it, how to catch it early, what it is confused with (and the check that tells them apart), and what to do first. It never shows doses, rotation groups, products or treatment plans; those stay on the supervising view of the same card, which a Greenhouse Hand cannot open.
+- **FR-LEARN-03 (MUST):** The cards are browsable by kind and searchable with no network, searching only what the hand's card shows.
+- **FR-LEARN-04 (MUST):** The cards show the reference photos (`FR-DIAG-01`) where they have been added, and read in full without them.
+- **FR-LEARN-05 (MUST):** When a hand's report is diagnosed and confirmed (`FR-DIAG-10`), the result links to that problem's Learn card, and any first step shown with it has the treatment detail removed.
+
 ### 6.7 Treatments and sprays
 - **FR-TREAT-01 (MUST):** A treatment records diagnosis link, product, dose, zone, date, time, person, and weather or greenhouse condition.
 - **FR-TREAT-02 (MUST):** The app shows **re-entry interval** and **pre-harvest interval** for each product and blocks harvest tasks in that zone until the interval has passed.
@@ -371,6 +380,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.9 | 30 Sep 2026 | Learn area for Greenhouse Hands: problem cards without doses, groups or plans; supervising view keeps them; offline search; diagnosed reports link to the card (§6.6a, FR-LEARN-01 to FR-LEARN-05) |
 | 1.8 | 30 Sep 2026 | Sick-plant flow split by role: short report for Greenhouse Hands, guided diagnosis from the report for Field Supervisor and Farm Manager, serious reports alert at once, confirmed result back to the reporter (FR-DIAG-03 amended, FR-DIAG-07 to FR-DIAG-10) |
 | 1.7 | 30 Sep 2026 | Field assignments for every role, My work / The farm, own-rung escalation skip, week spread (§4.1, FR-ROLE-05 to FR-ROLE-11) |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |

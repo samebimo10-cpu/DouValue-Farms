@@ -275,6 +275,8 @@ const PARENT_OF = {
   '#/kpis': '#/dashboard',
   '#/shifts': '#/today',
   '#/sick-plant': '#/today',
+  '#/learn': '#/today',
+  '#/learn/card': '#/learn',
   '#/farm': '#/today',
   '#/week': '#/farm',
   '#/diagnose': '#/clinic',

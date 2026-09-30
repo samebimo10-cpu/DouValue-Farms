@@ -53,6 +53,16 @@ and after that a bar says it is still in a tab until it is installed.
 
 To start a real farm instead, skip the sample and create the manager account.
 
+**Learn** (`FR-LEARN-01` to `05`) is the same 22 cards as a hand reads them, opened from My work
+and never from inside a task: how to recognise it, how to catch it early, what it is confused
+with and how to tell, and what to do first, with the reference photos and a search that works
+with no signal. Every clause of the rules' text goes through one filter on the way to a hand
+(`domain/learn.js`), and a clause naming a product, a group, a dose or a spray programme is left
+off whole. The product names are read from the rules' active-ingredient list, so a new active
+is kept off the hand's card without a code change. Doses, groups and the treatment plan stay on
+the supervising view of the card (`#/guide/item`), which a hand cannot open. A hand's confirmed
+report links to its Learn card.
+
 ### Starting mid-season
 
 If crops are already in the ground when the farm starts using the app, the CEO or
@@ -582,6 +592,7 @@ DouValue-Farms/
 │     │  ├─ pests.js     32 local problems: products, PHI, weather response
 │     │  ├─ diagnose.js  triage rows, cards, look-alikes, confirm tests, risk board
 │     │  ├─ sickplant.js the hand's sick-plant report: recipients, alerts, results back
+│     │  ├─ learn.js     the hand's problem cards: the treatment filter, the offline search
 │     │  ├─ doctor.js    the Farm Doctor: limits, plans, gate evidence, follow-ups, lab
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  ├─ predict.js   yield, revenue, planting window, labour, stock, cashflow
@@ -596,7 +607,7 @@ DouValue-Farms/
 │     │  ├─ media.js     plant-bag zones: media type, batch → bags → zone, failures, galled crops
 │     │  └─ qr.js        zone door codes: the encoder, and reading one back
 │     └─ ui/             shell, kit, worker, field, clinic, doctor, ppe, manage, audit,
-│                        photo, chart (the trend), kpis, scan, shift, sickplant,
+│                        photo, chart (the trend), kpis, scan, shift, sickplant, learn,
 │                        update (the prompt)
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
