@@ -43,6 +43,7 @@ import {
   BAG_G0_ITEMS, bagG0, bagG0Label, gateSignoff, latestSoilTest, nematodeGate, phGate, zoneWindow,
 } from './gates.js';
 import { mediaOf } from './media.js';
+import { sourcesOf } from '../sources.js';
 import { releasedFor } from './nursery.js';
 
 /**
@@ -165,9 +166,13 @@ export function refusal(limitId, why, extra = {}) {
  * null at birth and stays null until a person who is allowed to confirm does
  * — which is the whole of FR-DOC-08's second and third limits, expressed as a
  * field nothing in this file can set.
+ *
+ * `sources` is the other half of showing the working (FR-KNOW-05): the ids in
+ * rules/sources.json behind the rules entries the answer used, so the record
+ * names the published guides it rests on, not only the farm records.
  */
 export function doctorOutput({
-  id = null, kind, subject = {}, read = [], confidence = null, summary = '',
+  id = null, kind, subject = {}, read = [], sources = [], confidence = null, summary = '',
   findings = [], notifyOwner = false, lab = null, at = null, rules = peekRules(),
 } = {}) {
   return {
@@ -177,6 +182,7 @@ export function doctorOutput({
     at: at || new Date().toISOString(),
     subject,
     read: read.map((r) => ({ kind: r.kind, id: r.id || null, what: r.what || '' })),
+    sources: [...new Set(sources)],
     confidence: confidence == null ? null : normaliseConfidence(confidence),
     summary,
     findings,
@@ -452,6 +458,22 @@ export function cardForProblem(problemId, rules = peekRules()) {
   return diagnosisCard(id, rules);
 }
 
+/**
+ * FR-KNOW-05 — the registry ids behind a card, its triage rows and any actives
+ * an answer named, read off those rules entries' `sources` arrays.
+ */
+function sourcesBehind({ card = null, triage = [], actives: named = [] } = {}, rules = peekRules()) {
+  // Two rows name a half of a card (sunscald, fruit_cracking -> sunscald_cracking).
+  const cards = new Set(((rules && rules.diagnosis_cards) || []).map((c) => c.id));
+  const parts = (id) => String(id).split('_');
+  const rows = triage.length || !card ? triage
+    : ((rules && rules.triage) || []).filter((r) => r.likely === card.id
+      || (!cards.has(r.likely) && parts(r.likely).some((p) => parts(card.id).includes(p))));
+  const entries = named.map((a) => ((rules && rules.active_ingredients) || [])
+    .find((r) => r.ai === (a && (a.ai || a)))).filter(Boolean);
+  return sourcesOf([card, ...rows, ...entries].filter(Boolean));
+}
+
 /** Week of the cycle, counted the rules' way: T is day 1 of Week 0. */
 export function weekOf(cycle, date = isoDate()) {
   if (!cycle || !cycle.transplantDate) return null;
@@ -699,6 +721,7 @@ export function treatmentPlan(state, {
       { kind: 'stock', what: `${Object.keys((state && state.inputs) || {}).length} items on the store shelf` },
       { kind: 'sprays', what: `${(((state && state.sprays) || []).filter((s) => s.cycleId === cycleId)).length} sprays already on this bed` },
     ].filter(Boolean),
+    sources: sourcesBehind({ card, triage, actives: candidates }, rules),
     summary: options.length
       ? `${options.length} product${options.length === 1 ? '' : 's'} the rules and the store both allow today.`
       : 'Nothing in the catalogue and the store may be sprayed on this today.',
@@ -948,6 +971,7 @@ export function normalisePhotoReview(raw = {}, {
       card ? { kind: 'rules-card', id: card.id, what: 'the diagnosis card in the rules' } : null,
       { kind: 'model', what: `photo review, ${CONFIDENCE[confidence].label.toLowerCase()}` },
     ].filter(Boolean),
+    sources: sourcesBehind({ card, actives: suggested.map((x) => x.active) }, rules),
     summary: top
       ? `Photo review points at ${top.name}, ${CONFIDENCE[confidence].label.toLowerCase()}.`
       : 'The photo review could not name anything.',
@@ -1219,6 +1243,7 @@ export function gateEvidence(state, {
     subject: { zoneId, cycleId, gates },
     confidence: rules ? 'high' : 'low',
     rules,
+    sources: sourcesOf(gates.map((g) => gateSpec(g, rules))),
     read: [
       { kind: 'rules', what: `gates ${gates.join(', ')} in the rules file` },
       { kind: 'soil-tests', what: `${(((state && state.soilTests) || []).filter((t) => t.zoneId === zoneId)).length} soil tests for this zone` },

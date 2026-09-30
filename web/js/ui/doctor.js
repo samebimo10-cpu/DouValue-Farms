@@ -16,7 +16,7 @@
 
 import {
   badge, button, card, cardHead, empty, esc, field, input, note, readForm, select, table, textarea,
-  toast,
+  sourceItems, toast,
 } from './kit.js';
 import { adviserView } from './adviser.js';
 import { photoThumb } from './photo.js';
@@ -341,10 +341,14 @@ function signatureLine(output) {
   return bits.length ? `<p><small>${esc(bits.join(' · '))}</small></p>` : '';
 }
 
+/** "Show what it looked at": the records it read, then the sources behind the rules it used (FR-KNOW-05). */
 function readList(output) {
-  if (!output.read || !output.read.length) return '';
+  const read = output.read || [];
+  const sources = output.sources || [];
+  if (!read.length && !sources.length) return '';
   return '<details><summary><small>What it looked at</small></summary><ul class="list">'
-    + output.read.map((r) => `<li><small>${esc(r.what)}${r.id ? ` (${esc(r.id)})` : ''}</small></li>`).join('')
+    + read.map((r) => `<li><small>${esc(r.what)}${r.id ? ` (${esc(r.id)})` : ''}</small></li>`).join('')
+    + sourceItems(sources)
     + '</ul></details>';
 }
 

@@ -3,6 +3,7 @@
 // download, and the whole app still fits in a service-worker cache.
 
 import { esc, html, naira, raw } from '../util.js';
+import { describeSources } from '../sources.js';
 
 export { html, esc, raw };
 
@@ -86,6 +87,22 @@ export function link(text, href, opts = {}) {
   // the screen behind it is not lost.
   const away = opts.newTab ? ' target="_blank" rel="noopener"' : '';
   return `<a class="btn ${opts.cls || ''}" href="${esc(href)}"${away}>${opts.icon ? `<span>${opts.icon}</span>` : ''}${esc(text)}</a>`;
+}
+
+/**
+ * FR-KNOW-05 — the published sources behind an answer, as list items for a
+ * "What it looked at" list. A bundled source carries its licence line; a
+ * linked one says so. Only http(s) addresses become links.
+ */
+export function sourceItems(ids) {
+  return describeSources(ids).map((s) => {
+    const title = /^https?:\/\//i.test(s.url)
+      ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`
+      : esc(s.title);
+    const tail = !s.known ? ' (not in the source registry)'
+      : s.bundled ? `<br>${esc(s.licenceLine)}` : ' · link only';
+    return `<li><small>Source: ${title}${s.publisher ? ` — ${esc(s.publisher)}` : ''}${tail}</small></li>`;
+  }).join('');
 }
 
 /**

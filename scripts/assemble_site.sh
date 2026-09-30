@@ -47,6 +47,14 @@ if [ -f "$root/rules/douvalue_rules_rev5_1.json" ]; then
   echo "Rules       -> /rules/douvalue_rules_rev5_1.json"
 fi
 
+# The source registry sits beside the rules and is read the same way
+# (docs/knowledge-layer.md §3).
+if [ -f "$root/rules/sources.json" ]; then
+  mkdir -p "$out/rules"
+  cp "$root/rules/sources.json" "$out/rules/"
+  echo "Sources     -> /rules/sources.json"
+fi
+
 # Pages built through Actions does not run Jekyll, but this makes that explicit
 # and keeps any future underscore-prefixed path from being dropped.
 touch "$out/.nojekyll"

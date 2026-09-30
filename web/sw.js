@@ -9,7 +9,7 @@
 // rules file is cached with it: the plan checks, the gate checks and both
 // calculators are required to work with no signal (FR-DOC-03), and they cannot
 // do that if their own rule book needs a network.
-const CACHE = 'douvalue-v22';
+const CACHE = 'douvalue-v23';
 
 const SHELL = [
   './',
@@ -53,6 +53,7 @@ const SHELL = [
   './js/ui/update.js',
   './js/ui/install.js',
   './js/rules.js',
+  './js/sources.js',
   './js/domain/adviser.js',
   './js/domain/doctor.js',
   './js/domain/analysis.js',
@@ -107,15 +108,22 @@ const SHELL = [
 // install and run, and the Farm Doctor says it has no rule book, which is a far
 // better failure than no offline app at all.
 const RULES = ['./rules/douvalue_rules_rev5_1.json', '../rules/douvalue_rules_rev5_1.json'];
+// The source registry beside it (FR-KNOW-05), cached the same forgiving way.
+const SOURCES = ['./rules/sources.json', '../rules/sources.json'];
 
-/** Cache the rules from whichever address answers. Never fails the install. */
-async function cacheRules(cache) {
-  for (const url of RULES) {
+/** Cache one file from whichever address answers. Never fails the install. */
+async function cacheFirst(cache, urls) {
+  for (const url of urls) {
     try {
       await cache.add(url);
       return;
     } catch { /* try the other address */ }
   }
+}
+
+async function cacheRules(cache) {
+  await cacheFirst(cache, RULES);
+  await cacheFirst(cache, SOURCES);
 }
 
 self.addEventListener('install', (event) => {

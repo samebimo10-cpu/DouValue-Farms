@@ -5,6 +5,8 @@ This repository is the farm app: web/, server/, tests/, brand/.
 - Requirements: docs/requirements.md (v1.6). Every requirement has an ID; cite it in commits and tests.
 - Rules: rules/douvalue_rules_rev5_1.json is the source of truth. Both web/ and server/ load it from there; do not copy it.
   docs/build-rules.md is the readable copy; keep both in sync.
+- Sources: rules/sources.json is the source registry (docs/knowledge-layer.md). Rules entries cite it by ID in `sources`;
+  docs/references.md is generated from it (`npm run references`), never edited by hand.
 - Precedence: rules JSON > docs/build-rules.md > the PDFs in docs/source/.
 - Extend the existing app; do not rewrite it.
 - Never weaken a gate, rotation, PHI/REI or Farm Doctor limit without an explicit instruction.
