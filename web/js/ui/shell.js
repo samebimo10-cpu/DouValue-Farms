@@ -274,6 +274,7 @@ const PARENT_OF = {
   '#/zones/codes': '#/zones',
   '#/kpis': '#/dashboard',
   '#/shifts': '#/today',
+  '#/sick-plant': '#/today',
   '#/farm': '#/today',
   '#/week': '#/farm',
   '#/diagnose': '#/clinic',

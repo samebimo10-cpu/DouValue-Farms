@@ -17,6 +17,7 @@ import { canComplete, judgeZoneStart, stampFor, zoneStamp } from '../domain/proo
 import { scanSupported, scanZone, zoneListSheet, zonePicker } from './scan.js';
 import { howTo } from '../domain/schedule.js';
 import { myWork } from '../domain/assignments.js';
+import { namesLine, recipientsFor, reportsBy, roleTitle, WHERE_BY_ID } from '../domain/sickplant.js';
 import { workSwitch } from './farm.js';
 import {
   bigNumber, buzz, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
@@ -148,9 +149,13 @@ export const todayView = {
       + button(t('today.logHarvest'), 'open-harvest', { cls: 'btn-lg', icon: '🧺' })
       + button(t('today.reportProblem'), 'open-report', { cls: 'btn-lg btn-ghost', icon: '⚠️' })
       + button(t('today.logWork'), 'open-work', { cls: 'btn-lg btn-ghost', icon: '🛠️' })
-      + button(t('today.checkPlant'), 'go', { cls: 'btn-lg btn-ghost', icon: '🔍', data: { to: '#/diagnose' } })
+      // FR-DIAG-07: the short report — zone, photos, where, how many. The
+      // guided diagnosis opens from it on a supervisor's or manager's phone.
+      + button(t('today.checkPlant'), 'go', { cls: 'btn-lg btn-ghost', icon: '🌿', data: { to: '#/sick-plant' } })
       + '</div>',
     );
+
+    out += myPlantReports(state, user);
 
     // FR-TASK-05 / UX-09 — the end of the day, in their own words. Its own
     // card at the bottom of the screen, where the shift ends.
@@ -500,6 +505,41 @@ async function saveHarvest(ctx, form) {
   toast(`${t('harvest.saved')}: ${kg(kgValue)}`);
 }
 
+// --- Sick-plant reports: what became of them (FR-DIAG-10) -----------------
+
+/**
+ * The reporter's own sick-plant reports, newest first. Each shows who it went
+ * to, and once a Field Supervisor or Farm Manager has confirmed a diagnosis,
+ * the answer beside the reporter's own photo. An unconfirmed diagnosis is not
+ * shown here: a match is not an answer yet.
+ */
+function myPlantReports(state, user) {
+  const mine = reportsBy(state, user.id).slice(0, 5);
+  if (!mine.length) return '';
+  const nameOf = (id) => (state.people[id] ? state.people[id].name : 'a supervisor');
+  return card(
+    cardHead('Your sick-plant reports')
+    + '<ul class="list">' + mine.map(({ report: r, photo, serious, result }) => {
+      const zone = state.plots[r.zoneId];
+      const sentTo = (r.sentTo || []).map((id) => state.people[id]).filter(Boolean);
+      const where = (r.where || []).map((id) => (WHERE_BY_ID[id] || {}).label).filter(Boolean);
+      return '<li><div class="grow">'
+        + `<b>${esc(zone ? zone.name : 'A zone')} — ${esc(friendlyDate(r.date))}</b>`
+        + (result
+          ? `<small><b>Confirmed: ${esc(result.label)}</b>, by ${esc(nameOf(result.confirmedBy))}</small>`
+            + (result.doNow ? `<small>What happens now: ${esc(result.doNow)}</small>` : '')
+          : `<small>${esc(where.join(', '))}. Sent to ${esc(sentTo.length
+            ? namesLine(sentTo.map((p) => ({ person: p, title: roleTitle(p) })))
+            : namesLine(recipientsFor(state, r.zoneId, { reporterId: r.by })))}.`
+            + (r.status === 'resolved' ? ' Closed.' : ' Waiting for the answer.') + '</small>')
+        + photoThumb(photo, { small: true, alt: 'Your photo of this plant' })
+        + '</div>'
+        + (result ? badge('answered', 'ok') : serious ? badge('alert', 'danger') : badge('sent', 'warn'))
+        + '</li>';
+    }).join('') + '</ul>',
+  );
+}
+
 // --- Problem report -------------------------------------------------------
 
 function openReportSheet(ctx) {
@@ -521,9 +561,9 @@ function openReportSheet(ctx) {
     + photoField(t('common.photo'), 'A picture of the plant helps more than any description.')
     + '<button class="btn-block btn-lg" type="submit">Send report</button>'
     + '</form>'
-    + note('info', 'Not sure what it is?',
-      'The Clinic can walk you through it question by question and tell you what to do. '
-      + 'You can still send the report first.'),
+    + note('info', 'Is it a sick plant?',
+      'Use Report a sick plant instead: a photo and four taps, and it goes straight to the '
+      + 'Field Supervisor and the Farm Manager.'),
   );
   bindPhoto(el);
 }

@@ -280,10 +280,20 @@ lists every slot with the gaps first, so what is still missing is a screen rathe
 memory.
 
 A recorded diagnosis carries the card, the triage row, the answers, the photos, the written
-reasoning and the person (`FR-DIAG-02`). A farm hand may start one; a Field Supervisor or
-Farm Manager performs the confirm test again and confirms it, and nobody confirms their own
-(`FR-DIAG-03`). None of that is advisory — the event log refuses a confirmation with no
-confirm step behind it, and so does the server.
+reasoning and the person (`FR-DIAG-02`). Only a Field Supervisor or Farm Manager runs the
+guided diagnosis; one of them performs the confirm test again and confirms it, and nobody
+confirms their own (`FR-DIAG-03`). None of that is advisory — the event log refuses a
+confirmation with no confirm step behind it, and so does the server.
+
+A Greenhouse Hand never sees the guided flow. *Report a sick plant* on My work is five taps:
+zone, photos, where on the plant, how many plants, send — picture choices, no triage rows,
+cards, confirm tests or look-alikes — and it ends by naming who it went to: the Field
+Supervisor holding the zone and the Farm Manager (`FR-DIAG-07`, `FR-DIAG-08`). Wilting,
+spreading, or more than five plants raises an alert on the spot, diagnosed or not, on the
+same ladder as a pest count (`FR-DIAG-09`). The supervisor or manager opens the guided
+diagnosis from the report, and once it is confirmed the hand sees the answer on My work next
+to their own photo (`FR-DIAG-10`). The server refuses a diagnosis filed from a hand's
+account.
 
 Diagnoses recorded before this engine are kept and stay readable. Where the old name matches
 a card outright they are read as that card; the rest keep their old wording and are marked
@@ -571,6 +581,7 @@ DouValue-Farms/
 │     │  ├─ climate.js   Port Harcourt climatology, live forecast, price seasonality
 │     │  ├─ pests.js     32 local problems: products, PHI, weather response
 │     │  ├─ diagnose.js  triage rows, cards, look-alikes, confirm tests, risk board
+│     │  ├─ sickplant.js the hand's sick-plant report: recipients, alerts, results back
 │     │  ├─ doctor.js    the Farm Doctor: limits, plans, gate evidence, follow-ups, lab
 │     │  ├─ safety.js    products, PHI, re-entry, resistance rotation
 │     │  ├─ predict.js   yield, revenue, planting window, labour, stock, cashflow
@@ -585,7 +596,8 @@ DouValue-Farms/
 │     │  ├─ media.js     plant-bag zones: media type, batch → bags → zone, failures, galled crops
 │     │  └─ qr.js        zone door codes: the encoder, and reading one back
 │     └─ ui/             shell, kit, worker, field, clinic, doctor, ppe, manage, audit,
-│                        photo, chart (the trend), kpis, scan, shift, update (the prompt)
+│                        photo, chart (the trend), kpis, scan, shift, sickplant,
+│                        update (the prompt)
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)

@@ -18,6 +18,7 @@
 
 import { isoDate } from '../util.js';
 import { alerts, kpis, OWNER_LEVELS, risingWarnings, straightToOwner } from './alerts.js';
+import { openReportAlerts } from './sickplant.js';
 import { ownerNotifications } from './doctor.js';
 import { gateBoard } from './gates.js';
 import { batchName, failedBatches, traceText } from './media.js';
@@ -74,6 +75,17 @@ export function exceptions(state, { now = new Date().toISOString(), settings = n
       line: `${a.pestName} on ${a.zoneName} — ${Math.round(a.hoursOpen)}h, with the ${
         a.level === 'supervisor' ? 'Field Supervisor' : 'Farm Manager'}`,
       detail: `Counted ${a.count} against ${a.limit}.`,
+    });
+  }
+
+  // 2b. Serious sick-plant reports — FR-DIAG-09. Raised on the report itself,
+  //     so one nobody has diagnosed yet is still here.
+  for (const a of openReportAlerts(state, { now, settings: config })) {
+    out.push({
+      severity: OWNER_LEVELS.has(a.level) ? 'critical' : 'warn',
+      line: `Sick plants on ${a.zoneName} — ${a.reasons.join(', ')}, ${Math.round(a.hoursOpen)}h open, `
+        + `with the ${a.levelLabel}`,
+      detail: a.ack ? 'A diagnosis has been started.' : 'Nobody has started a diagnosis yet.',
     });
   }
 

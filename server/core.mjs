@@ -28,12 +28,13 @@
 export const ROLES = {
   hand: {
     rank: 10,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose'],
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide'],
   },
   supervisor: {
     rank: 50,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
-      'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout'],
+      'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
+      'guideDiagnosis'],
   },
   agronomist: {
     rank: 60,
@@ -44,7 +45,7 @@ export const ROLES = {
     rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
-      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings'],
+      'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis'],
   },
   ceo: {
     rank: 100,
@@ -100,8 +101,11 @@ export const EVENT_POLICY = {
   'harvest.verify':    { write: 'verifyHarvest', read: ANY },
   'spray.record':      { write: 'logSpray',      read: ANY },
   'scout.record':      { write: 'scout',         read: ANY },
-  'diagnosis.record':  { write: 'diagnose',      read: ANY, guard: guardDiagnosis },
-  'report.record':     { write: 'reportProblem', read: ANY },
+  // FR-DIAG-03/07: the guided diagnosis is the Field Supervisor's and the
+  // Farm Manager's. A hand's phone that has been patched to open it still
+  // cannot file what it produced.
+  'diagnosis.record':  { write: 'guideDiagnosis', read: ANY, guard: guardDiagnosis },
+  'report.record':     { write: 'reportProblem', read: ANY, guard: guardReport },
   'report.resolve':    { write: 'assignTasks',   read: ANY },
   // FR-TASK-05 / UX-09: an end-of-shift report is written by whoever worked
   // the shift, and answered by whoever runs the work. Kept apart from
@@ -143,7 +147,7 @@ export const EVENT_POLICY = {
   'soiltest.record':   { write: 'scout',         read: ANY },
   'topsoil.receive':   { write: 'logInputs',     read: ANY },
   'topsoil.assign':    { write: 'manageCycles',  read: ANY },
-  // FR-DIAG-03: a hand may start a diagnosis, only a senior may confirm one,
+  // FR-DIAG-03: a hand reports a sick plant, only a senior may confirm a diagnosis,
   // and a confirmed diagnosis is what unlocks a treatment. FR-DOC-01 adds the
   // step that makes the confirmation mean something: the senior performs the
   // confirm test the card names and records what it showed.
@@ -598,6 +602,30 @@ function guardDiagnosis(event) {
   if (String(p.reasoning || '').trim().length < 10) {
     return { ok: false, why: 'Write why you think it is this — a sentence someone can check later' };
   }
+  return { ok: true };
+}
+
+/**
+ * FR-DIAG-07 — a sick-plant report carries what the short flow asks for: the
+ * zone, a photo, where on the plant and how many plants. Those answers are what
+ * decide whether it raises an alert (FR-DIAG-09), so a report missing them
+ * would be one that could never be serious. Any other problem report is free
+ * text, as it always was.
+ *
+ * The lists of answers are repeated from web/js/domain/sickplant.js because the
+ * server does not import the app; tests/sickplant.test.mjs fails if they drift.
+ */
+export const SICK_PLANT_WHERE = ['top_leaves', 'old_leaves', 'flowers_fruit', 'stem', 'base_roots', 'wilting'];
+export const SICK_PLANT_HOW_MANY = ['one', 'few', 'many'];
+function guardReport(event) {
+  const p = event.payload || {};
+  if (p.kind !== 'sick-plant') return { ok: true };
+  if (!p.zoneId) return { ok: false, why: 'Say which zone the sick plant is in' };
+  if (!Array.isArray(p.photos) || !p.photos.length) return { ok: false, why: 'Take a photo of the plant' };
+  if (!Array.isArray(p.where) || !p.where.length || !p.where.every((w) => SICK_PLANT_WHERE.includes(w))) {
+    return { ok: false, why: 'Say where on the plant' };
+  }
+  if (!SICK_PLANT_HOW_MANY.includes(p.howMany)) return { ok: false, why: 'Say how many plants' };
   return { ok: true };
 }
 

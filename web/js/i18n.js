@@ -37,7 +37,7 @@ const STRINGS = {
   'today.logHarvest': { en: 'Log harvest', pcm: 'Record wetin I pick' },
   'today.reportProblem': { en: 'Report a problem', pcm: 'Something dey wrong' },
   'today.logWork': { en: 'Log work done', pcm: 'Record work wey I do' },
-  'today.checkPlant': { en: 'Check a sick plant', pcm: 'Check plant wey sick' },
+  'today.checkPlant': { en: 'Report a sick plant', pcm: 'Talk say plant dey sick' },
 
   // Harvest
   'harvest.which': { en: 'Which bed did you pick?', pcm: 'Na which bed you pick?' },
