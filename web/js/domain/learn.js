@@ -53,13 +53,24 @@ export function isTreatmentText(text) {
   return TREATMENT_RE.test(t) || DOSE_RE.test(t) || PRODUCT_RE.test(t);
 }
 
+/**
+ * Taking plants or parts of plants out — roguing, removing, discarding. The
+ * Field Supervisor or the Farm Manager decides that, so a hand's card leaves
+ * it off along with the treatment. It is a separate test from
+ * isTreatmentText because it is about who decides, not about products.
+ */
+// A bare "weeds" in the rules is the tail of a removal list ("remove infested
+// lower leaves; weeds"), so it goes with it.
+const REMOVAL_RE = /\brogu|\bremov|\bdiscard|^\s*weeds?\s*$/i;
+export const isRemovalText = (text) => REMOVAL_RE.test(String(text || ''));
+
 /** The clauses of a rules sentence a hand may read, in order, each once. */
 export function handSafe(...texts) {
   const out = [];
   for (const text of texts) {
     for (const raw of String(text || '').split(';')) {
       const clause = raw.trim().replace(/\.$/, '');
-      if (!clause || isTreatmentText(clause)) continue;
+      if (!clause || isTreatmentText(clause) || isRemovalText(clause)) continue;
       const tidy = clause[0].toUpperCase() + clause.slice(1);
       if (!out.some((x) => x.toLowerCase() === tidy.toLowerCase())) out.push(tidy);
     }

@@ -104,6 +104,8 @@ test('FR-LEARN-02: a hand\'s card has the four sections and no doses, groups, pr
     assert.ok(!PRODUCTS.test(text), `${c.id} names a product: ${text.match(PRODUCTS)}`);
     assert.ok(!TREATMENT.test(html), `${c.id} shows treatment detail: ${html.match(TREATMENT)}`);
     assert.ok(!html.includes('#/guide/item'), `${c.id} links a hand to the supervising card`);
+    // Roguing, removing and discarding are the supervisor's call (FR-LEARN-02).
+    assert.ok(!/\brogu|\bremov|\bdiscard/i.test(text), `${c.id} tells a hand to take plants out: ${text.match(/\S*\s*(?:rogu|remov|discard)\S*\s*\S*/i)}`);
     // Nothing of the card's treatment line, or of a raw first action that
     // carries a product, reaches the hand.
     assert.ok(!text.includes(c.treatment), `${c.id} shows the treatment line`);
@@ -115,7 +117,7 @@ test('FR-LEARN-02: the sections are filled from the rules, with the treatment cl
   const thrips = learn.learnCard(state, 'thrips');
   assert.ok(thrips.recognise.detection.includes('white paper'));
   assert.ok(thrips.catchEarly.some((x) => x.includes('>10 per trap')), 'the count to tell the supervisor at');
-  assert.ok(thrips.catchEarly.includes('Remove weeds/volunteers'));
+  assert.deepEqual(thrips.catchEarly.slice(1), ['Traps from day one', 'IPM'], 'no removal clause either');
   assert.ok(!thrips.catchEarly.some((x) => /pre-stocked/.test(x)), 'stock planning is not a hand\'s');
   assert.deepEqual(thrips.firstSteps.slice(0, -1), ['Log and re-count'], 'the spray clause is gone');
   assert.equal(thrips.firstSteps.at(-1), learn.REPORT_STEP, 'and every card ends on reporting it');
@@ -123,7 +125,9 @@ test('FR-LEARN-02: the sections are filled from the rules, with the treatment cl
 
   // Whole clauses go, not half of one: a dose never survives as a fragment.
   assert.deepEqual(learn.handSafe('Borax 1 g/L weekly on tips (max 1.5)'), []);
-  assert.deepEqual(learn.handSafe('Abamectin or wettable sulphur on tips; remove worst tips'), ['Remove worst tips']);
+  assert.deepEqual(learn.handSafe('Abamectin or wettable sulphur on tips; remove worst tips'), []);
+  assert.deepEqual(learn.handSafe('Rogue and bag; sanitise blade between every plant; wash hands'),
+    ['Sanitise blade between every plant', 'Wash hands']);
   assert.deepEqual(learn.handSafe('Ca drench 1.8 kg/1,000 L; regular irrigation'), ['Regular irrigation']);
   // Every active in the rules is caught by name, so a new one is too.
   for (const a of RULES.active_ingredients) {
