@@ -17,6 +17,7 @@ import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView, zoneCodesView } from './ui/zones.js';
 import { kpiView } from './ui/kpis.js';
 import { shiftView } from './ui/shift.js';
+import { farmView, weekView } from './ui/farm.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
 import { missingTasks } from './domain/schedule.js';
@@ -57,6 +58,9 @@ registerRoute('#/zones', zonesView);
 registerRoute('#/zones/codes', zoneCodesView);
 registerRoute('#/kpis', kpiView);
 registerRoute('#/shifts', shiftView);
+// §4.1, FR-ROLE-08 and 11: The farm beside My work, and the week's spread.
+registerRoute('#/farm', farmView);
+registerRoute('#/week', weekView);
 registerRoute('#/people', peopleView);
 registerRoute('#/store', storeView);
 registerRoute('#/money', moneyView);

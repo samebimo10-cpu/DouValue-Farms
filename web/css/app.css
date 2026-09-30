@@ -775,3 +775,19 @@ pre.working {
 .check-row .body small { display:block; color:var(--ink-2); font-size:13px; line-height:1.35; }
 .check-row .body .ref { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; opacity:.75; }
 .dose-big { font-size:30px; font-weight:700; line-height:1.1; }
+
+/* FR-ROLE-11 — the week, one line per person: fits a 360 px phone. */
+.work-switch { display: flex; gap: 8px; }
+.week-grid { display: flex; flex-direction: column; }
+.week-row { display: grid; grid-template-columns: auto 2.4em; gap: 4px 8px; justify-content: space-between;
+  align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.week-row .who { grid-column: 1 / -1; }
+.week-row .who:empty { display: none; }
+.week-row .who small { display: block; overflow-wrap: anywhere; }
+.week-row .sum { text-align: right; }
+.week-cells { display: grid; grid-template-columns: repeat(7, 1.9em); gap: 2px; text-align: center; }
+.week-cells span { font-variant-numeric: tabular-nums; border-radius: 4px; padding: 2px 0; }
+.week-cells span.on { background: var(--line); }
+.week-cells span.late { background: var(--danger-bg); color: var(--danger); font-weight: 700; }
+.week-cells span.head { font-size: 12px; line-height: 1.2; }
+.week-head { border-bottom-width: 2px; }
