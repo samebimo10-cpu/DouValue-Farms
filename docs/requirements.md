@@ -200,7 +200,7 @@ Fixes treatment by guesswork.
 Fixes staff who cannot tell one problem from another until it is too late.
 
 - **FR-LEARN-01 (MUST):** A Learn area for Greenhouse Hands, reachable from the home screen (My work) and never from inside a task or the sick-plant report.
-- **FR-LEARN-02 (MUST):** A hand's problem card shows how to recognise it, how to catch it early, what it is confused with (and the check that tells them apart), and what to do first. It never shows doses, rotation groups, products or treatment plans, and never tells a hand to rogue, remove or discard plants or plant parts, which is the Field Supervisor's or Farm Manager's decision; the treatment detail stays on the supervising view of the same card, which a Greenhouse Hand cannot open.
+- **FR-LEARN-02 (MUST):** A hand's problem card shows how to recognise it, how to catch it early, what it is confused with (and the check that tells them apart), and what to do first. It never shows doses, rotation groups, products or treatment plans, and never tells a hand to rogue, remove or discard plants or plant parts, which is the Field Supervisor's or Farm Manager's decision (weeding stays: that is a hand's work); the treatment detail stays on the supervising view of the same card, which a Greenhouse Hand cannot open.
 - **FR-LEARN-03 (MUST):** The cards are browsable by kind and searchable with no network, searching only what the hand's card shows.
 - **FR-LEARN-04 (MUST):** The cards show the reference photos (`FR-DIAG-01`) where they have been added, and read in full without them.
 - **FR-LEARN-05 (MUST):** When a hand's report is diagnosed and confirmed (`FR-DIAG-10`), the result links to that problem's Learn card, and any first step shown with it has the treatment detail removed.

@@ -105,7 +105,8 @@ test('FR-LEARN-02: a hand\'s card has the four sections and no doses, groups, pr
     assert.ok(!TREATMENT.test(html), `${c.id} shows treatment detail: ${html.match(TREATMENT)}`);
     assert.ok(!html.includes('#/guide/item'), `${c.id} links a hand to the supervising card`);
     // Roguing, removing and discarding are the supervisor's call (FR-LEARN-02).
-    assert.ok(!/\brogu|\bremov|\bdiscard/i.test(text), `${c.id} tells a hand to take plants out: ${text.match(/\S*\s*(?:rogu|remov|discard)\S*\s*\S*/i)}`);
+    const removal = text.match(/\b(?:rogu|remov|discard)\w*(?![^<\n]*weed)[^.<\n]*/i);
+    assert.ok(!removal, `${c.id} tells a hand to take plants out: ${removal}`);
     // Nothing of the card's treatment line, or of a raw first action that
     // carries a product, reaches the hand.
     assert.ok(!text.includes(c.treatment), `${c.id} shows the treatment line`);
@@ -117,7 +118,12 @@ test('FR-LEARN-02: the sections are filled from the rules, with the treatment cl
   const thrips = learn.learnCard(state, 'thrips');
   assert.ok(thrips.recognise.detection.includes('white paper'));
   assert.ok(thrips.catchEarly.some((x) => x.includes('>10 per trap')), 'the count to tell the supervisor at');
-  assert.deepEqual(thrips.catchEarly.slice(1), ['Traps from day one', 'IPM'], 'no removal clause either');
+  assert.deepEqual(thrips.catchEarly.slice(1), ['Traps from day one', 'IPM', 'Remove weeds/volunteers'],
+    'weeding is a hand\'s work, so it stays');
+  assert.ok(learn.learnCard(state, 'tospovirus').catchEarly.includes('Remove weed hosts'));
+  assert.ok(learn.learnCard(state, 'whitefly').catchEarly.includes('Remove weeds'));
+  assert.ok(!learn.learnCard(state, 'whitefly').catchEarly.some((x) => /leaves/.test(x)),
+    'but removing leaves off the crop does not');
   assert.ok(!thrips.catchEarly.some((x) => /pre-stocked/.test(x)), 'stock planning is not a hand\'s');
   assert.deepEqual(thrips.firstSteps.slice(0, -1), ['Log and re-count'], 'the spray clause is gone');
   assert.equal(thrips.firstSteps.at(-1), learn.REPORT_STEP, 'and every card ends on reporting it');

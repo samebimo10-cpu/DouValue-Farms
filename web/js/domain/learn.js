@@ -58,11 +58,16 @@ export function isTreatmentText(text) {
  * Field Supervisor or the Farm Manager decides that, so a hand's card leaves
  * it off along with the treatment. It is a separate test from
  * isTreatmentText because it is about who decides, not about products.
+ *
+ * Weeding is the exception: pulling weeds and volunteers is a hand's own
+ * work. A clause about weeds stays unless it also names the crop — plants,
+ * tips, leaves, fruit — or roguing or discarding.
  */
-// A bare "weeds" in the rules is the tail of a removal list ("remove infested
-// lower leaves; weeds"), so it goes with it.
-const REMOVAL_RE = /\brogu|\bremov|\bdiscard|^\s*weeds?\s*$/i;
-export const isRemovalText = (text) => REMOVAL_RE.test(String(text || ''));
+const REMOVAL_RE = /\brogu|\bremov|\bdiscard/i;
+const WEED_RE = /\bweed/i;
+const CROP_RE = /\brogu|\bdiscard|\bplants?\b|\btips?\b|\bleav|\bfruit|\bparts?\b|\bdead\b/i;
+export const isWeeding = (text) => WEED_RE.test(String(text || '')) && !CROP_RE.test(String(text || ''));
+export const isRemovalText = (text) => REMOVAL_RE.test(String(text || '')) && !isWeeding(text);
 
 /** The clauses of a rules sentence a hand may read, in order, each once. */
 export function handSafe(...texts) {
@@ -71,7 +76,10 @@ export function handSafe(...texts) {
     for (const raw of String(text || '').split(';')) {
       const clause = raw.trim().replace(/\.$/, '');
       if (!clause || isTreatmentText(clause) || isRemovalText(clause)) continue;
-      const tidy = clause[0].toUpperCase() + clause.slice(1);
+      // A bare "weeds" in the rules is the tail of a removal list ("remove
+      // infested lower leaves; weeds"). On its own it means pull the weeds.
+      const said = /^weeds?$/i.test(clause) ? 'Remove weeds' : clause;
+      const tidy = said[0].toUpperCase() + said.slice(1);
       if (!out.some((x) => x.toLowerCase() === tidy.toLowerCase())) out.push(tidy);
     }
   }

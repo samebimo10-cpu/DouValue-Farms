@@ -59,7 +59,7 @@ with and how to tell, and what to do first, with the reference photos and a sear
 with no signal. Every clause of the rules' text goes through one filter on the way to a hand
 (`domain/learn.js`), and a clause naming a product, a group, a dose or a spray programme is left
 off whole, as is any clause telling a hand to rogue, remove or discard plants — that is
-the supervisor's call. The product names are read from the rules' active-ingredient list, so a new active
+the supervisor's call. Weeding stays on the card; it is a hand's own work. The product names are read from the rules' active-ingredient list, so a new active
 is kept off the hand's card without a code change. Doses, groups and the treatment plan stay on
 the supervising view of the card (`#/guide/item`), which a hand cannot open. A hand's confirmed
 report links to its Learn card.
