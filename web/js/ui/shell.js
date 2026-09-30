@@ -274,6 +274,8 @@ const PARENT_OF = {
   '#/zones/codes': '#/zones',
   '#/kpis': '#/dashboard',
   '#/shifts': '#/today',
+  '#/farm': '#/today',
+  '#/week': '#/farm',
   '#/diagnose': '#/clinic',
   '#/doctor': '#/clinic',
   '#/adviser': '#/clinic',
@@ -358,7 +360,9 @@ export function render() {
     if (view.enter) view.enter(ctx);
   }
 
-  if (view.perm && !can(user, view.perm)) {
+  // FR-ROLE-08: some screens are for a role as well as a permission — The
+  // farm is a supervising view, and a Greenhouse Hand has My work only.
+  if ((view.perm && !can(user, view.perm)) || (view.allow && !view.allow(user))) {
     root.innerHTML = chrome(user, state, `<div class="card">${empty('🔒', 'Not your screen',
       'Ask the manager if you need access to this part of the app.')}</div>`);
     return;

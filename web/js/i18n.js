@@ -10,7 +10,7 @@ export const LANGS = { en: 'English', pcm: 'Pidgin' };
 
 const STRINGS = {
   // Chrome
-  'nav.today': { en: 'Today', pcm: 'Today' },
+  'nav.today': { en: 'My work', pcm: 'My work' },
   'nav.field': { en: 'Field', pcm: 'Farm' },
   'nav.clinic': { en: 'Clinic', pcm: 'Clinic' },
   'nav.store': { en: 'Store', pcm: 'Store' },

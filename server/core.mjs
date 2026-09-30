@@ -203,6 +203,11 @@ export const EVENT_POLICY = {
   'position.upsert':   { write: 'managePeople',  read: ANY },
   'position.assign':   { write: 'managePeople',  read: ANY },
   'position.retire':   { write: 'managePeople',  read: ANY },
+  // §4.1, FR-ROLE-06: zones handed to people by name. The Farm Manager and the
+  // Owner; the Field Supervisor only when covering, which the app checks
+  // against attendance on replay — this refuses anyone else outright.
+  'zone.assign':       { write: 'assignTasks',   read: ANY, guard: guardZoneAssign },
+  'zone.unassign':     { write: 'assignTasks',   read: ANY, guard: guardZoneAssign },
   // Anyone may say they are not coming in. Being able to report your own
   // absence is the thing that makes the cover mechanism work at six in the
   // morning; needing a manager to record it is how it fails.
@@ -592,6 +597,33 @@ function guardDiagnosis(event) {
   }
   if (String(p.reasoning || '').trim().length < 10) {
     return { ok: false, why: 'Write why you think it is this — a sentence someone can check later' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-ROLE-06 — who hands out zones.
+ *
+ * The Farm Manager and the Owner. The Field Supervisor only on a record that
+ * says it is covering; whether the Farm Manager really was out that day is a
+ * question of attendance, which every phone replays and refuses on its own.
+ * The agronomist assigns tasks but not zones.
+ */
+function guardZoneAssign(event, author) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which assignment this is' };
+  const role = author.role;
+  if (role === 'supervisor' && p.covering !== true) {
+    return { ok: false, why: 'The Field Supervisor assigns zones only when covering for the Farm Manager' };
+  }
+  if (!['manager', 'ceo', 'supervisor'].includes(role)) {
+    return { ok: false, why: 'Zones are assigned by the Farm Manager, or the Field Supervisor when covering' };
+  }
+  if (event.type === 'zone.assign') {
+    if (!p.zoneId || !p.personId) return { ok: false, why: 'An assignment names a zone and a person' };
+    if (!['primary', 'backup'].includes(p.holding)) {
+      return { ok: false, why: 'Say whether it is their primary or backup zone' };
+    }
   }
   return { ok: true };
 }

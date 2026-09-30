@@ -89,6 +89,22 @@ operational permission as well, so they can pick a crate, run a diagnosis or log
 a spray when they are in the field, and still be the only one who can change the
 sync link or appoint a manager.
 
+### Field assignments: My work and The farm
+
+Anyone, in any role, can hold a zone — as its primary or its backup — and gets
+that zone's jobs every day under **My work**. The Farm Manager hands zones out by
+name from **The farm** (himself included); the Field Supervisor can do the same
+on a day the Farm Manager is not in. A zone can carry several people and a person
+several zones; the backups take a zone only when every primary holder is off.
+
+Supervisors, the manager and the CEO switch between **My work** and **The farm**
+with one tap; a farm hand has My work only. Their own jobs keep the same rules as
+anyone else's: the photo on a scouting round, the end-of-shift report, and late
+work climbing the ladder — which skips the rung its own holder stands on, so the
+supervisor's late round goes to the manager and the manager's to the CEO.
+**How the week is spread** (`#/week`) shows each person's jobs per day and any
+zone nobody holds.
+
 ## What each person gets
 
 ### Farm hand — *Today*

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.6 (draft for restructuring) |
+| Version | 1.7 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -63,6 +63,18 @@ Roles are **positions, not people**. A person can be moved between positions wit
 - **FR-ROLE-02 (MUST):** When a person is absent, their tasks move to the backup holder automatically.
 - **FR-ROLE-03 (MUST):** Each role sees only the screens and buttons it needs. Greenhouse Hands never see settings, costs or other people's records.
 - **FR-ROLE-04 (SHOULD):** The Farm Manager can reassign a position to a different person in under one minute.
+
+### 4.1 Field assignments
+
+Supervising roles also do field work. Their own rounds are tasks like anyone else's, not a gap between positions.
+
+- **FR-ROLE-05 (MUST):** Any person in any role can hold field assignments, and gets a daily task list for their zones.
+- **FR-ROLE-06 (MUST):** The Farm Manager assigns zones to people by name, and can assign zones to himself. The Field Supervisor can do the same when covering for the Farm Manager (the Farm Manager is marked absent or has not clocked in). The Owner can always assign.
+- **FR-ROLE-07 (MUST):** A zone can carry several people and a person can hold several zones. Primary and backup holders still apply per zone: the backups take a zone's work only when every primary holder is off (`FR-ROLE-02`).
+- **FR-ROLE-08 (MUST):** Supervising roles (Field Supervisor, Farm Manager, Owner) get two views without switching accounts: **My work** and **The farm**. A Greenhouse Hand sees only My work.
+- **FR-ROLE-09 (MUST):** A supervising role's own tasks follow the same rules as anyone else's: proof photos (`FR-PROOF-01`), overdue escalation (`FR-TASK-03`) and the end-of-shift report (`FR-TASK-05`).
+- **FR-ROLE-10 (MUST):** Overdue escalation skips any rung held by the person whose task is overdue, and goes one level up. The Field Supervisor's own overdue task goes to the Farm Manager; the Farm Manager's goes to the Owner. The Owner's own stays on the Owner's list.
+- **FR-ROLE-11 (MUST):** A screen shows how the week's work is spread across people: jobs per person per day, and jobs nobody holds.
 
 ---
 
@@ -295,6 +307,7 @@ The farm starts using the app with cycles already running. This section says how
 |---|---|
 | Person | name, face photo, PIN, language, position |
 | Position | role, primary zone, backup zone |
+| Field assignment | person, zone, primary or backup, assigned by, whether set while covering |
 | Zone | ID, type (greenhouse/field), QR code, status |
 | Crop cycle | zone, crop, variety, planting date, harvest window |
 | Soil test | zone or topsoil batch, pH, nematode result, date |
@@ -353,6 +366,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.7 | 30 Sep 2026 | Field assignments for every role, My work / The farm, own-rung escalation skip, week spread (§4.1, FR-ROLE-05 to FR-ROLE-11) |
 | 1.6 | 24 Sep 2026 | Mid-season onboarding added (§6.15, FR-ONB-01 to FR-ONB-08) |
 | 1.5 | 19 Sep 2026 | Triage/card counts matched to rules JSON (23/22); soil-test freshness, PIN lockout, idle sign-out and retention placeholders set; banned actives excluded from catalogue |
 | 1.4 | 16 Sep 2026 | Field usability trial moved to after build, with a fix round (UX-26, UX-27, §9a) |

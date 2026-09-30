@@ -48,6 +48,19 @@ export async function seedSampleFarm(store) {
     ...cycles.map((c) => ({ type: 'cycle.start', payload: c })),
   ];
 
+  // §4.1 — who holds which zone. The Supervisor and the Farm Manager hold
+  // zones too, so their own rounds show under My work, and every bed has a
+  // backup so a day off never leaves one unchecked.
+  const holdings = [
+    ['sp_emeka', 'sp_b4', 'primary'], ['sp_emeka', 'sp_b1', 'backup'],
+    ['sp_blessing', 'sp_b1', 'primary'], ['sp_blessing', 'sp_b3', 'primary'], ['sp_blessing', 'sp_b4', 'backup'],
+    ['sp_tamuno', 'sp_b2', 'primary'], ['sp_tamuno', 'sp_b3', 'backup'],
+    ['sp_ada', 'sp_b2', 'backup'],
+  ];
+  for (const [personId, zoneId, holding] of holdings) {
+    events.push({ type: 'zone.assign', payload: { id: `sp_as_${personId}_${zoneId}`, personId, zoneId, holding } });
+  }
+
   // A closed cycle from earlier in the year, so the forecaster has something to
   // calibrate against and the reports are not empty.
   events.push({ type: 'cycle.start', payload: {
@@ -195,7 +208,7 @@ export async function seedSampleFarm(store) {
   // can be closed, and the opening stock has to be set before anything is issued
   // out of it. So setup events are dated well before the history they support,
   // and everything else takes the date it actually carries.
-  const SETUP_TYPES = new Set(['settings.update', 'person.upsert', 'plot.upsert', 'input.upsert']);
+  const SETUP_TYPES = new Set(['settings.update', 'person.upsert', 'plot.upsert', 'input.upsert', 'zone.assign']);
   const setupAt = new Date(addDays(today, -365)).toISOString();
 
   const stamped = events.map((e) => {

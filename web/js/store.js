@@ -9,6 +9,7 @@ import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagno
 import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { releaseCheck } from './domain/nursery.js';
 import { fillCheck } from './domain/gates.js';
+import { checkAssignment, mayAssignZones } from './domain/assignments.js';
 import { peekRules } from './rules.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
@@ -182,6 +183,10 @@ const EMPTY = () => ({
   alertAcks: [],
   alertDecisions: [],
   positions: {},
+  // §4.1, FR-ROLE-05 to 07 — one person holding one zone, primary or backup,
+  // in any role. Keyed by id; an ended one is kept with who ended it.
+  assignments: {},
+  assignRefused: [],
   absences: [],
   expenses: [],
   stockMoves: [],
@@ -228,6 +233,7 @@ export function reduce(events) {
       case 'doctor.record': return `doctor:${p.id}`;
       case 'lab.record': return `lab:${p.id}`;
       case 'position.upsert': return `position:${p.id}`;
+      case 'zone.assign': return `assignment:${p.id}`;
       case 'seedling.sow': return `seedling:${p.id}`;
       case 'media.receive': return `media:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
@@ -256,6 +262,7 @@ export function reduce(events) {
       case 'doctor.confirm': case 'doctor.approve': case 'doctor.owner-seen': return `doctor:${p.id}`;
       case 'lab.send': case 'lab.result': return `lab:${p.id}`;
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
+      case 'zone.unassign': return `assignment:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
       case 'seedling.check': case 'seedling.harden': case 'seedling.discard': return `seedling:${p.batchId}`;
@@ -282,6 +289,7 @@ export function reduce(events) {
       case 'doctor': return state.doctorOutputs.some((o) => o.id === id);
       case 'lab': return state.labSamples.some((s) => s.id === id);
       case 'position': return !!state.positions[id];
+      case 'assignment': return !!state.assignments[id];
       case 'absence': return state.absences.some((a) => a.id === id);
       case 'plot': return !!state.plots[id];
       case 'seedling': return !!state.seedlingBatches[id];
@@ -472,6 +480,41 @@ export function reduce(events) {
       case 'position.retire':
         if (state.positions[p.id]) state.positions[p.id].retired = true;
         break;
+
+      // FR-ROLE-06 — a zone handed to somebody by name. Checked on replay, not
+      // just on the screen: the Farm Manager or the Owner, or the Field
+      // Supervisor on a day the Farm Manager is not in. Judged as of the
+      // moment it was made, from the attendance the log held by then.
+      case 'zone.assign': {
+        const person = state.people[e.by];
+        const when = { today: isoDate(new Date(e.at)), now: new Date(e.at) };
+        const verdict = checkAssignment(state, p, person, when);
+        if (!verdict.ok) {
+          state.assignRefused.push({ id: p.id, zoneId: p.zoneId, personId: p.personId, why: verdict.why, by: e.by, at: e.at });
+          break;
+        }
+        // One holding per person per zone: moving someone from backup to
+        // primary ends the old one rather than leaving two.
+        for (const a of Object.values(state.assignments)) {
+          if (!a.ended && a.zoneId === p.zoneId && a.personId === p.personId) a.ended = { by: e.by, at: e.at, replacedBy: p.id };
+        }
+        state.assignments[p.id] = {
+          id: p.id, zoneId: p.zoneId, personId: p.personId, holding: p.holding,
+          by: e.by, at: e.at, covering: verdict.how === 'covering',
+        };
+        break;
+      }
+      case 'zone.unassign': {
+        const a = state.assignments[p.id];
+        const person = state.people[e.by];
+        const who = mayAssignZones(state, person, { today: isoDate(new Date(e.at)), now: new Date(e.at) });
+        if (!who.ok) {
+          state.assignRefused.push({ id: p.id, zoneId: a.zoneId, personId: a.personId, why: who.why, by: e.by, at: e.at });
+          break;
+        }
+        if (!a.ended) a.ended = { by: e.by, at: e.at, reason: p.reason || '' };
+        break;
+      }
 
       // FR-ROLE-02: somebody saying they are not in, so the work moves before
       // anyone stands in an unchecked house wondering.

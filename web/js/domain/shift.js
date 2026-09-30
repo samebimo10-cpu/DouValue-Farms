@@ -88,6 +88,14 @@ export function shiftBoard(state, { date = isoDate() } = {}) {
       .filter((a) => (a.in || '').slice(0, 10) === date)
       .map((a) => a.personId),
   );
+  // FR-ROLE-09: a Farm Manager or Owner who did field work owes the same
+  // report as a hand, and they are the ones who never clock in — so a task
+  // they closed today counts as having worked.
+  for (const task of Object.values(state.tasks || {})) {
+    if (task.status === 'done' && task.doneBy && (task.doneAt || '').slice(0, 10) === date) {
+      worked.add(task.doneBy);
+    }
+  }
   // Anyone who filed counts as having worked, even if nobody clocked them in.
   const filed = shiftReports(state, { date });
   for (const s of filed) worked.add(s.personId);

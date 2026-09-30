@@ -6,7 +6,7 @@ import {
   readForm, select, stat, textarea, toast, tick,
 } from './kit.js';
 import { t, local, getLang } from '../i18n.js';
-import { activeCycles, can, cycleLabel, isClockedIn, openTasks } from '../store.js';
+import { activeCycles, cycleLabel, isClockedIn } from '../store.js';
 import { getCrop, stageAt } from '../domain/crops.js';
 import { SPRAY_RULES } from '../domain/safety.js';
 import { harvestCheck, reentryCheck } from '../domain/onboarding.js';
@@ -15,7 +15,9 @@ import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, u
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { canComplete, judgeZoneStart, stampFor, zoneStamp } from '../domain/proof.js';
 import { scanSupported, scanZone, zoneListSheet, zonePicker } from './scan.js';
-import { dayProgress, howTo } from '../domain/schedule.js';
+import { howTo } from '../domain/schedule.js';
+import { myWork } from '../domain/assignments.js';
+import { workSwitch } from './farm.js';
 import {
   bigNumber, buzz, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
 } from './field-kit.js';
@@ -58,7 +60,6 @@ export const todayView = {
     const lang = getLang();
     const today = isoDate();
     const clockedIn = isClockedIn(state, user.id);
-    const mine = openTasks(state, user.id, today);
     const head = forecastHeadline(weather);
     const season = seasonOn(today);
 
@@ -66,7 +67,8 @@ export const todayView = {
       .map((c) => ({ cycle: c, safety: cycleSafety(state, c.id) }))
       .filter((x) => !x.safety.harvest.safe || !x.safety.reentry.safe);
 
-    let out = '';
+    // FR-ROLE-08: My work and The farm, one tap apart, for supervising roles.
+    let out = workSwitch(user, '#/today');
 
     out += card(
       `<div class="row between"><div><b>${esc(user.name)}</b><br><small>${esc(friendlyDate(today))} — `
@@ -104,21 +106,41 @@ export const todayView = {
     // UX-23/24: the day as a list of cards in order, each with its zone, its
     // time and its colour — and the count said in words, because a bar on its
     // own is a shape, and a shape is not an answer to "how much is left".
-    const progress = dayProgress(state, { date: today, personId: user.id });
-    const dayTasks = Object.values(state.tasks || {})
-      .filter((x) => (x.due || '').slice(0, 10) === today)
-      .sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
-    const board = dayTasks.length ? dayTasks : mine;
+    //
+    // §4.1, FR-ROLE-05/09: the list is this person's own — the zones they
+    // hold or cover and anything written for them by name — whatever their
+    // role. A Farm Manager's own scouting round sits here under the same
+    // photo rule and the same late rule as a hand's.
+    const work = myWork(state, user.id, { date: today, now: new Date() });
+    const progress = work.progress;
 
     out += card(
       cardHead(t('today.tasks'))
-      + (board.length ? dayProgressBar(progress) : ''),
+      + (work.zones.length
+        ? `<p><small>Your zones: ${work.zones.map((z) => `<b>${esc(z.zone.name)}</b>`
+          + (z.holding === 'backup' ? ' (backup)' : '')).join(', ')}</small></p>`
+        : '')
+      + (work.tasks.length ? dayProgressBar(progress) : ''),
       { tight: true },
     );
 
-    out += board.length
-      ? board.map((task) => taskCard(state, task)).join('')
+    out += work.tasks.length
+      ? work.tasks.map(({ task, covering, why }) => taskCard(state, task, covering ? why : null)).join('')
       : card(empty('✅', t('today.noTasks'), 'Anything you do can still be recorded below.'));
+
+    // FR-TASK-03 with FR-ROLE-10: late work that has climbed to this person.
+    if (work.moved.length) {
+      out += card(cardHead('Late — moved up to you', badge(`${work.moved.length}`, 'danger'))
+        + '<p><small>These were not done on time by whoever holds the zone. See that they are '
+        + 'done today.</small></p>', { tight: true })
+        + work.moved.map(({ task, escalation }) => taskCard(state, task, escalation.why)).join('');
+    }
+    if (work.unheld.length) {
+      out += card(cardHead('Nobody on these today', badge(`${work.unheld.length}`, 'warn'))
+        + '<p><small>No one holds these zones today, so they are with you until somebody is '
+        + 'assigned.</small></p>', { tight: true })
+        + work.unheld.map(({ task, why }) => taskCard(state, task, why)).join('');
+    }
 
     out += card(
       cardHead('Record something')
@@ -252,7 +274,7 @@ function clockInTime(state, personId) {
  * repeated as a stripe and as an icon (UX-07), so it survives sunlight and
  * colour blindness alike.
  */
-function taskCard(state, task) {
+function taskCard(state, task, why = null) {
   const state_ = taskStatus(task);
   const zone = task.zoneId ? (state.plots || {})[task.zoneId] : null;
   const where = zone ? zone.name : (task.cycleId ? cycleLabel(state, task.cycleId) : 'General');
@@ -264,6 +286,8 @@ function taskCard(state, task) {
     `<div class="row between"><div class="grow"><b>${esc(task.title)}</b>`
     + `<small>${esc(where)}${at ? ` · by ${esc(at)}` : ''}</small></div>`
     + tag(state_, label) + '</div>'
+    // FR-ROLE-02/10: why a task is on somebody else's list today, in words.
+    + (why ? `<p class="why"><small>${esc(why)}</small></p>` : '')
     + (steps
       // UX-19: the steps, numbered, matching the laminated role cards.
       ? `<ol class="steps">${steps.how.map((line) => `<li>${esc(line)}</li>`).join('')}</ol>`
