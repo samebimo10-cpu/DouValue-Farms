@@ -23,7 +23,7 @@ const STRINGS = {
 
   // Login
   'login.who': { en: 'Who are you?', pcm: 'Na who you be?' },
-  'login.pin': { en: 'Enter your 4-digit PIN', pcm: 'Put your 4 number PIN' },
+  'login.pin': { en: 'Enter your PIN, then press ✓', pcm: 'Put your PIN, then press ✓' },
   'login.wrong': { en: 'Wrong PIN. Try again.', pcm: 'PIN no correct. Try again.' },
   'login.back': { en: 'Not me', pcm: 'No be me' },
 
@@ -37,6 +37,7 @@ const STRINGS = {
   'today.logHarvest': { en: 'Log harvest', pcm: 'Record wetin I pick' },
   'today.reportProblem': { en: 'Report a problem', pcm: 'Something dey wrong' },
   'today.logWork': { en: 'Log work done', pcm: 'Record work wey I do' },
+  'today.trapCount': { en: 'Count a trap', pcm: 'Count trap' },
   'today.learn': { en: 'Learn the problems', pcm: 'Learn di plant wahala' },
   'today.checkPlant': { en: 'Report a sick plant', pcm: 'Talk say plant dey sick' },
 

@@ -231,6 +231,29 @@ export function breaches(scout, zone, settings = {}) {
   return { ...worst, threshold: limit, over: Math.round((worst.count / worst.limit) * 100) - 100 };
 }
 
+/**
+ * Which zone a scouting record is about.
+ *
+ * Through its crop where it has one. The nursery has no crop cycle, so a count
+ * there carries the zone itself (FR-FARM-04, and the rules' own "thrips above
+ * threshold in the nursery opens an alert like any other zone").
+ */
+export function scoutZone(state, scout) {
+  const cycle = scout && scout.cycleId ? (state.cycles || {})[scout.cycleId] : null;
+  if (cycle) return (state.plots || {})[cycle.plotId] || null;
+  return (scout && scout.zoneId && (state.plots || {})[scout.zoneId]) || null;
+}
+
+/**
+ * Is this ack, decision or spray about the same place as the alert? The crop
+ * where the alert has one; otherwise the zone, and only a record that names no
+ * crop of its own.
+ */
+function sameSubject(record, breach) {
+  if (breach.cycleId) return record.cycleId === breach.cycleId;
+  return !record.cycleId && !!breach.zoneId && record.zoneId === breach.zoneId;
+}
+
 /** Hours between two instants, for the ladder. */
 function hoursBetween(fromIso, toIso) {
   const a = new Date(fromIso);
@@ -252,7 +275,7 @@ function closureFor(state, breach) {
   const after = (date) => date && date >= breach.date;
 
   const treatment = (state.sprays || [])
-    .filter((s) => s.cycleId === breach.cycleId && after((s.date || '').slice(0, 10)))
+    .filter((s) => sameSubject(s, breach) && after((s.date || '').slice(0, 10)))
     .sort((a, b) => (a.date < b.date ? 1 : -1))[0];
   if (treatment) {
     return {
@@ -264,7 +287,7 @@ function closureFor(state, breach) {
   }
 
   const decision = (state.alertDecisions || [])
-    .filter((d) => d.cycleId === breach.cycleId && d.pestId === breach.pestId)
+    .filter((d) => sameSubject(d, breach) && d.pestId === breach.pestId)
     .filter((d) => (d.at || '') >= breach.at)
     .sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1))[0];
   if (decision) {
@@ -282,7 +305,7 @@ function closureFor(state, breach) {
 /** Has anyone said they have seen it? An acknowledgement stops the second rung. */
 function ackFor(state, breach) {
   return (state.alertAcks || [])
-    .filter((a) => a.cycleId === breach.cycleId && a.pestId === breach.pestId)
+    .filter((a) => sameSubject(a, breach) && a.pestId === breach.pestId)
     .filter((a) => (a.at || '') >= breach.at)
     .sort((a, b) => ((a.at || '') < (b.at || '') ? -1 : 1))[0] || null;
 }
@@ -306,12 +329,12 @@ export function alerts(state, { now = new Date().toISOString(), settings = null 
     .sort((a, b) => ((a.at || a.date || '') < (b.at || b.date || '') ? -1 : 1));
 
   for (const scout of scouts) {
-    const cycle = (state.cycles || {})[scout.cycleId];
-    const zone = cycle ? (state.plots || {})[cycle.plotId] : null;
+    const zone = scoutZone(state, scout);
     const hit = breaches(scout, zone, config);
     if (!hit) continue;
 
-    const key = `${scout.cycleId}::${scout.pestId}`;
+    // One alert per crop per pest — or, in the nursery, per zone per pest.
+    const key = `${scout.cycleId || `zone:${zone ? zone.id : scout.zoneId}`}::${scout.pestId}`;
     const running = openByKey.get(key);
     if (running) {
       // Same problem, same zone, still open: this is more evidence, not a new alert.
@@ -323,7 +346,8 @@ export function alerts(state, { now = new Date().toISOString(), settings = null 
     const at = scout.at || `${scout.date}T12:00:00.000Z`;
     const breach = {
       id: `alert:${scout.id}`,
-      cycleId: scout.cycleId,
+      cycleId: scout.cycleId || null,
+      zoneId: zone ? zone.id : (scout.zoneId || null),
       pestId: scout.pestId,
       pestName: (PROBLEM_BY_ID[scout.pestId] || {}).name || scout.pestId,
       zone: zone || null,

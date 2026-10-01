@@ -20,8 +20,11 @@ import { myWork } from '../domain/assignments.js';
 import { namesLine, recipientsFor, reportsBy, roleTitle, WHERE_BY_ID } from '../domain/sickplant.js';
 import { workSwitch } from './farm.js';
 import {
-  bigNumber, buzz, callSupervisor, dayProgressBar, phraseChips, tag, taskStatus,
+  bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, tag, taskStatus,
 } from './field-kit.js';
+import {
+  overThreshold, readCounts, TRAP_TASKS, trapCountRecords, trapPests, trapZones,
+} from '../domain/traps.js';
 
 /**
  * FR-PROOF-03 / UX-12 — the zone confirmed at the start of a task.
@@ -149,6 +152,9 @@ export const todayView = {
       + button(t('today.logHarvest'), 'open-harvest', { cls: 'btn-lg', icon: '🧺' })
       + button(t('today.reportProblem'), 'open-report', { cls: 'btn-lg btn-ghost', icon: '⚠️' })
       + button(t('today.logWork'), 'open-work', { cls: 'btn-lg btn-ghost', icon: '🛠️' })
+      // FR-SCOUT-01: a trap count with a number, from anyone, at any time —
+      // not only on the day the schedule puts a trap check on the list.
+      + button(t('today.trapCount'), 'open-trapcount', { cls: 'btn-lg btn-ghost', icon: '🪤' })
       // FR-DIAG-07: the short report — zone, photos, where, how many. The
       // guided diagnosis opens from it on a supervisor's or manager's phone.
       + button(t('today.checkPlant'), 'go', { cls: 'btn-lg btn-ghost', icon: '🌿', data: { to: '#/sick-plant' } })
@@ -212,6 +218,9 @@ export const todayView = {
     // Every other kind of task closes on the tap, as before.
     'task-done': async (ctx, el) => {
       const task = ctx.state.tasks[el.dataset.id];
+      // FR-SCOUT-01/03: a trap check closes on the count, as numbers, with the
+      // photo — the count is what the thresholds read.
+      if (task && TRAP_TASKS.has(task.kind)) { openTrapSheet(ctx, task); return; }
       const verdict = canComplete(task, null);
       if (!verdict.ok) { openProofSheet(ctx, task, verdict); return; }
       const stamp = zoneConfirmations.get(task.id) || null;
@@ -222,6 +231,8 @@ export const todayView = {
       toast(getLang() === 'pcm' ? 'Well done' : 'Marked done');
     },
     'save-proof': saveProof,
+    'open-trapcount': (ctx) => openTrapSheet(ctx, null),
+    'save-trapcount': saveTrapCount,
 
     // FR-PROOF-03: the door code, at the start of the job.
     'scan-zone': async (ctx, el) => {
@@ -309,6 +320,7 @@ function taskCard(state, task, why = null) {
       : '')
     + (task.status === 'done'
       ? `<p class="gate-row ok"><b>✓ Done</b> <small>${esc(task.doneNote || 'Recorded')}</small></p>`
+        + countedLine(state, task)
         + (task.zoneCheck
           ? `<p><small>${esc(task.zoneCheck.label)}: ${esc(task.zoneCheck.zoneName)}</small></p>`
           : '')
@@ -362,6 +374,107 @@ function openProofSheet(ctx, task, verdict) {
     // UX-22: somebody to ask, from the screen you are standing on.
     + `<div style="margin-top:12px">${callSupervisor(ctx.state)}</div>`);
   bindPhoto(el);
+}
+
+// --- The trap count (FR-SCOUT-01, FR-SCOUT-03, FR-FARM-04) ------------------
+
+/** What a closed trap check counted, under its tick. */
+function countedLine(state, task) {
+  const counted = (state.scouts || []).filter((x) => x.taskId === task.id && x.trapCount != null);
+  if (!counted.length) return '';
+  const names = Object.fromEntries(trapPests(state.settings).map((p) => [p.id, p.name]));
+  return `<p><small>Counted: ${counted.map((x) => `${esc(names[x.pestId] || x.pestId)} ${esc(x.trapCount)}`).join(', ')}</small></p>`;
+}
+
+/**
+ * The trap count, as numbers — from a trap-check task (the crop's weekly one or
+ * the nursery's daily one), or on its own from "Record something". Thrips and
+ * whitefly are always asked for; zero is a count, a blank is not. A task's
+ * count closes the task, so it carries the photo FR-PROOF-01 asks for.
+ */
+function openTrapSheet(ctx, task) {
+  const state = ctx.state;
+  const zones = trapZones(state);
+  if (!task && !zones.length) {
+    openSheet(`<h2>${esc(t('today.trapCount'))}</h2>`
+      + empty('🪤', 'No traps to count yet', 'Traps are counted in the nursery and wherever a crop is growing.'));
+    return;
+  }
+  const el = openSheet(`<h2>${esc(task ? task.title : t('today.trapCount'))}</h2>`
+    + '<form data-act="save-trapcount">'
+    + `<input type="hidden" name="taskId" value="${esc(task ? task.id : '')}">`
+    // A task names its zone; on its own, or on a task written without one, ask.
+    + (task && task.zoneId
+      ? ''
+      : field('Which zone is the trap in?', select('zoneId',
+        zones.map((z) => ({ value: z.id, label: z.name || z.id })), zones.length ? zones[0].id : '')))
+    + trapPests(state.settings).map((p) => field(
+      `${p.name} on the trap${p.required ? '' : ' (if any)'}`,
+      numberField(`count_${p.id}`),
+      p.required ? 'Count them on one card. None? Put 0.' : 'Leave empty if you did not count them.',
+    )).join('')
+    + photoField(task ? 'Photograph the trap' : 'Photo of the trap',
+      task
+        ? 'Taken now, in the app, before you touch it. A picture from the gallery proves the trap was fine earlier, not now.'
+        : 'Not required, but a picture of the card settles any question later.')
+    + field('What did you see?', textarea('note', { rows: 2, placeholder: 'e.g. trap full, replaced it' }))
+    + phraseChips('trap', 'note')
+    + '<button class="btn-block btn-lg" type="submit">Save the count</button>'
+    + '</form>'
+    + `<div style="margin-top:12px">${callSupervisor(state)}</div>`);
+  bindPhoto(el);
+}
+
+async function saveTrapCount(ctx, form) {
+  const data = readForm(form);
+  const state = ctx.state;
+  const task = data.taskId ? state.tasks[data.taskId] : null;
+  if (data.taskId && (!task || task.status === 'done')) { closeSheet(); toast('That check is already done'); return; }
+  const zoneId = (task && task.zoneId) || data.zoneId;
+  if (!zoneId || !state.plots[zoneId]) { toast('Choose the zone the trap is in', true); return; }
+
+  const read = readCounts(data, state.settings);
+  if (!read.ok) { toast(read.why, true); return; }
+
+  const photo = photoPayload();
+  let stamp = null;
+  if (task) {
+    // FR-PROOF-01/02: the picture, taken now; FR-PROOF-03: the right house.
+    const verdict = canComplete(task, photo);
+    if (!verdict.ok) { toast(verdict.why, true); return; }
+    stamp = zoneConfirmations.get(task.id) || null;
+    const zoneVerdict = judgeZoneStart(task, stamp);
+    if (!zoneVerdict.ok) { toast(zoneVerdict.why, true); return; }
+  }
+
+  const records = trapCountRecords(state, {
+    zoneId, counts: read.counts, taskId: task ? task.id : null, note: data.note || '',
+  });
+  // On its own, the photo rides on the first count; on a task, on the task.
+  if (!task && photo && records[0]) records[0].photo = photo;
+  const batch = records.map((payload) => ({ type: 'scout.record', payload }));
+  if (task) {
+    const zone = state.plots[zoneId];
+    batch.push({
+      type: 'task.complete',
+      payload: {
+        id: task.id, photo, note: data.note || '', zoneCheck: stamp,
+        stamp: stampFor(photo, { zoneName: zone ? zone.name : null, personName: ctx.user.name, taskKind: task.kind }),
+      },
+    });
+  }
+  await ctx.store.dispatchMany(batch);
+  if (task) zoneConfirmations.delete(task.id);
+  resetPhoto();
+  closeSheet();
+  buzz();
+
+  // UX-20, FR-SCOUT-03: say so at once if the count opened an alert.
+  const over = overThreshold(ctx.state, records);
+  toast(over.length
+    ? `Over the threshold: ${over.map((o) => `${o.name} ${o.count} (limit ${o.limit})`).join(', ')}. `
+      + 'The Farm Manager has the alert now.'
+    : (getLang() === 'pcm' ? 'Count don save' : 'Count saved'), over.length > 0);
 }
 
 let pickingFor = null;

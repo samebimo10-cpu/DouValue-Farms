@@ -122,6 +122,31 @@ export function applyPhrase(el) {
 }
 
 /**
+ * A number entry with + and - beside it — UX-10.
+ *
+ * Small changes are a tap; a big number is still typed. Counting thrips on a
+ * trap is the former, counting aphids is the latter. The buttons are the
+ * shell's `step` action, so this works on any screen.
+ */
+export function numberField(name, value = '') {
+  return '<div class="stepper">'
+    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="-1">−</button>`
+    + `<input type="number" inputmode="numeric" name="${esc(name)}" value="${esc(value)}" `
+    + 'min="0" step="1" placeholder="—">'
+    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="1">+</button>`
+    + '</div>';
+}
+
+/** One tap on + or −: move the count, never below zero. */
+export function stepCount(el) {
+  const box = el.closest('.stepper');
+  const input = box && box.querySelector('input');
+  if (!input) return;
+  const next = (Number(input.value) || 0) + Number(el.dataset.by || 0);
+  input.value = String(Math.max(0, next));
+}
+
+/**
  * UX-21 — what you are about to commit to, before you commit to it.
  *
  * Shown before anything that spends money or puts chemical on a crop. The
