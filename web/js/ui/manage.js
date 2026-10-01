@@ -848,6 +848,10 @@ function openInputSheet(ctx) {
       'The Farm Manager is alerted at or below this. Leave it empty and the app warns when the '
       + 'rate it is being used says it runs out inside two weeks.')
     + field('What one unit costs', input('unitCost', { type: 'number', min: 0, step: '10' }))
+    // FR-STOCK-03/04: the date on the container. Past it, the item is not
+    // stock, and the spray screen and the farm server refuse it.
+    + field('Expiry date on the container', input('expiry', { type: 'date' }),
+      'If it has one. Once it has passed, this cannot be chosen for a spray.')
     + '<button class="btn-block btn-lg" type="submit">Save item</button></form>');
 }
 
@@ -861,6 +865,7 @@ async function saveInput(ctx, form) {
     qty: Number(data.qty) || 0, unitCost: Number(data.unitCost) || 0,
     reorderLevel: Number(data.reorderLevel) || null,
     activeId: data.activeId || null,
+    expiry: data.expiry || null,
   });
   closeSheet();
   toast('Added to the store');

@@ -260,7 +260,8 @@ test('FR-ROLE-13: a spray that skipped the block is caught on replay and on the 
   const later = reduce([...events, spray(at('15:30')), approve('u_mgr', at('16:00'))]);
   assert.equal(gateModel(later, 'gh1', { today: DAY, now: at('17:00') }).gates.find((g) => g.id === 'G3').conditions[0].state, 'fail');
 
-  const farm = memoryServer();
+  // The server holds the farm (its people, the zone, the crop), as it would.
+  const farm = memoryServer(base0());
   await farm.push('u_sup', events.slice(-2));
   const out = await farm.push('u_sup', [spray(at('15:30'))]);
   assert.equal(out.refused.length, 1);
@@ -498,8 +499,9 @@ test('the generated Deno servers carry the same §4.2 checks as server/core.mjs'
 
 // --- A farm server in memory ----------------------------------------------------
 
-function memoryServer() {
-  const events = [];
+/** `seed` is the farm the server already holds, stored before this test's pushes. */
+function memoryServer(seed = []) {
+  const events = [...seed];
   let farm = { id: 'f', name: 'Test farm' };
   const members = Object.values(PEOPLE).map((p) => ({ ...p, status: 'active' }));
   const s = {

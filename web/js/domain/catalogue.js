@@ -18,7 +18,7 @@
 // rule that refused it.
 
 import { can } from '../store.js';
-import { getRules, ref } from '../rules.js';
+import { DEFAULT_REI_HOURS, defaultPhiDays, getRules, ref } from '../rules.js';
 
 // --- Names and ids ---------------------------------------------------------
 
@@ -342,6 +342,48 @@ export function canUseActive(catalogue, activeId) {
     };
   }
   return { ok: true, active, rate };
+}
+
+/**
+ * FR-STOCK-07, FR-TREAT-02 — the waiting periods a spray carries, from the
+ * catalogue rather than from whatever the record says.
+ *
+ * The phone that logged the spray wrote `phiDays` and `reiHours` onto it, and
+ * the harvest block used to read those numbers back as given — so a record
+ * claiming a shorter wait than the product has would have opened the bed early
+ * on every phone, and on the farm server. Here the catalogue decides: the
+ * active's own waiting period, or the label's where a label is named and its
+ * entered figure is longer (normaliseLabel already holds that floor). A figure
+ * on the record is kept only where it is longer still.
+ *
+ * A product the catalogue does not know — a spray from before the catalogue —
+ * keeps what its record says, or the rules' synthetic defaults if it says
+ * nothing. A new spray of an unknown product never gets this far: the rotation
+ * gate refuses it.
+ */
+export function sprayIntervals(catalogue, spray = {}) {
+  const entered = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const phiOn = entered(spray.phiDays);
+  const reiOn = entered(spray.reiHours);
+  const active = catalogue ? resolveActive(catalogue, spray.activeId || spray.productId || spray.productName) : null;
+  if (!active) {
+    return {
+      known: false, activeId: null,
+      phiDays: phiOn ?? defaultPhiDays(catalogue && catalogue.rules),
+      reiHours: reiOn ?? DEFAULT_REI_HOURS,
+      source: phiOn != null ? 'the spray record' : ref('phi'),
+    };
+  }
+  const label = spray.labelId ? (catalogue.labels || []).find((l) => l.id === spray.labelId) : null;
+  const phi = Math.max(active.phiDays || 0, label ? label.phiDays || 0 : 0);
+  const rei = Math.max(active.reiHours || 0, label ? label.reiHours || 0 : 0);
+  return {
+    known: true,
+    activeId: active.id,
+    phiDays: Math.max(phi, phiOn ?? 0),
+    reiHours: Math.max(rei, reiOn ?? 0),
+    source: label && label.phiDays > (active.phiDays || 0) ? `farm record: label ${label.brand || label.id}` : active.phiSource,
+  };
 }
 
 /** What the spray screen may offer, in catalogue order. */

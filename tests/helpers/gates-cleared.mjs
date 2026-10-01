@@ -60,3 +60,26 @@ export function withGatesCleared(state, { zoneId, plantedOn, cycleId = null, soi
     },
   };
 }
+
+/**
+ * The Owner's overrides for every transplant condition still blocking `zoneId`
+ * — FR-GATE-07, the one lawful way past a gate without its evidence — as
+ * records to push to the farm server, which now judges a planting (FR-GATE-01
+ * to 03). For server fixtures whose subject is something other than the gates.
+ * `events` is the log the zone is judged on; `except` leaves those conditions
+ * to the evidence the caller supplies.
+ */
+export async function ownerOverrides(events, zoneId, { today, at, except = [] }) {
+  const base = new URL('../../web/js/', import.meta.url);
+  const { reduce } = await import(new URL('store.js', base).href);
+  const { loadRules } = await import(new URL('rules.js', base).href);
+  const { canPlant } = await import(new URL('domain/gates.js', base).href);
+  await loadRules();
+  return canPlant(reduce(events), zoneId, { today }).blocking
+    .filter((c) => !except.includes(c.id))
+    .map((c) => ({
+      id: `ov_${zoneId}_${c.id}`, type: 'gate.override', at,
+      payload: { id: `ov_${zoneId}_${c.id}`, gate: c.id, zoneId,
+        reason: 'Test fixture: this zone is not what the test is about' },
+    }));
+}

@@ -32,7 +32,7 @@
 
 import { addDays, daysBetween, isoDate } from '../util.js';
 import { peekRules } from '../rules.js';
-import { buildCatalogue, parseGroup, resolveActive } from './catalogue.js';
+import { buildCatalogue, parseGroup, resolveActive, sprayIntervals } from './catalogue.js';
 import { harvestClearance, reentryClearance } from './safety.js';
 import { tasksFor } from './schedule.js';
 
@@ -131,8 +131,16 @@ export function backfilledSprays(state, cycleId = null, opts = {}) {
  * backfilled ones. FR-ONB-04.
  */
 export function sprayHistory(state, cycleId, opts = {}) {
-  const live = ((state && state.sprays) || []).filter((s) => s.cycleId === cycleId);
-  return [...live, ...backfilledSprays(state, cycleId, opts)];
+  const catalogue = catalogueFor(state, opts);
+  // FR-STOCK-07, FR-TREAT-02: the waiting periods come from the catalogue; a
+  // live record's own figures only ever lengthen them (sprayIntervals).
+  const live = ((state && state.sprays) || []).filter((s) => s.cycleId === cycleId)
+    .map((s) => {
+      if (!catalogue) return s;
+      const { phiDays, reiHours } = sprayIntervals(catalogue, s);
+      return { ...s, phiDays, reiHours };
+    });
+  return [...live, ...backfilledSprays(state, cycleId, { ...opts, catalogue })];
 }
 
 /** The latest "none" statement of this kind for a cycle (or zone). */

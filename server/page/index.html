@@ -75,6 +75,11 @@ is never sent wages or sales. It is free and takes about five minutes.</p>
   </ul>
   <p>Leave the repository name as it suggests, then deploy. The folder holds one
   file and that file is the whole server, so there is nothing else to set.</p>
+  <p><small>When it starts, the server reads the farm's rule book from this site
+  (<code>rules/douvalue_rules_rev5_1.json</code>) and checks the gates, the spray
+  waiting periods and the proof photos against it, the same way the phones do. To
+  read it from somewhere else, set <code>RULES_URL</code> under the deployment's
+  environment variables.</small></p>
   <p><small>This makes a small copy of the server in your own GitHub account.
   That copy stays as it is: if the server is ever improved, you would deploy
   again to pick it up. If you would rather it tracked the original, use the

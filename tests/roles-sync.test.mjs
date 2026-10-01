@@ -14,6 +14,7 @@ import { join as pathJoin } from 'node:path';
 const base = new URL('../web/js/', import.meta.url);
 const store = await import(new URL('store.js', base).href);
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
+const { ownerOverrides } = await import(new URL('./helpers/gates-cleared.mjs', import.meta.url).href);
 
 globalThis.btoa ??= (s) => Buffer.from(s, 'binary').toString('base64');
 globalThis.atob ??= (s) => Buffer.from(s, 'base64').toString('binary');
@@ -290,13 +291,19 @@ test('a manager cannot invite another manager', async () => {
 });
 
 test('the CEO files records of every kind', async () => {
+  const plot = { id: 'e_plot', type: 'plot.upsert', at: '2026-01-02T08:00:00Z',
+    payload: { id: 'b1', name: 'Bed 1', areaM2: 800 } };
+  // The server judges a planting against the gates now (FR-GATE-01 to 03).
+  // This test is about who may file what, so the Owner overrides them —
+  // FR-GATE-07, and itself a record only the CEO may file.
+  const overrides = await ownerOverrides([{ ...plot, by: 'x' }], 'b1', { today: '2026-05-01', at: '2026-04-30T08:00:00Z' });
   const events = [
     { id: 'e_person', type: 'person.upsert', at: '2026-01-01T08:00:00Z',
       payload: { id: handId, name: 'Emeka Okoro', role: 'hand', dailyRate: 3500, phone: '08030000004' } },
     { id: 'e_settings', type: 'settings.update', at: '2026-01-01T08:01:00Z',
       payload: { crateKg: 12, prices: { habanero: 2600 }, defaultDailyWage: 3500 } },
-    { id: 'e_plot', type: 'plot.upsert', at: '2026-01-02T08:00:00Z',
-      payload: { id: 'b1', name: 'Bed 1', areaM2: 800 } },
+    plot,
+    ...overrides,
     { id: 'e_cycle', type: 'cycle.start', at: '2026-05-01T08:00:00Z',
       payload: { id: 'c1', plotId: 'b1', cropId: 'habanero', transplantDate: '2026-05-01', plants: 1200 } },
     { id: 'e_sale', type: 'sale.record', at: '2026-09-01T08:00:00Z',
@@ -306,8 +313,9 @@ test('the CEO files records of every kind', async () => {
   ];
   const pushed = await call(`/api/farms/${FARM}/events`, { method: 'POST', token: ceoToken, body: { events } });
   assert.equal(pushed.status, 200);
-  assert.equal(pushed.body.accepted, 6);
   assert.deepEqual(pushed.body.refused, []);
+  assert.ok(overrides.length > 0, 'the bare bed is blocked until overridden');
+  assert.equal(pushed.body.accepted, 6 + overrides.length);
 });
 
 test("the hand's own token cannot pull the money out of the server", async () => {

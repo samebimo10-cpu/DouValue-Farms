@@ -114,6 +114,49 @@ export function stampFor(photo, { zoneName, personName, taskKind, at = new Date(
   };
 }
 
+/** FR-PROOF-02 — how long after the shutter a photo still counts as taken now. */
+export const FRESH_PHOTO_MINUTES = 5;
+
+/**
+ * May this completion close this task? — FR-PROOF-01, FR-PROOF-02, FR-PROOF-03.
+ *
+ * The whole proof rule in one place, for the record as it travels: the photo
+ * is there, small enough, taken now rather than pulled from the gallery — by
+ * the phone's own flag and by its own two timestamps, which have to agree —
+ * and stamped with date, time, zone and person; and a zone scanned at the
+ * start is the task's zone. The phone builds a completion that passes it, and
+ * the farm server refuses one that does not, so a phone that skipped the
+ * screen cannot close a scouting round or a trap check on its word.
+ */
+export function proofCheck(task, payload = {}) {
+  if (!task || !PROOF_REQUIRED.has(task.kind)) return { ok: true };
+  const photo = (payload && payload.photo) || null;
+  const verdict = canComplete(task, photo);
+  if (!verdict.ok) return { ok: false, reason: verdict.reason, why: verdict.why, fix: verdict.fix, rule: 'FR-PROOF-01' };
+  if (!String(photo.dataUrl).startsWith('data:image/')) {
+    return { ok: false, reason: 'not-a-photo', why: 'What came with this task is not a picture.', fix: verdict.fix || 'Take the photo in the app.', rule: 'FR-PROOF-01' };
+  }
+
+  const live = { ok: false, reason: 'stale', rule: 'FR-PROOF-02',
+    why: 'That picture was not taken just now, so it came out of the gallery.',
+    fix: 'Take a new one at the bed, in the app. A photo from earlier proves the bed was fine earlier.' };
+  if (photo.ageMinutes != null && Number(photo.ageMinutes) > FRESH_PHOTO_MINUTES) return live;
+  const taken = Date.parse(photo.takenAt || '');
+  const attached = Date.parse(photo.attachedAt || '');
+  if (Number.isFinite(taken) && Number.isFinite(attached) && attached - taken > FRESH_PHOTO_MINUTES * 60000) return live;
+
+  const stamp = (payload && payload.stamp) || {};
+  if (!(stamp.takenAt || stamp.attachedAt) || !stamp.person || (task.zoneId && !stamp.zone)) {
+    return { ok: false, reason: 'unstamped', rule: 'FR-PROOF-02',
+      why: 'The photo is not stamped with the date, time, zone and person.',
+      fix: 'Take it from the task in the app, which stamps it.' };
+  }
+
+  const zone = judgeZoneStart(task, (payload && payload.zoneCheck) || null);
+  if (!zone.ok) return { ok: false, reason: zone.reason, why: zone.why, fix: zone.fix, rule: 'FR-PROOF-03' };
+  return { ok: true, unverifiedTime: verdict.unverifiedTime };
+}
+
 // --- Which house are you actually standing in? — FR-PROOF-03, UX-12 --------
 //
 // The photo proves the work happened. It does not prove where. A trap

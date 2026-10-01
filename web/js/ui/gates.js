@@ -19,7 +19,7 @@ import {
 import { can } from '../store.js';
 import { peekRules } from '../rules.js';
 import {
-  canPlant, fillCheck, gateBoard, gateModel, GATE_RULES, GATE_STATE, isBlocking,
+  batchTested, canAssignBatch, canPlant, fillCheck, gateBoard, gateModel, GATE_RULES, GATE_STATE, isBlocking,
 } from '../domain/gates.js';
 import {
   batchName, batchTrace, batchFailure, bagRules, isBagZone, MEDIA_SOURCES, traceText,
@@ -80,6 +80,8 @@ export const gatesView = {
       openTopsoil(ctx, watched);
     },
     'save-topsoil': saveTopsoil,
+    'open-topsoil-assign': (ctx, el) => openTopsoilAssign(ctx, el.dataset.id),
+    'save-topsoil-assign': saveTopsoilAssign,
 
     // C-19: plant-bag media — a batch, its fills batch → bags → zone, and what
     // happens to it afterwards. Recording any of it is gate evidence (UX-27).
@@ -372,11 +374,19 @@ function evidence(ctx, zoneId) {
     + (batches.length
       ? '<p style="margin-top:12px"><small><b>Topsoil batches</b></small></p><ul class="list">'
         + batches.map((b) => {
-          const clean = (ctx.state.soilTests || []).some((t) => t.batchId === b.id && t.nematode === 'clean');
+          const tested = batchTested(ctx.state, b.id);
+          const into = Object.values(ctx.state.plots || {}).find((z) => z.topsoilBatchId === b.id);
+          const meant = b.forZoneId && ctx.state.plots[b.forZoneId];
           return '<li><div class="grow">'
             + `<b>${esc(b.supplier || 'Supplier not named')}</b>`
-            + `<small>${esc(friendlyDate(b.date))}</small></div>`
-            + badge(clean ? 'tested clean' : 'untested', clean ? 'ok' : 'danger') + '</li>';
+            + `<small>${esc(friendlyDate(b.date))}</small>`
+            + (into ? `<small>In ${esc(into.name)}</small>`
+              : tested.ok
+                ? `<div style="margin-top:6px">${button(meant ? `Put it into ${meant.name}` : 'Put it into a zone',
+                  'open-topsoil-assign', { cls: 'btn-sm', data: { id: b.id } })}</div>`
+                : `<small>${esc(tested.why)}${meant ? ` It goes into ${esc(meant.name)} once it tests clean.` : ''}</small>`)
+            + '</div>'
+            + badge(tested.ok ? 'tested clean' : 'untested', tested.ok ? 'ok' : 'danger') + '</li>';
         }).join('') + '</ul>'
       : ''),
   );
@@ -479,23 +489,51 @@ function openTopsoil(ctx, watched = null) {
     + field('Supplier', input('supplier', { required: true, placeholder: 'Who it came from' }))
     + field('Date delivered', input('date', { type: 'date', value: isoDate(), required: true }))
     + field('How much', input('quantity', { placeholder: 'e.g. 2 tipper loads' }))
-    + field('Which zone is it going into?', select('zoneId',
+    + field('Which zone is it for?', select('zoneId',
       Object.values(ctx.state.plots || {}).filter((z) => !isNursery(z)).map((z) => ({ value: z.id, label: z.name })),
-      '', { placeholder: 'Not assigned yet' }),
-      'You can leave this blank. Assigning it makes that zone depend on this batch passing its test.')
+      '', { placeholder: 'Not decided yet' }),
+      'It goes into that zone only once it has tested clean (FR-GATE-03). Until then it stays a batch, marked red.')
     + '<button class="btn-block btn-lg" type="submit">Save the delivery</button>'
     + '</form>');
+}
+
+/** FR-GATE-03 — a tested batch goes into a zone. Refused, with the reason, if it is not. */
+function openTopsoilAssign(ctx, batchId) {
+  const batch = (ctx.state.topsoilBatches || {})[batchId];
+  if (!batch) return;
+  openSheet(`<h2>Put the topsoil into a zone</h2>`
+    + `<p><small>${esc(batch.supplier || 'Supplier not named')}, delivered ${esc(friendlyDate(batch.date))}.</small></p>`
+    + '<form data-act="save-topsoil-assign">'
+    + `<input type="hidden" name="batchId" value="${esc(batchId)}">`
+    + field('Which zone?', select('zoneId',
+      Object.values(ctx.state.plots || {}).filter((z) => !z.retired && !isNursery(z)).map((z) => ({ value: z.id, label: z.name })),
+      batch.forZoneId || '', { required: true, placeholder: 'Choose the zone' }))
+    + '<button class="btn-block btn-lg" type="submit">It is in</button></form>');
+}
+
+async function saveTopsoilAssign(ctx, form) {
+  const data = readForm(form);
+  const verdict = canAssignBatch(ctx.state, data.batchId, data.zoneId, { today: isoDate() });
+  if (!verdict.ok) {
+    openSheet('<h2>Not this batch, not yet</h2>' + note('danger', verdict.why, `<small>${esc(verdict.fix || '')}</small>`));
+    return;
+  }
+  await ctx.store.dispatch('topsoil.assign', { zoneId: data.zoneId, batchId: data.batchId });
+  closeSheet();
+  toast(`Topsoil recorded in ${verdict.zone.name}`);
 }
 
 async function saveTopsoil(ctx, form) {
   const data = readForm(form);
   const id = uid('ts');
+  // FR-GATE-03: an untested batch is never assigned to a zone. The zone it
+  // is for is kept on the delivery; it is put in from the batch list once the
+  // batch has a clean result from a named lab.
   await ctx.store.dispatch('topsoil.receive', {
     id, supplier: data.supplier, date: data.date || isoDate(),
-    quantity: data.quantity || '', supervision: supervisionStamp(gateWatch),
+    quantity: data.quantity || '', forZoneId: data.zoneId || null, supervision: supervisionStamp(gateWatch),
     enteredAt: new Date().toISOString(),
   });
-  if (data.zoneId) await ctx.store.dispatch('topsoil.assign', { zoneId: data.zoneId, batchId: id });
   closeSheet();
   toast(data.zoneId ? 'Delivery logged and assigned. Test it before planting.' : 'Delivery logged');
 }

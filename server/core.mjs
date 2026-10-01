@@ -22,6 +22,9 @@
 //   * Events are stamped with the authenticated author, so nobody can file work
 //     under someone else's name.
 
+import { JUDGED, judgeRecord, judgingLog } from './judge.mjs';
+import { loadRules, peekRules, rulesLoaded, setRules } from '../web/js/rules.js';
+
 // --- Roles ----------------------------------------------------------------
 // Mirrors web/js/store.js. The app's copy shapes the screens; this copy decides.
 
@@ -433,14 +436,21 @@ export function foldFact(facts, e) {
   }
 }
 
-export async function logFacts(farmId, store) {
-  const facts = emptyFacts();
+/** Every record the server holds for a farm, oldest first. */
+export async function storedEvents(farmId, store) {
+  const out = [];
   for (let since = 0; ;) {
     const page = await store.listEvents(farmId, since, MAX_PULL);
-    for (const e of page.events) foldFact(facts, e);
+    out.push(...page.events);
     if (!page.more || page.cursor <= since) break;
     since = page.cursor;
   }
+  return out;
+}
+
+export async function logFacts(farmId, store, events = null) {
+  const facts = emptyFacts();
+  for (const e of events || await storedEvents(farmId, store)) foldFact(facts, e);
   return facts;
 }
 
@@ -1437,44 +1447,131 @@ export async function writeEvents(farmId, body, me, store) {
   if (incoming.length > MAX_PUSH) return json({ error: 'Too many records in one push' }, 413);
 
   const allowed = [];
+  // Each refusal says which record, what kind, why, and what to do: the phone
+  // shows it to the person who made the record (it used to be dropped there
+  // with a console warning, which is to say nobody was told).
   const refused = [];
-  // §4.2: read the log once, and only when a record in this push needs it.
+  // Records the server could not judge yet — no rule book loaded. Not stored
+  // and not refused: the phone keeps them and sends them again.
+  const held = [];
+  // §4.2 and the gates: read the log once, and only when a record needs it.
+  let log = null;
   let facts = null;
   let members = null;
+  let judging = null;
+  let rules;
+  const readLog = async () => (log ||= await storedEvents(farmId, store));
+  const refuse = (event, why, extra = {}) => refused.push({ id: event.id, type: event.type, why, ...extra });
+
   for (const event of incoming) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
       refused.push({ id: event && event.id, why: 'Malformed record' });
       continue;
     }
     const verdict = mayWrite(event, me);
-    if (!verdict.ok) { refused.push({ id: event.id, why: verdict.why }); continue; }
+    if (!verdict.ok) { refuse(event, verdict.why); continue; }
 
     // Account records need the target's standing on the server, not the claim
     // in the record, so this check cannot be folded into the table above.
     const overPerson = await mayWritePerson(event, me, farmId, store);
-    if (!overPerson.ok) { refused.push({ id: event.id, why: overPerson.why }); continue; }
+    if (!overPerson.ok) { refuse(event, overPerson.why); continue; }
     // Likewise a confirmation, an approval or a spray (FR-ROLE-12/13): who
     // may do it depends on who raised and confirmed, and who is in.
     if (needsLog(event)) {
       if (!facts) {
-        facts = await logFacts(farmId, store);
+        facts = await logFacts(farmId, store, await readLog());
         for (const earlier of allowed) foldFact(facts, earlier);
         members = await store.listMembers(farmId);
       }
       const fromLog = await mayWriteFromLog(event, me, facts, members);
-      if (!fromLog.ok) { refused.push({ id: event.id, why: fromLog.why }); continue; }
+      if (!fromLog.ok) { refuse(event, fromLog.why, { rule: 'FR-ROLE-12/13' }); continue; }
     }
     // Authorship is the server's to decide, never the client's claim.
-    const stamped = { ...event, by: me.id, serverAt: new Date().toISOString() };
+    let stamped = { ...event, by: me.id, serverAt: new Date().toISOString() };
+
+    // FR-GATE-01 to 05, FR-TREAT-02, FR-PROOF-01/02, FR-STOCK-04/07/08 and the
+    // Week 10 rule, judged by the app's own code against the farm as this
+    // server holds it (judge.mjs). A record already stored is a repeat send
+    // and is skipped below, not judged twice.
+    if (JUDGED.has(event.type)) {
+      if (rules === undefined) rules = await serverRules();
+      if (!rules) {
+        held.push({ id: event.id, type: event.type,
+          why: 'The farm server cannot read its rule book just now, so it cannot check this record yet. '
+            + 'It stays on this phone and is sent again.' });
+        continue;
+      }
+      if (!judging) {
+        judging = judgingLog(await readLog());
+        for (const earlier of allowed) judging.add(earlier);
+      }
+      if (!judging.has(event.id)) {
+        const judged = judgeRecord(stamped, judging.state(), { rules });
+        if (!judged.ok) { refuse(event, judged.why, { fix: judged.fix, rule: judged.rule }); continue; }
+        if (judged.payload) stamped = { ...stamped, payload: judged.payload };
+      }
+    }
+
     allowed.push(stamped);
     if (facts) foldFact(facts, stamped);
+    if (judging) judging.add(stamped);
   }
 
   const stored = await store.appendEvents(farmId, allowed);
   return json({
-    accepted: stored.accepted, skipped: stored.skipped, refused,
+    accepted: stored.accepted, skipped: stored.skipped, refused, held,
     total: await store.countEvents(farmId), cursor: stored.cursor,
   });
+}
+
+// --- The rule book -----------------------------------------------------------
+//
+// rules/douvalue_rules_rev5_1.json, loaded — never copied (CLAUDE.md). The
+// node server reads it off disk beside the repository; the Deno server reads
+// it from beside its own file, from RULES_URL if one is set, or from the copy
+// the farm's site publishes (scripts-build-deno.mjs adds those addresses).
+// Until it has one, the records the gates judge are held, not waved through.
+
+const RULES_RETRY_MS = 60_000;
+const rulesPlaces = [];
+let rulesTriedAt = 0;
+let rulesRetryMs = RULES_RETRY_MS;
+let rulesLoader = null;
+
+/** Where else to look for the rules, in order. Runtimes call this at boot. */
+export function rulesFrom(...urls) {
+  for (const url of urls) if (url && !rulesPlaces.includes(String(url))) rulesPlaces.push(String(url));
+}
+
+/** Tests replace the loader and the retry pause; nothing else should. */
+export function configureRules({ loader = rulesLoader, retryMs = rulesRetryMs } = {}) {
+  rulesLoader = loader;
+  rulesRetryMs = retryMs;
+  rulesTriedAt = 0;
+}
+
+async function defaultRulesLoader() {
+  try { return await loadRules(); } catch { /* not on disk beside this server */ }
+  for (const url of rulesPlaces) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.json();
+    } catch { /* the next address */ }
+  }
+  return null;
+}
+
+/** The rules, loading them if they are not loaded yet; null if they cannot be had. */
+export async function serverRules() {
+  if (rulesLoaded()) return peekRules();
+  const now = Date.now();
+  if (rulesTriedAt && now - rulesTriedAt < rulesRetryMs) return null;
+  rulesTriedAt = now;
+  try {
+    const doc = await (rulesLoader || defaultRulesLoader)();
+    if (doc) return rulesLoaded() ? peekRules() : setRules(doc);
+  } catch { /* a rule book that does not parse is no rule book */ }
+  return null;
 }
 
 // --- The wider adviser ----------------------------------------------------
