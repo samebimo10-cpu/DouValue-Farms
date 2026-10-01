@@ -28,28 +28,28 @@
 export const ROLES = {
   hand: {
     rank: 10,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide'],
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps'],
   },
   supervisor: {
     rank: 50,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'guideDiagnosis', 'viewTreatment'],
   },
   agronomist: {
     rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
+    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
       'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
   },
   manager: {
     rank: 80,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis', 'viewTreatment'],
   },
   ceo: {
     rank: 100,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
       'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
@@ -90,7 +90,11 @@ export const EVENT_POLICY = {
   // backfilled entry, because the rotation and the PHI read them.
   'cycle.onboard':     { write: 'settings',      read: ANY, guard: guardOnboard },
   'backfill.record':   { write: 'settings',      read: ANY, guard: guardBackfill },
-  'task.create':       { write: 'assignTasks',   read: ANY },
+  // FR-TASK-01, FR-ROLE-05: every role's phone generates the day's schedule
+  // when it opens, so anyone may file a generated task — but only in the exact
+  // shape the generator makes. Writing a task of your own (FR-TASK-04) is
+  // still `assignTasks`; guardTaskCreate holds that line.
+  'task.create':       { write: 'viewOwnTasks',  read: ANY, guard: guardTaskCreate },
   'task.update':       { write: 'assignTasks',   read: ANY },
   'task.complete':     { write: 'viewOwnTasks',  read: ANY },
   'task.cancel':       { write: 'assignTasks',   read: ANY },
@@ -100,7 +104,10 @@ export const EVENT_POLICY = {
   'harvest.record':    { write: 'logHarvest',    read: ANY },
   'harvest.verify':    { write: 'verifyHarvest', read: ANY },
   'spray.record':      { write: 'logSpray',      read: ANY },
-  'scout.record':      { write: 'scout',         read: ANY },
+  // FR-SCOUT-01/03, FR-FARM-04: every role counts the sticky traps, a hand
+  // included, and that count opens an alert. Anything more than a trap count
+  // — per-plant counts, findings, a scouting round — is `scout` (guardScout).
+  'scout.record':      { write: 'countTraps',    read: ANY, guard: guardScout },
   // FR-DIAG-03/07: the guided diagnosis is the Field Supervisor's and the
   // Farm Manager's. A hand's phone that has been patched to open it still
   // cannot file what it produced.
@@ -745,9 +752,75 @@ async function authenticate(farmId, req, store) {
  */
 function guardNoTreat(event) {
   const p = event.payload || {};
-  if (!p.cycleId || !p.pestId) return { ok: false, why: 'Say which zone and which pest' };
+  // The crop, or — in the nursery, which has none — the zone (FR-FARM-04).
+  if ((!p.cycleId && !p.zoneId) || !p.pestId) return { ok: false, why: 'Say which zone and which pest' };
   if (String(p.reason || '').trim().length < 10) {
     return { ok: false, why: 'Say why no treatment is needed — a sentence someone can check later' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-SCOUT-01 — a count is a number, and a hand's record is a trap count.
+ *
+ * The Greenhouse Hands count the traps — the nursery's every morning, each
+ * crop's every week — and that number is what the thresholds read, so it has to
+ * reach the board from a hand's phone. What a hand files is the trap count and
+ * nothing else: the pest, the zone (the nursery has no crop), a whole number
+ * from zero up, and the task it closed. A per-plant count, a finding or a borer
+ * count is a scouting round, and that is the Field Supervisor's.
+ */
+const HAND_TRAP_FIELDS = new Set([
+  'id', 'kind', 'zoneId', 'cycleId', 'pestId', 'trapCount', 'note', 'taskId', 'date', 'enteredAt', 'photo',
+]);
+function guardScout(event, author) {
+  const p = event.payload || {};
+  for (const k of ['trapCount', 'perPlant', 'plantsAffected']) {
+    if (p[k] != null && !(Number.isFinite(Number(p[k])) && Number(p[k]) >= 0)) {
+      return { ok: false, why: 'A count is a number, 0 or more' };
+    }
+  }
+  if (can(author.role, 'scout')) return { ok: true };
+  const notTrap = { ok: false, why: 'A Greenhouse Hand records trap counts; a scouting round is the Field Supervisor\'s' };
+  if (p.kind !== 'trap') return notTrap;
+  if (Object.keys(p).some((k) => !HAND_TRAP_FIELDS.has(k))) return notTrap;
+  if (!p.pestId || !p.zoneId) return { ok: false, why: 'Say which zone and which pest the trap count is for' };
+  if (!Number.isInteger(p.trapCount) || p.trapCount < 0) {
+    return { ok: false, why: 'A trap count is a whole number, 0 or more' };
+  }
+  return { ok: true };
+}
+
+/**
+ * FR-TASK-01 — what a generated task looks like, and nothing else.
+ *
+ * The daily schedule is generated on whichever phone opens first, which may be
+ * a Greenhouse Hand's. A hand may not hand out work, so what a hand's phone
+ * files has to be the generator's output and only that: a known kind, the id
+ * the generator derives from the day, the zone and the kind (or from the spray,
+ * for the three-day check), an event id derived from that, and nobody named.
+ * Any other task is the Farm Manager's or a supervisor's to write.
+ *
+ * The kinds are repeated from web/js/domain/schedule.js, nursery.js and
+ * doctor.js because the server does not import the app;
+ * tests/generate-any-role.test.mjs fails if they drift.
+ */
+export const GENERATED_TASK_KINDS = [
+  'scout', 'trap', 'irrigate', 'fertigate', 'prune', 'harvest', 'sanitation',
+  'nursery_trap', 'seedling_check', 'follow_up',
+];
+function guardTaskCreate(event, author) {
+  if (can(author.role, 'assignTasks')) return { ok: true };
+  const p = event.payload || {};
+  const refuse = { ok: false, why: 'Only the Farm Manager or a supervisor writes a task; your phone may only add the day\'s scheduled work' };
+  if (p.generated !== true || !GENERATED_TASK_KINDS.includes(p.kind) || typeof p.id !== 'string') return refuse;
+  if (event.id !== `ev_${p.id}`) return refuse;
+  if (p.assignedTo || p.personId) return refuse;
+  if (p.kind === 'follow_up') {
+    if (!p.sprayId || p.id !== `fd_follow_${p.sprayId}`) return refuse;
+  } else {
+    const day = String(p.due || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !p.zoneId || p.id !== `gen_${day}_${p.zoneId}_${p.kind}`) return refuse;
   }
   return { ok: true };
 }

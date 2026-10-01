@@ -17,7 +17,7 @@ import { isNursery } from '../domain/farm.js';
 import { batchList } from '../domain/nursery.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
-import { confirmSummary, phraseChips } from './field-kit.js';
+import { confirmSummary, numberField, phraseChips } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -37,21 +37,6 @@ import { getLang } from '../i18n.js';
 const COUNTED_PESTS = Object.keys(DEFAULT_THRESHOLDS)
   .map((id) => ({ value: id, label: (PROBLEM_BY_ID[id] || {}).name || id }))
   .sort((a, b) => a.label.localeCompare(b.label));
-
-/**
- * A number entry with + and - beside it — UX-10.
- *
- * Small changes are a tap; a big number is still typed. Counting thrips on a
- * trap is the former, counting aphids is the latter.
- */
-function numberField(name, value = '') {
-  return '<div class="stepper">'
-    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="-1">−</button>`
-    + `<input type="number" inputmode="numeric" name="${esc(name)}" value="${esc(value)}" `
-    + 'min="0" step="1" placeholder="—">'
-    + `<button type="button" class="step" data-act="step" data-name="${esc(name)}" data-by="1">+</button>`
-    + '</div>';
-}
 
 function calibrationFor(state) { return calibrate(closedCycles(state).map((c) => ({ ...c, plants: c.plants }))); }
 
@@ -149,14 +134,8 @@ export const fieldView = {
     'save-plot': (ctx, form) => savePlot(ctx, form),
     'save-cycle': (ctx, form) => saveCycle(ctx, form),
     'open-scout': (ctx, el) => openScoutSheet(ctx, el.dataset.id),
-    // UX-10: + and - move the count without opening the keypad.
-    step: (ctx, el) => {
-      const box = el.closest('.stepper');
-      const field = box && box.querySelector('input');
-      if (!field) return;
-      const next = (Number(field.value) || 0) + Number(el.dataset.by || 0);
-      field.value = String(Math.max(0, next));
-    },
+    // UX-10: + and - are a shell action (field-kit.js stepCount), so the
+    // hand's trap count on My work has them too.
     'save-scout': (ctx, form) => saveScout(ctx, form),
     // UX-27: until the field trial is signed off, a spray is not logged by
     // somebody on their own.

@@ -141,6 +141,14 @@ report a problem with a photo, and log the hours they worked. Large buttons, alm
 typing, and a **Pidgin** toggle in the header, because an app only the manager can read
 becomes an app only the manager uses.
 
+The hands count the sticky traps — each crop's every week, the nursery's every morning —
+and the count is a number per pest, with + and − beside it (thrips and whitefly every
+time; zero is a count, a blank is not). It is a scouting record like a supervisor's, so a
+count over its threshold opens an alert with the Farm Manager on the spot, the nursery's
+included (`FR-SCOUT-01/03`, `FR-FARM-04`). The farm server takes trap counts from a hand
+and nothing more: a full scouting round is still the supervisor's. The day's tasks are
+generated on whichever phone opens first, a hand's included (`FR-TASK-01`).
+
 ### Supervisor — *Field*
 Every bed with its crop, its stage, how many days since transplant, what it has given and
 what is still to come. Start a cycle, scout a bed, log a spray, feed the crop on schedule.
@@ -570,6 +578,9 @@ backup file*, weekly.
 
 ## About the PIN
 
+A PIN is 4 to 12 digits. The sign-in pad takes all of them and signs in on ✓ — it never
+submits on its own at four (`UX-01`).
+
 On a **connected** farm the PIN unlocks one enrolled phone, and the account behind it is
 real: the server decides what that person may read and write, and their phone is never
 sent anything else. The PIN is not what protects the data; the enrolment is. That is why a
@@ -610,6 +621,7 @@ DouValue-Farms/
 │  ├─ css/app.css
 │  └─ js/
 │     ├─ app.js          boot and routing table
+│     ├─ generate.js     the day's tasks, generated on any role's phone at open and sign-in
 │     ├─ sync.js         outbox, push/pull, backoff, invites and enrolment
 │     ├─ store.js        event log → farm state, roles, selectors
 │     ├─ db.js           IndexedDB log, merge, export/import, photo compression
@@ -633,6 +645,7 @@ DouValue-Farms/
 │     │  ├─ proof.js     what makes a photo evidence, and the zone confirmed at the start
 │     │  ├─ shift.js     end-of-shift reports and the farm manager's board
 │     │  ├─ stock.js     low stock, addressed to the Farm Manager
+│     │  ├─ traps.js     the sticky-trap count as numbers, from any role, nursery included
 │     │  ├─ supervision.js  supervised spray and gate screens until the trial is signed off
 │     │  ├─ gates.js     Gate 0 to Gate 4 and the GH-04/05 clean restart, per zone, from the rules
 │     │  ├─ nursery.js   seedling batches, the release check, the nursery's own tasks
@@ -668,6 +681,13 @@ npm test
 
 npm run test:clock   # the same suite, with the clock 1, 60 and 400 days ahead
 ```
+
+`tests/offline-site.test.mjs` builds the site the way GitHub Pages publishes it
+(`scripts/assemble_site.sh`), serves it under `/DouValue-Farms/`, installs the service
+worker in a real headless Chrome, stops the server and reopens the app. It drives Chrome
+over the DevTools protocol with Node's own WebSocket, so it needs no install: it finds
+Chrome on the PATH (GitHub's runners have it) or at `$CHROME_PATH`, and skips locally if
+there is none — on CI a missing browser fails it.
 
 `test:clock` is the one worth explaining. Several screens take no date — the end-of-shift
 board, the KPI screen, the trend chart are all about *now*, so they read the clock

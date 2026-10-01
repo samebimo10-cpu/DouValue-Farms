@@ -50,12 +50,13 @@ export const alertsView = {
 
   actions: {
     'alert-ack': async (ctx, el) => {
+      // The crop, or in the nursery the zone: whichever the alert is about.
       await ctx.store.dispatch('alert.ack', {
-        id: uid('ak'), cycleId: el.dataset.cycle, pestId: el.dataset.pest,
+        id: uid('ak'), cycleId: el.dataset.cycle || null, zoneId: el.dataset.zone || null, pestId: el.dataset.pest,
       });
       toast('Marked as picked up. It still counts against the 24 hours.');
     },
-    'alert-notreat': (ctx, el) => openNoTreat(ctx, el.dataset.cycle, el.dataset.pest, el.dataset.name),
+    'alert-notreat': (ctx, el) => openNoTreat(ctx, el.dataset.cycle, el.dataset.pest, el.dataset.name, el.dataset.zone),
     'save-notreat': saveNoTreat,
   },
 };
@@ -98,13 +99,13 @@ function openCard(ctx, a) {
       : '')
     + '<div class="row wrap" style="margin-top:10px">'
     + (a.ack ? '' : button('I am on it', 'alert-ack',
-      { icon: '👍', data: { cycle: a.cycleId, pest: a.pestId } }))
+      { icon: '👍', data: { cycle: a.cycleId || '', zone: a.zoneId || '', pest: a.pestId } }))
     + (can(ctx.user, 'guideDiagnosis')
       ? button('Diagnose it', 'go', { cls: 'btn-ghost', icon: '🔍', data: { to: '#/diagnose' } })
       : '')
     + (can(ctx.user, 'assignTasks')
       ? button('No treatment needed', 'alert-notreat', {
-        cls: 'btn-ghost', data: { cycle: a.cycleId, pest: a.pestId, name: a.pestName },
+        cls: 'btn-ghost', data: { cycle: a.cycleId || '', zone: a.zoneId || '', pest: a.pestId, name: a.pestName },
       })
       : '')
     + '</div>'
@@ -228,14 +229,15 @@ function closedBlock(closed) {
   )}`;
 }
 
-function openNoTreat(ctx, cycleId, pestId, pestName) {
+function openNoTreat(ctx, cycleId, pestId, pestName, zoneId = '') {
   openSheet(`<h2>No treatment for ${esc(pestName || 'this')}?</h2>`
     + note('warn', 'This closes the alert',
       '<small>It is a decision on the record with your name on it, not a way of clearing the '
       + 'screen. Say what makes it safe to leave — a year from now that sentence is the only '
       + 'thing anyone will have.</small>')
     + '<form data-act="save-notreat">'
-    + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
+    + `<input type="hidden" name="cycleId" value="${esc(cycleId || '')}">`
+    + `<input type="hidden" name="zoneId" value="${esc(zoneId || '')}">`
     + `<input type="hidden" name="pestId" value="${esc(pestId)}">`
     + field('Why is no treatment needed?',
       textarea('reason', { rows: 3, placeholder: 'e.g. Predatory mites released Monday, giving '
@@ -252,7 +254,7 @@ async function saveNoTreat(ctx, form) {
   if (reason.length < 10) { toast('Say why, in a sentence someone can check later', true); return; }
 
   await ctx.store.dispatch('alert.decide', {
-    id: uid('ad'), cycleId: data.cycleId, pestId: data.pestId, reason,
+    id: uid('ad'), cycleId: data.cycleId || null, zoneId: data.zoneId || null, pestId: data.pestId, reason,
   });
   closeSheet();
   toast('Decision recorded. The alert is closed.');

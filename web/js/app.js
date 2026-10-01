@@ -22,13 +22,11 @@ import { shiftView } from './ui/shift.js';
 import { farmView, weekView } from './ui/farm.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
-import { missingTasks } from './domain/schedule.js';
-import { missingFollowUps } from './domain/doctor.js';
+import { generateOnSignIn, generateToday } from './generate.js';
 import { loadRules } from './rules.js';
 import { loadSources } from './sources.js';
 import { startSync } from './sync.js';
 import { getMeta, setMeta } from './db.js';
-import { isoDate } from './util.js';
 import { captureInstallPrompt, mountInstallPrompt } from './ui/install.js';
 
 // NFR-DEV-01: the browser offers its install dialog once, early, and only to a
@@ -96,35 +94,6 @@ async function warmWeather(ctx) {
 }
 
 /**
- * FR-TASK-01 — put today's work on the board.
- *
- * Runs on every open. Safe to run five times on five phones, because every
- * generated task carries a deterministic id: IndexedDB keys events by id and
- * the sync merge is a set union, so the same Tuesday lands once however many
- * handsets produced it.
- *
- * Only the people who run the work generate it. A farm hand opening the app
- * should not be quietly writing the day's plan.
- */
-async function generateToday(ctx) {
-  if (!ctx.user || !can(ctx.user, 'assignTasks')) return;
-  const today = isoDate();
-  // FR-DOC-07: the three-day check after every treatment is generated the same
-  // way, from the spray it belongs to, so it is on the board whether or not
-  // anybody remembered to write it down.
-  const due = [
-    ...missingTasks(ctx.store.state, { date: today }),
-    ...missingFollowUps(ctx.store.state, { today }),
-  ];
-  if (!due.length) return;
-
-  for (const task of due) {
-    await ctx.store.dispatch('task.create', task, { eventId: `ev_${task.id}` });
-  }
-  ctx.refresh();
-}
-
-/**
  * FR-STOCK-05 — put the store's existing items onto active ingredients.
  *
  * The farm has a store full of items typed in by name: "Mancozeb 80% WP",
@@ -183,11 +152,14 @@ async function main() {
   // harvest on everybody else's phone.
   if (!practising) await startSync(store);
 
-  if (!practising) await generateToday(ctx).catch((err) => {
-    // A farm that cannot generate its schedule still has to be usable: every
-    // screen works on what is already recorded.
-    console.error('Could not generate today\'s tasks', err);
-  });
+  if (!practising) {
+    await generateToday(ctx).catch((err) => {
+      // A farm that cannot generate its schedule still has to be usable: every
+      // screen works on what is already recorded.
+      console.error('Could not generate today\'s tasks', err);
+    });
+    generateOnSignIn(ctx);
+  }
 
   // Practice included: in practice mode the events are applied to the screen
   // and thrown away, so a trainee sees the store on its actives like everybody

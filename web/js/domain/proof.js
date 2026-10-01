@@ -12,8 +12,14 @@
 // The line this file draws is between a photo and PROOF. The app has taken
 // photos since the first version; what was missing was the refusal.
 
-/** The kinds of task that cannot be closed on somebody's word. FR-PROOF-01. */
-export const PROOF_REQUIRED = new Set(['scout', 'trap', 'sanitation']);
+/**
+ * The kinds of task that cannot be closed on somebody's word. FR-PROOF-01.
+ *
+ * `nursery_trap` is the nursery's daily trap check (FR-FARM-04) — a trap check
+ * like any other, and the schedule already marks it as needing a photo.
+ */
+export const PROOF_REQUIRED = new Set(['scout', 'trap', 'nursery_trap', 'sanitation']);
+const TRAP_KINDS = new Set(['trap', 'nursery_trap']);
 
 /**
  * FR-PROOF-04 — a picture small enough to send from a field.
@@ -81,7 +87,7 @@ export function canComplete(task, photo) {
     ok: false,
     reason: verdict.reason,
     why: verdict.reason === 'missing'
-      ? `A ${task.kind === 'trap' ? 'trap check' : task.kind} is not done until there is a picture of it.`
+      ? `A ${TRAP_KINDS.has(task.kind) ? 'trap check' : task.kind} is not done until there is a picture of it.`
       : verdict.why,
     fix: verdict.fix
       || 'Open the camera in the app and photograph the trap or the plants you checked.',

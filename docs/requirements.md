@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.11 (draft for restructuring) |
+| Version | 1.12 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -102,7 +102,7 @@ Field staff are trained to use the app, including writing notes and reports. The
 ### 5.2 Requirements
 
 **Sign-in**
-- **UX-01 (MUST):** Sign-in shows each person's face photo and name. The person taps their own, then enters a 4-digit PIN.
+- **UX-01 (MUST):** Sign-in shows each person's face photo and name. The person taps their own, then enters their PIN: 4 to 12 digits, submitted with ✓, never on its own after the fourth.
 - **UX-02 (MUST):** Field staff sign in without emails or long passwords.
 
 **Layout and reading**
@@ -388,6 +388,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.12 | 1 Oct 2026 | UX-01: a PIN is 4 to 12 digits, matching what joining and the server already accepted; the pad submits on ✓. FR-TASK-01: the day's tasks are generated on any role's phone, at open and at sign-in. FR-SCOUT-01/03, FR-FARM-04: a Greenhouse Hand records the trap count as a number, and it opens an alert — the nursery's daily count included; FR-PROOF-01 covers the nursery's trap check |
 | 1.0 | 16 Sep 2026 | First draft |
 | 1.11 | 1 Oct 2026 | FR-ROLE-13: the Owner may approve a Field Supervisor's self-confirmed diagnosis when the Farm Manager is away; the exception is computed, never chosen; Gate 3 yellow / green / red after 48 h. FR-ROLE-14: a self-confirmed diagnosis never clears a gate. D-1 settled: FR-REP-02 digest by WhatsApp, text first, `immediate_to_owner` items sent as they happen |
 | 1.10 | 1 Oct 2026 | Checking your own work (§4.2, FR-ROLE-12 to FR-ROLE-15): self-confirmed diagnoses marked, next level up approves the treatment as a hard block, except a treatment that closes an alert due before the next spray window, which proceeds flagged "treated before approval" with the Owner notified at once |

@@ -9,7 +9,7 @@
 // rules file is cached with it: the plan checks, the gate checks and both
 // calculators are required to work with no signal (FR-DOC-03), and they cannot
 // do that if their own rule book needs a network.
-const CACHE = 'douvalue-v26';
+const CACHE = 'douvalue-v27';
 
 const SHELL = [
   './',
@@ -22,6 +22,7 @@ const SHELL = [
   './img/mark-192.png',
   './css/app.css',
   './js/app.js',
+  './js/generate.js',
   './js/sync.js',
   './js/store.js',
   './js/db.js',
@@ -77,9 +78,6 @@ const SHELL = [
   './js/domain/learn.js',
   './js/domain/selfcheck.js',
   './js/domain/notify.js',
-  // The source of truth itself. NFR-OFF-01: the clinic has to work on a
-  // phone with no signal, and it cannot diagnose anything without this.
-  '../rules/douvalue_rules_rev5_1.json',
   './js/domain/safety.js',
   './js/domain/catalogue.js',
   './js/domain/rotation.js',
@@ -93,6 +91,7 @@ const SHELL = [
   './js/domain/farm.js',
   './js/domain/nursery.js',
   './js/domain/media.js',
+  './js/domain/traps.js',
 ];
 
 // NFR-OFF-05 — a new version waits to be asked.
@@ -105,7 +104,16 @@ const SHELL = [
 // to update"; the tap sends the message below, and only then does it take over.
 
 // The single copy of the rules, published beside the app by
-// scripts/assemble_site.sh. One file, one answer (CLAUDE.md).
+// scripts/assemble_site.sh. One file, one answer (CLAUDE.md). NFR-OFF-01: the
+// clinic has to work on a phone with no signal, and it cannot diagnose
+// anything without it.
+//
+// Never in SHELL. Every SHELL entry must exist or cache.addAll() rejects and
+// the whole install fails, and no one address for the rules exists in both
+// layouts: '../rules/' from the published site root is outside the site
+// (a 404 on GitHub Pages), which is exactly how the published app once ended
+// up with no offline cache at all. tests/offline-site.test.mjs builds the
+// published layout and installs this worker in a real browser to keep it so.
 //
 // Two addresses, for the same reason web/js/rules.js tries two: on the
 // published site the app is at the root and the rules one level below it, and

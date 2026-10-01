@@ -439,7 +439,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .pin-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 300px; margin: 0 auto; }
 .pin-pad button { min-height: 62px; font-size: 1.4rem; background: var(--surface-2); color: var(--ink); }
-.pin-dots { display: flex; gap: 12px; justify-content: center; margin: 16px 0; }
+.pin-dots { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 16px 0; }
 .pin-dots span { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--ink-2); }
 .pin-dots span.on { background: var(--accent); border-color: var(--accent); }
 

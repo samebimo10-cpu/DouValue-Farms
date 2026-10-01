@@ -12,7 +12,7 @@ import {
   statusLine, syncNow, verifyPin,
 } from '../sync.js';
 import { isoDate } from '../util.js';
-import { applyPhrase, buzz, callSupervisor } from './field-kit.js';
+import { applyPhrase, buzz, callSupervisor, stepCount } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
 
 const routes = new Map();
@@ -53,6 +53,40 @@ export async function hashPin(pin, salt = 'douvalue') {
   let h = 0;
   for (let i = 0; i < text.length; i++) { h = ((h << 5) - h + text.charCodeAt(i)) | 0; }
   return `plain${h}`;
+}
+
+/**
+ * UX-01 / NFR-SEC-02 — a PIN is 4 to 12 digits.
+ *
+ * The join screen and the server have always taken anything from 4 to 12, but
+ * the sign-in pad stopped at four and submitted on the fourth press, so anyone
+ * who chose a longer PIN when they joined could never sign in again. The pad
+ * now takes up to twelve and submits only on ✓.
+ */
+export const PIN_MIN = 4;
+export const PIN_MAX = 12;
+export const isPin = (pin) => new RegExp(`^\\d{${PIN_MIN},${PIN_MAX}}$`).test(String(pin ?? ''));
+
+/**
+ * One press on the pad: a digit, 'back' or 'ok'. Pure, so the pad's rules are
+ * tested without a screen. Only 'ok' ever submits.
+ */
+export function pressPinKey(pin, key) {
+  const current = String(pin || '');
+  if (key === 'back') return { pin: current.slice(0, -1), submit: false };
+  if (key === 'ok') {
+    return isPin(current)
+      ? { pin: current, submit: true }
+      : { pin: current, submit: false, why: `Your PIN is ${PIN_MIN} to ${PIN_MAX} digits. Type it, then press ✓.` };
+  }
+  if (!/^\d$/.test(String(key))) return { pin: current, submit: false };
+  return { pin: current.length < PIN_MAX ? current + key : current, submit: false };
+}
+
+/** Four empty dots to start with, one more for every digit past four. */
+export function pinDotsHtml(length) {
+  const n = Math.min(PIN_MAX, Math.max(PIN_MIN, length));
+  return Array.from({ length: n }, (_, i) => `<span class="${i < length ? 'on' : ''}"></span>`).join('');
 }
 
 // --- Login ----------------------------------------------------------------
@@ -113,7 +147,7 @@ function loginScreen(state) {
 function pinScreen(person, subtitle) {
   if (!person) return '<div class="card"><p>That account is not on this phone.</p></div>';
   const linked = getAuth();
-  const dots = [0, 1, 2, 3].map((i) => `<span class="${i < pending.pin.length ? 'on' : ''}"></span>`).join('');
+  const dots = pinDotsHtml(pending.pin.length);
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'ok'];
   return `<div class="card"><div class="row">`
     + (person.face
@@ -125,7 +159,7 @@ function pinScreen(person, subtitle) {
     + `<div class="grow"><b>${esc(person.name)}</b><br>`
     + `<small>${esc(subtitle || ROLES[person.role]?.name || '')}</small></div></div>`
     + `<p style="margin-top:12px">${esc(t('login.pin'))}</p>`
-    + `<div class="pin-dots">${dots}</div>`
+    + `<div class="pin-dots" aria-label="${pending.pin.length} digits typed">${dots}</div>`
     + '<div class="pin-pad">'
     + keys.map((k) => {
       if (k === 'back') return button('⌫', 'pin-back', { cls: 'btn-quiet' });
@@ -180,9 +214,9 @@ function firstRunScreen(state) {
     + '<form data-act="first-run">'
     + '<div class="field"><label>Your name</label>'
     + '<input name="name" required placeholder="e.g. Ebimo Sam" autocomplete="name"></div>'
-    + '<div class="field"><label>Choose a 4-digit PIN</label>'
-    + '<input name="pin" required inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="0000">'
-    + '<div class="hint">You type this to sign in. Do not use 1234 or your year of birth.</div></div>'
+    + '<div class="field"><label>Choose a PIN</label>'
+    + `<input name="pin" required inputmode="numeric" pattern="[0-9]{${PIN_MIN},${PIN_MAX}}" maxlength="${PIN_MAX}" placeholder="0000">`
+    + `<div class="hint">${PIN_MIN} to ${PIN_MAX} digits. You type this to sign in. Do not use 1234 or your year of birth.</div></div>`
     + '<div class="field"><label>Farm name</label><input name="farmName" value="DouValue Farms Limited"></div>'
     + '<button class="btn-block btn-lg" type="submit">Create the CEO account</button>'
     + '</form>'
@@ -240,7 +274,7 @@ function joinScreen(state) {
       'Six letters and numbers. It works once, then it is dead.')
     + field('Choose your PIN', input('pin', {
       type: 'password', required: true, inputmode: 'numeric', placeholder: '0000' }),
-      'Four digits or more. This is what you type every day from now on.')
+      `${PIN_MIN} to ${PIN_MAX} digits. This is what you type every day from now on.`)
     + field('Type the PIN again', input('pin2', { type: 'password', inputmode: 'numeric', placeholder: '0000' }))
     + '<button class="btn-block btn-lg" type="submit">Join</button>'
     + '</form>'
@@ -408,16 +442,16 @@ function accountSheet() {
 
 const shellActions = {
   'pick-person': (c, el) => { pending = { personId: el.dataset.id, pin: '' }; render(); },
-  'pin-key': (c, el) => {
-    if (pending.pin.length < 4) pending.pin += el.dataset.key;
-    if (pending.pin.length === 4) shellActions['pin-ok'](c);
-    else render();
-  },
-  'pin-back': () => { pending.pin = pending.pin.slice(0, -1); render(); },
+  // A digit never submits, however many there are: a PIN may be longer than
+  // four, so only ✓ knows the person has finished.
+  'pin-key': (c, el) => { pending.pin = pressPinKey(pending.pin, el.dataset.key).pin; render(); },
+  'pin-back': () => { pending.pin = pressPinKey(pending.pin, 'back').pin; render(); },
   'pin-cancel': () => { pending = { personId: null, pin: '' }; render(); },
   'pin-ok': async (c) => {
+    const press = pressPinKey(pending.pin, 'ok');
+    if (!press.submit) { toast(press.why, true); return; }
     const linked = getAuth();
-    const pin = pending.pin;
+    const pin = press.pin;
 
     if (linked) {
       // The PIN is checked against what this device stored when it was enrolled,
@@ -474,7 +508,7 @@ const shellActions = {
   },
   'first-run': async (c, el) => {
     const data = readForm(el);
-    if (!/^\d{4}$/.test(String(data.pin || ''))) { toast('PIN must be exactly 4 digits', true); return; }
+    if (!isPin(data.pin)) { toast(`Your PIN must be ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
     if (!String(data.name || '').trim()) { toast('Enter your name', true); return; }
     const id = 'person_ceo';
     // FR-FARM-01: a new farm starts with the real zones from the rules' block
@@ -529,6 +563,8 @@ const shellActions = {
 
   // UX-15: a phrase tapped instead of typed.
   phrase: (c, el) => applyPhrase(el),
+  // UX-10: + and - move a count without opening the keypad, on any screen.
+  step: (c, el) => stepCount(el),
 
   /**
    * UX-25 — practice mode.
@@ -603,7 +639,7 @@ const shellActions = {
   'do-join': async (c, form) => {
     const data = readForm(form);
     const pin = String(data.pin || '');
-    if (!/^\d{4,12}$/.test(pin)) { toast('Your PIN must be at least 4 digits', true); return; }
+    if (!isPin(pin)) { toast(`Your PIN must be ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
     if (pin !== String(data.pin2 || '')) { toast('The two PINs do not match', true); return; }
 
     toast('Joining…');

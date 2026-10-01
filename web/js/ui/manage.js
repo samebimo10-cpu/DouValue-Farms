@@ -29,7 +29,7 @@ import {
 } from '../domain/catalogue.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
-import { hashPin } from './shell.js';
+import { hashPin, isPin, PIN_MAX, PIN_MIN } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
 
@@ -542,9 +542,10 @@ function openPersonSheet(ctx, id) {
         '<small>Saving this creates their account on the farm server and gives you a link and a '
         + 'one-time password to send them. They set their own PIN when they join, and you never '
         + 'see it.</small>')
-      : field(p ? 'New 4-digit PIN (leave empty to keep)' : '4-digit PIN',
+      : field(p ? 'New PIN (leave empty to keep)' : 'PIN',
         input('pin', { inputmode: 'numeric', placeholder: '0000' }),
-        p ? 'Set a new one only if they have forgotten it.' : 'Give this to them privately.'))
+        `${PIN_MIN} to ${PIN_MAX} digits. `
+        + (p ? 'Set a new one only if they have forgotten it.' : 'Give this to them privately.')))
     + '<button class="btn-block btn-lg" type="submit">Save</button>'
     + '</form>'
     + (p && isConnected() && removable.ok
@@ -595,12 +596,12 @@ async function savePerson(ctx, form) {
     dailyRate: Number(data.dailyRate) || 0, active: true,
   };
   if (data.pin) {
-    if (!/^\d{4}$/.test(String(data.pin))) { toast('PIN must be 4 digits', true); return; }
+    if (!isPin(data.pin)) { toast(`A PIN is ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
     payload.pinHash = await hashPin(data.pin);
   } else if (existing) {
     payload.pinHash = existing.pinHash;
   } else {
-    toast('Give them a 4-digit PIN so they can sign in', true);
+    toast(`Give them a PIN of ${PIN_MIN} to ${PIN_MAX} digits so they can sign in`, true);
     return;
   }
 
@@ -1288,7 +1289,7 @@ function openSyncSetup(ctx) {
     + field('Server address', input('url', { required: true, placeholder: 'https://your-farm.deno.net' }),
       'The address your server gave you. Use https.')
     + field('Your PIN', input('password', { type: 'password', required: true, inputmode: 'numeric', placeholder: '0000' }),
-      'At least 4 digits. This is what you type to sign in on this phone.')
+      `${PIN_MIN} to ${PIN_MAX} digits. This is what you type to sign in on this phone.`)
     + field('Type it again', input('password2', { type: 'password', inputmode: 'numeric', placeholder: '0000' }))
     + '<button class="btn-block btn-lg" type="submit">Create the farm</button>'
     + '</form>'
@@ -1303,7 +1304,7 @@ async function saveSyncSetup(ctx, form) {
   const url = String(data.url || '').trim().replace(/\/+$/, '');
   const password = String(data.password || '');
   if (!/^https?:\/\//.test(url)) { toast('The address must start with http or https', true); return; }
-  if (!/^\d{4,12}$/.test(password)) { toast('Your PIN must be at least 4 digits', true); return; }
+  if (!isPin(password)) { toast(`Your PIN must be ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
   if (password !== String(data.password2 || '')) { toast('The two PINs do not match', true); return; }
 
   toast('Checking the server…');

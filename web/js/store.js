@@ -32,17 +32,22 @@ import { isoDate, sortBy, sum, uid } from './util.js';
  * FR-LEARN-02: `viewTreatment` is the supervising view of a problem card —
  * doses, rotation groups, treatment plans. Every role but the farm hand holds
  * it; a hand reads the same card in Learn, without them.
+ *
+ * FR-SCOUT-01/03, FR-FARM-04: `countTraps` — everyone, the farm hand
+ * included, records the sticky-trap count as a number, and that count opens
+ * an alert like anybody's. A full scouting round (`scout`: per-plant counts,
+ * findings) stays with the Field Supervisor and above (domain/traps.js).
  */
 export const ROLES = {
   hand: {
     id: 'hand', name: 'Farm hand', pidgin: 'Farm hand', rank: 10,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide'],
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps'],
     home: '#/today',
     blurb: 'Sees today\'s jobs, records work and harvest, reports anything wrong.',
   },
   supervisor: {
     id: 'supervisor', name: 'Supervisor', pidgin: 'Oga for field', rank: 50,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'guideDiagnosis', 'viewTreatment'],
     home: '#/field',
@@ -50,14 +55,14 @@ export const ROLES = {
   },
   agronomist: {
     id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
+    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
       'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
     home: '#/clinic',
     blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
   },
   manager: {
     id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings', 'guideDiagnosis', 'viewTreatment'],
     home: '#/dashboard',
@@ -65,7 +70,7 @@ export const ROLES = {
   },
   ceo: {
     id: 'ceo', name: 'CEO', pidgin: 'Chairman', rank: 100,
-    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'diagnose',
+    can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
       'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
