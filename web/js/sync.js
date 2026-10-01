@@ -16,6 +16,7 @@ import {
   countUnsynced, getMeta, markSynced, mergeEvents, setMeta, unsyncedEvents,
 } from './db.js';
 import { ownerMessages } from './domain/notify.js';
+import { markRead, noteRefusals } from './domain/refusals.js';
 
 const PUSH_BATCH = 400;
 const PULL_BATCH = 500;
@@ -28,11 +29,26 @@ let store = null;
 let timer = null;
 let inFlight = null;
 let failures = 0;
-let status = { state: 'off', pending: 0, lastSyncAt: null, lastError: null, serverEvents: null, withheld: 0 };
+let status = { state: 'off', pending: 0, lastSyncAt: null, lastError: null, serverEvents: null, withheld: 0, held: 0 };
+// Records the farm server refused, with why (domain/refusals.js). Kept on the
+// phone until the person who made them has read them.
+let refusals = [];
 const listeners = new Set();
 
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-export function getStatus() { return { ...status, configured: !!auth, member: auth ? { ...auth } : null }; }
+export function getStatus() {
+  return { ...status, configured: !!auth, member: auth ? { ...auth } : null, refused: refusals.filter((r) => !r.read).length };
+}
+
+/** Everything the farm server refused from this phone, newest first. */
+export function refusedRecords() { return refusals.map((r) => ({ ...r })); }
+
+/** The person has read these; the bar stops being red for them. */
+export async function markRefusalsRead(ids) {
+  refusals = markRead(refusals, ids);
+  await setMeta('refusedRecords', refusals);
+  setStatus({});
+}
 export function getAuth() { return auth ? { ...auth } : null; }
 export function isConnected() { return !!auth; }
 
@@ -295,6 +311,7 @@ function fitBatch(events) {
 
 async function push() {
   let sent = 0, refused = 0;
+  const held = new Set();
   for (;;) {
     const queued = await unsyncedEvents(PUSH_BATCH);
     if (!queued.length) break;
@@ -303,21 +320,28 @@ async function push() {
     const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/events`, {
       method: 'POST', body: { events: payload },
     });
-    // Records the server refused are marked as done too. They were written by
-    // someone whose role does not allow them, so retrying forever would jam the
-    // outbox behind a record that will never be accepted.
-    await markSynced(batch.map((e) => e.id));
+    // Held: the server could not judge these yet (no rule book). They stay
+    // queued and go again. Everything else is done with — accepted, already
+    // there, or refused. A refused record will never be accepted, so retrying
+    // it would jam the outbox; instead the person who made it is told why.
+    const heldIds = new Set((result.held || []).map((h) => h.id));
+    await markSynced(batch.map((e) => e.id).filter((id) => !heldIds.has(id)));
     sent += result.accepted || 0;
     refused += (result.refused || []).length;
+    for (const id of heldIds) held.add(id);
     if (result.refused && result.refused.length) {
-      console.warn('The server would not accept some records:', result.refused);
+      refusals = noteRefusals(refusals, result.refused, batch, { state: store ? store.state : {} });
+      await setMeta('refusedRecords', refusals);
     }
     if (typeof result.total === 'number') setStatus({ serverEvents: result.total });
+    // Nothing moved: everything left is held. Try again on the next exchange.
+    if (heldIds.size && heldIds.size === batch.length) break;
     // Keep going while anything is still queued; the size cap means a full
     // outbox can take several trips even when the count is small.
     if (batch.length === queued.length && queued.length < PUSH_BATCH) break;
   }
-  return { sent, refused };
+  setStatus({ held: held.size });
+  return { sent, refused, held: held.size };
 }
 
 async function pull() {
@@ -366,7 +390,7 @@ export async function syncNow({ silent = false } = {}) {
       // FR-REP-02: once the records are in step, so what this phone offers
       // the Owner is what the farm actually knows. Never fails the sync.
       await deliverOwnerMessages().catch(() => {});
-      return { ok: true, sent: pushed.sent, refused: pushed.refused, received: pulled.received };
+      return { ok: true, sent: pushed.sent, refused: pushed.refused, held: pushed.held, received: pulled.received };
     } catch (err) {
       failures++;
       // A token that no longer works means this device was cut off, or the
@@ -458,6 +482,7 @@ function schedule() {
 export async function startSync(appStore) {
   store = appStore;
   auth = await getMeta('farmAuth', null);
+  refusals = (await getMeta('refusedRecords', [])) || [];
   const lastSyncAt = await getMeta('lastSyncAt', null);
   setStatus({
     state: auth ? (navigator.onLine ? 'idle' : 'offline') : 'off',
@@ -498,6 +523,9 @@ export function statusLine(s = getStatus()) {
       };
     case 'error': return { text: s.lastError || 'Could not sync', tone: 'danger' };
     case 'idle':
+      if (s.held) {
+        return { text: `${s.held} record${s.held === 1 ? '' : 's'} waiting: the farm server cannot check them yet`, tone: 'warn' };
+      }
       return s.pending
         ? { text: `${s.pending} record${s.pending === 1 ? '' : 's'} waiting to send`, tone: 'warn' }
         : { text: s.lastSyncAt ? 'All phones up to date' : 'Connected, waiting for the first sync', tone: 'ok' };

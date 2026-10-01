@@ -12,5 +12,10 @@ stores everything in; without it the deploy fails at boot with
 On Deno Deploy, also create a Deno KV database under Databases and assign it
 to the app.
 
+The server judges plantings, sprays, harvests and proof photos against the
+farm's rule book, which it reads at boot from the farm's published site
+(https://samebimo10-cpu.github.io/DouValue-Farms/rules/douvalue_rules_rev5_1.json). Set the environment variable RULES_URL to read it from
+somewhere else. Until it has the rules, those records wait on the phones.
+
 The farm app then connects to whatever address the deployment is given, under
 Settings, Sync, Connect the farm.

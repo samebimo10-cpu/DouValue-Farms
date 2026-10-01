@@ -504,8 +504,9 @@ async function saveProof(ctx, form) {
   const zoneVerdict = judgeZoneStart(task, stamp);
   if (!zoneVerdict.ok) { toast(zoneVerdict.why, true); return; }
 
+  // FR-PROOF-02: stamped with the zone — the task's own, or its crop's.
   const cycle = task.cycleId ? ctx.state.cycles[task.cycleId] : null;
-  const zone = cycle ? ctx.state.plots[cycle.plotId] : null;
+  const zone = (task.zoneId && ctx.state.plots[task.zoneId]) || (cycle ? ctx.state.plots[cycle.plotId] : null);
   await ctx.store.dispatch('task.complete', {
     id: task.id,
     photo,

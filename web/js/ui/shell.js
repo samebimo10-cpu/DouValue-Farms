@@ -8,9 +8,10 @@ import {
   note, openSheet, readForm, sheetOpen, toast,
 } from './kit.js';
 import {
-  getAuth, getStatus, joinFarm, onStatus, readJoinLink, signOutDevice,
+  getAuth, getStatus, joinFarm, markRefusalsRead, onStatus, readJoinLink, refusedRecords, signOutDevice,
   statusLine, syncNow, verifyPin,
 } from '../sync.js';
+import { refusalsFor } from '../domain/refusals.js';
 import { isoDate } from '../util.js';
 import { applyPhrase, buzz, callSupervisor, stepCount } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
@@ -349,6 +350,9 @@ function chrome(user, state, body) {
   const tabs = tabsFor(user);
   const here = routeKey();
   const sync = statusLine();
+  // A record the farm server refused turns the bar red for whoever made it,
+  // until they have read why (domain/refusals.js).
+  const refused = myRefusals(user);
   // A tab shows the mark; anything deeper shows the way back in its place, so
   // the bar stays one height and the target stays a thumb's width.
   const onTab = tabs.some((tab) => tab.hash === here);
@@ -372,11 +376,38 @@ function chrome(user, state, body) {
     + '<button data-act="toggle-contrast" title="Bright sunlight" aria-label="Bright sunlight">☀</button>'
     + `<button data-act="open-account" title="Account">${esc(initials(user.name))}</button>`
     + '</header>'
-    + `<div class="syncbar ${esc(sync.tone)}" data-act="sync-now" role="status">`
-    + `<span class="dot"></span><span>${esc(sync.text)}</span></div>`
+    + (refused.length
+      ? '<div class="syncbar danger" data-act="open-refused" role="alert">'
+        + `<span class="dot"></span><span>✕ The farm server refused ${refused.length} record`
+        + `${refused.length === 1 ? '' : 's'}. Tap to see why.</span></div>`
+      : `<div class="syncbar ${esc(sync.tone)}" data-act="sync-now" role="status">`
+        + `<span class="dot"></span><span>${esc(sync.text)}</span></div>`)
     + `<main>${body}</main>`
     + '<nav class="tabbar">' + tabs.map((tab) => `<a href="${tab.hash}" class="${here === tab.hash ? 'on' : ''}">`
       + `<span class="ic">${tab.icon}</span>${esc(t(tab.key))}</a>`).join('') + '</nav>';
+}
+
+/** The refusals this person should see: their own, or everyone's if they run the work. */
+function myRefusals(user) {
+  return refusalsFor(refusedRecords(), user, { seesAll: can(user, 'assignTasks') });
+}
+
+/**
+ * What was refused and why, in the person's own terms, with what to do. The
+ * record is still on this phone; it is not on the farm, and nobody else has it.
+ */
+function refusedSheet(c) {
+  const list = myRefusals(c.store.user);
+  if (!list.length) return '<h2>Nothing refused</h2><p>Everything this phone sent is on the farm.</p>';
+  const nameOf = (id) => (c.store.state.people[id] || {}).name || null;
+  return `<h2>Refused by the farm server</h2>`
+    + '<p><small>These are saved on this phone but did not reach the farm, so nobody else has them. '
+    + 'Each says why, and what to do.</small></p>'
+    + list.map((r) => note('danger', `${r.what} — ${r.day}`,
+      `<p>${esc(r.why)}</p>`
+      + (r.fix ? `<p><b>What to do:</b> ${esc(r.fix)}</p>` : '')
+      + `<small>${esc([nameOf(r.by) ? `Recorded by ${nameOf(r.by)}` : null, r.rule].filter(Boolean).join(' · '))}</small>`)).join('')
+    + button('I have read these', 'refused-read', { cls: 'btn-block btn-lg', data: { ids: list.map((r) => r.id).join(' ') } });
 }
 
 // --- Rendering ------------------------------------------------------------
@@ -608,6 +639,12 @@ const shellActions = {
     pending = { personId: null, pin: '' };
     render();
   },
+  'open-refused': (c) => openSheet(refusedSheet(c)),
+  'refused-read': async (c, el) => {
+    await markRefusalsRead(String(el.dataset.ids || '').split(' ').filter(Boolean));
+    closeSheet();
+    render();
+  },
   'sync-now': async () => {
     const s = getStatus();
     if (!s.configured) {
@@ -618,7 +655,9 @@ const shellActions = {
     const result = await syncNow();
     toast(result.ok
       ? `Up to date. Sent ${result.sent}, received ${result.received}.`
-      : `Could not sync: ${result.reason}`, !result.ok);
+        + (result.refused ? ` ${result.refused} refused — tap the red bar to see why.` : '')
+        + (result.held ? ` ${result.held} waiting for the farm server to check them.` : '')
+      : `Could not sync: ${result.reason}`, !result.ok || !!result.refused);
   },
 
   'open-join': () => { navigate('#/join'); },
@@ -764,7 +803,19 @@ export async function startShell(store) {
   });
 
   window.addEventListener('hashchange', () => { closeSheet(); render(); });
-  onStatus(() => { if (ctx && ctx.store.user) render(); });
+  // UX-20: a refusal is said out loud the moment it arrives, as well as
+  // leaving the bar red — not left in a console nobody reads.
+  let refusedSeen = store.user ? myRefusals(store.user).length : 0;
+  onStatus(() => {
+    if (!ctx || !ctx.store.user) return;
+    const n = myRefusals(ctx.store.user).length;
+    if (n > refusedSeen) {
+      toast(`The farm server refused ${n - refusedSeen} record${n - refusedSeen === 1 ? '' : 's'}. `
+        + 'Tap the red bar to see why.', true);
+    }
+    refusedSeen = n;
+    render();
+  });
   window.addEventListener('online', render);
   window.addEventListener('offline', render);
   store.subscribe(() => render());

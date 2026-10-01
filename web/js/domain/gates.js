@@ -35,7 +35,7 @@ import { addDays, daysBetween, isoDate } from '../util.js';
 import { gateSpec, peekRules } from '../rules.js';
 import { rotationVerdict } from './rotation.js';
 import { alerts } from './alerts.js';
-import { GATE_ITEMS, gateItem } from './doctor.js';
+import { GATE_ITEMS, gateItem, stockOf } from './doctor.js';
 import { isNursery, protocolOf } from './farm.js';
 import { releasedFor } from './nursery.js';
 import {
@@ -383,36 +383,64 @@ export function batchGate(state, zoneId) {
       why: 'No purchased topsoil in this zone — nothing to clear.',
     });
   }
-
-  const batch = (state.topsoilBatches || {})[batchId];
-  if (!batch) {
+  const tested = batchTested(state, batchId);
+  if (!tested.batch) {
     return gate('topsoil', 'Topsoil tested', 'unknown', {
       why: 'This zone names a topsoil batch that is not on record.',
-      fix: 'Record the delivery under Topsoil, with its supplier and date, and test it.',
+      fix: tested.fix,
     });
   }
+  return gate('topsoil', 'Topsoil tested', tested.ok ? 'pass' : 'fail', {
+    why: tested.why, ...(tested.fix ? { fix: tested.fix } : {}), batch: tested.batch,
+  });
+}
 
-  const clean = (state.soilTests || []).filter((t) => t.batchId === batchId && t.nematode === 'clean');
+/**
+ * FR-GATE-03 — has this delivery a clean result from a named lab?
+ *
+ * `today`, when given, leaves out a result dated after it: a batch is judged
+ * on what was known on the day somebody put it into a zone.
+ */
+export function batchTested(state, batchId, { today = null } = {}) {
+  const batch = ((state && state.topsoilBatches) || {})[batchId] || null;
+  if (!batch) {
+    return { ok: false, batch: null, why: 'That topsoil batch is not on record.',
+      fix: 'Record the delivery under Topsoil, with its supplier and date, and test it.' };
+  }
+  const clean = ((state && state.soilTests) || [])
+    .filter((t) => t.batchId === batchId && t.nematode === 'clean' && (!today || !t.date || t.date <= today));
   if (!clean.length) {
-    return gate('topsoil', 'Topsoil tested', 'fail', {
+    return { ok: false, batch,
       why: `Batch from ${batch.supplier || 'an unnamed supplier'} (${batch.date || 'no date'}) has no clean test.`,
       fix: 'Test the batch before anything is planted into it. An untested load can carry nematodes '
-        + 'straight into a clean house.',
-      batch,
-    });
+        + 'straight into a clean house.' };
   }
   if (!clean.some((t) => String(t.lab || '').trim())) {
-    return gate('topsoil', 'Topsoil tested', 'fail', {
+    return { ok: false, batch,
       why: `Batch from ${batch.supplier || 'an unnamed supplier'} tested clean, but no lab is named on the result.`,
-      fix: 'Record which lab tested the batch. A clean result nobody can trace is not a lab report.',
-      batch,
-    });
+      fix: 'Record which lab tested the batch. A clean result nobody can trace is not a lab report.' };
   }
+  return { ok: true, batch, why: `Batch from ${batch.supplier || 'supplier not named'} tested clean.` };
+}
 
-  return gate('topsoil', 'Topsoil tested', 'pass', {
-    why: `Batch from ${batch.supplier || 'supplier not named'} tested clean.`,
-    batch,
-  });
+/**
+ * FR-GATE-03 — may this batch go into that zone? "Untested batches are marked
+ * red and cannot be assigned to a zone." The delivery is logged with the zone
+ * it is meant for; it goes in only once it has tested clean.
+ */
+export function canAssignBatch(state, batchId, zoneId, { today = null } = {}) {
+  const zone = ((state && state.plots) || {})[zoneId];
+  if (!zone) return { ok: false, reason: 'no-zone', why: 'That zone is not on record.', fix: 'Choose a zone from the list.' };
+  if (isNursery(zone)) {
+    return { ok: false, reason: 'nursery', why: `${zone.name} is the nursery; bought-in topsoil goes into a cropping block.`,
+      fix: 'Nursery media is sterilised, solarised or bought-in potting media, recorded under the nursery.' };
+  }
+  const tested = batchTested(state, batchId, { today });
+  if (!tested.ok) {
+    return { ok: false, reason: 'untested', batch: tested.batch,
+      why: `${tested.why} An untested batch cannot be assigned to a zone (FR-GATE-03).`, fix: tested.fix };
+  }
+  return { ok: true, batch: tested.batch, zone };
 }
 
 // --- Plant-bag zones: Gate 0 clears on the media batch (C-19) -----------------
@@ -1302,7 +1330,29 @@ export function canTreat(state, cycleId, opts = {}) {
   const rotation = rotationCheck(state, cycleId, activeId || productId, { ...opts, today, diagnosis });
   if (!rotation.ok) return rotation;
 
+  // FR-STOCK-04 — an expired container is not stock, and cannot be chosen for
+  // a treatment. Where the store holds this active only in expired
+  // containers, the spray is refused; where it holds none at all, stock is not
+  // what this gate decides.
+  const expired = rotation.active ? expiredOnly(state, rotation.active, today) : null;
+  if (expired) return expired;
+
   return beforeApproval ? { ok: true, diagnosis, beforeApproval } : { ok: true, diagnosis };
+}
+
+/** FR-STOCK-04 — the refusal when every container of this active is past its date, else null. */
+export function expiredOnly(state, active, today = isoDate()) {
+  const stock = stockOf(state, active, { today });
+  if (!stock || !stock.expiredOnly) return null;
+  const item = stock.item || {};
+  return {
+    ok: false, reason: 'expired', active,
+    why: `The only ${active.name} in the store${item.name ? ` (${item.name})` : ''} is past its expiry date`
+      + `${item.expiry ? `, ${item.expiry}` : ''}.`,
+    fix: 'An expired container does not go on the crop. Record a new delivery, or choose another product '
+      + 'the rotation allows.',
+    sources: ['FR-STOCK-04'],
+  };
 }
 
 /**

@@ -9,10 +9,10 @@ import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, 
 import { harvestForecast, revenueForecast, calibrate, healthFactor } from '../domain/predict.js';
 import { knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
 import { harvestCheck, isOnboarded, reentryCheck, sprayHistory } from '../domain/onboarding.js';
-import { buildCatalogue, canUseActive, rateFor, resolveActive, usableActives } from '../domain/catalogue.js';
+import { buildCatalogue, canUseActive, rateFor, resolveActive, sprayIntervals, usableActives } from '../domain/catalogue.js';
 import { cropWeek, rotationVerdict, WEEK_10, week10Actives } from '../domain/rotation.js';
 import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
-import { canPlant, canTreat, gateBoard, GATE_STATE } from '../domain/gates.js';
+import { canPlant, canTreat, expiredOnly, gateBoard, GATE_STATE } from '../domain/gates.js';
 import { isNursery } from '../domain/farm.js';
 import { batchList } from '../domain/nursery.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
@@ -663,6 +663,8 @@ function updateSprayHints(ctx, el) {
   // the form in. Being refused after typing everything is how a gate earns a
   // reputation for being in the way.
   const rotation = rotationVerdict(ctx.state, cycleId, active.id, { catalogue, today: isoDate() });
+  // FR-STOCK-04: said before the form is filled in, as the rotation is.
+  const expired = expiredOnly(ctx.state, active, isoDate());
 
   hint.innerHTML =
     note(active.phiDays >= 7 ? 'warn' : 'info',
@@ -680,6 +682,7 @@ function updateSprayHints(ctx, el) {
       : '')
     + (rotation.ok ? '' : note('danger', rotation.why,
       `<small>${esc(rotation.fix || '')} Read from ${esc((rotation.sources || []).join(', '))}.</small>`))
+    + (expired ? note('danger', expired.why, `<small>${esc(expired.fix)}</small>`) : '')
     + (area ? note('info', 'Mixing', `<small>${esc(plan.text)} Check the label: it beats this estimate.</small>`) : '')
     + '<details><summary><small>Spray safety rules</small></summary><ul>'
     + SPRAY_RULES.map((r) => `<li><small>${esc(r)}</small></li>`).join('') + '</ul></details>';
@@ -692,9 +695,9 @@ async function saveSpray(ctx, form) {
   const label = catalogue.labels.find((l) => l.id === data.labelId) || null;
 
   // FR-STOCK-07 — the label is used only where it is stricter. A brand that
-  // claims a shorter waiting period than the default does not get one.
-  const phiDays = label ? Math.max(label.phiDays, active ? active.phiDays : 0) : (active ? active.phiDays : 14);
-  const reiHours = label ? Math.max(label.reiHours, active ? active.reiHours : 0) : (active ? active.reiHours : 24);
+  // claims a shorter waiting period than the default does not get one. The
+  // same call the farm server makes, so the two always agree.
+  const { phiDays, reiHours } = sprayIntervals(catalogue, { activeId: data.activeId, labelId: label ? label.id : null });
 
   // FR-GATE-04 and FR-GATE-05. "Treatment by guesswork" is a named cause of
   // Season 1, so a spray needs a confirmed diagnosis behind it; and the product
@@ -706,7 +709,7 @@ async function saveSpray(ctx, form) {
   if (!allowed.ok) {
     closeSheet();
     const refusedOnProduct = ['rotation', 'week-10', 'thrips-programme', 'no-rate', 'interval',
-      'metalaxyl-interval', 'not-in-catalogue'].includes(allowed.reason);
+      'metalaxyl-interval', 'not-in-catalogue', 'expired'].includes(allowed.reason);
     if (allowed.reason === 'spray-history-missing') {
       openSheet('<h2>Spray history missing</h2>'
         + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)

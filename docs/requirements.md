@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.12 (draft for restructuring) |
+| Version | 1.13 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -298,6 +298,7 @@ The farm starts using the app with cycles already running. This section says how
 - **NFR-OFF-03 (MUST):** A clear icon shows sync state: green cloud = saved online, grey cloud = waiting.
 - **NFR-OFF-04 (MUST):** If two phones edit the same record, no entry is lost; the Farm Manager resolves conflicts.
 - **NFR-OFF-05 (MUST):** A new app version reaches phones without staff needing to clear data. The app shows "New version — tap to update".
+- **NFR-OFF-06 (MUST):** A record the farm server refuses is kept on the phone and shown to the person who made it — what it was, why it was refused and what to do — until they have read it. It never disappears silently. A record the server cannot judge yet stays queued and is sent again.
 
 ### 7.2 Devices
 - **NFR-DEV-01 (MUST):** Runs on low-cost Android phones (2 GB RAM, Android 9 or newer) as an installable web app.
@@ -388,6 +389,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.13 | 1 Oct 2026 | The farm server enforces FR-GATE-01 to 05, FR-TREAT-02 (PHI/REI from the server's own catalogue), FR-PROOF-01/02, FR-STOCK-04/07/08 and the Week 10 organics rule with the app's own gate code. NFR-OFF-06 added: a refused record tells the person why. FR-GATE-03 as written: a topsoil delivery records the zone it is for and is assigned only once tested clean |
 | 1.12 | 1 Oct 2026 | UX-01: a PIN is 4 to 12 digits, matching what joining and the server already accepted; the pad submits on ✓. FR-TASK-01: the day's tasks are generated on any role's phone, at open and at sign-in. FR-SCOUT-01/03, FR-FARM-04: a Greenhouse Hand records the trap count as a number, and it opens an alert — the nursery's daily count included; FR-PROOF-01 covers the nursery's trap check |
 | 1.0 | 16 Sep 2026 | First draft |
 | 1.11 | 1 Oct 2026 | FR-ROLE-13: the Owner may approve a Field Supervisor's self-confirmed diagnosis when the Farm Manager is away; the exception is computed, never chosen; Gate 3 yellow / green / red after 48 h. FR-ROLE-14: a self-confirmed diagnosis never clears a gate. D-1 settled: FR-REP-02 digest by WhatsApp, text first, `immediate_to_owner` items sent as they happen |

@@ -496,6 +496,29 @@ record making themselves CEO, gets it refused and told why. A manager cannot min
 another manager or an owner. Every record is filed under whoever actually sent it,
 not whoever the sending app claimed, so work cannot be attributed to someone else.
 
+**The gates are checked on the server too, not only on the phone.** A planting
+(Gates 0 and 1: the pH and nematode tests, `FR-GATE-01/02`), a batch of bought-in
+topsoil going into a zone (`FR-GATE-03`), a spray (a confirmed diagnosis, the
+rotation, the thrips programme, the Week 10 organics rule, a rate on file and a
+container in date — `FR-GATE-04/05`, `FR-STOCK-04/08`), a harvest inside a
+waiting period (`FR-TREAT-02`) and a scouting round or trap check closed without
+a live, stamped photo (`FR-PROOF-01/02`) are each judged by the farm server
+against the farm as the server holds it. It does not have its own copy of the
+rules: `server/judge.mjs` rebuilds the farm with the app's own `reduce()` and
+asks the app's own gate functions, so the phone and the server cannot disagree
+about what a gate means. A spray's pre-harvest and re-entry intervals are the
+server's catalogue's — the active's default, or a longer label figure — and a
+record claiming a shorter wait does not get one (`FR-STOCK-07`).
+
+**A refused record is told to the person, not dropped.** The phone saves
+everything at once, offline, so a refusal arrives later. When it does the sync bar
+turns red for whoever made the record (and for the people who run the work) and
+says so; tapping it shows what the record was, why the server refused it, what to
+do, and the requirement behind it, until they have read it (`NFR-OFF-06`). The
+record stays on that phone; it is simply not on the farm. If the server cannot
+read its rule book, the records it would judge are held on the phone and sent
+again — never waved through.
+
 **Lost phone?** The CEO presses *Sign out their phones*. That device is dead on
 its next exchange, within seconds. Nobody else has to change anything, because
 nobody else shared a password with them.
@@ -526,6 +549,13 @@ If the GitHub option cannot be found, the paste route still works:
 The one-line version works because the site serves that file as JavaScript,
 which is what Deno needs to import it. Deno fetches it once at deploy time and
 caches it, so the running server does not depend on this site staying up.
+
+The server reads the farm's rule book (`rules/douvalue_rules_rev5_1.json`) when it
+starts: from beside it in the repository, from beside `deno-entry.js` on the
+published site, or from the published site's copy. Set `RULES_URL` on the
+deployment to read it from somewhere else. `server/deno-sync.ts` carries the app
+modules the gates are judged with, bundled by `node scripts-build-deno.mjs` with
+no dependencies, so it is still one file to paste.
 
 Prefer your own machine? `server/node-sync.mjs` serves the same contract
 and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
@@ -646,6 +676,7 @@ DouValue-Farms/
 │     │  ├─ shift.js     end-of-shift reports and the farm manager's board
 │     │  ├─ stock.js     low stock, addressed to the Farm Manager
 │     │  ├─ traps.js     the sticky-trap count as numbers, from any role, nursery included
+│     │  ├─ refusals.js  what the farm server refused, why, and who is told
 │     │  ├─ supervision.js  supervised spray and gate screens until the trial is signed off
 │     │  ├─ gates.js     Gate 0 to Gate 4 and the GH-04/05 clean restart, per zone, from the rules
 │     │  ├─ nursery.js   seedling batches, the release check, the nursery's own tasks
@@ -657,6 +688,7 @@ DouValue-Farms/
 │                        update (the prompt)
 ├─ server/
 │  ├─ core.mjs          the rules: accounts, roles, what each may read and write
+│  ├─ judge.mjs         the gates, waiting periods and proof photos, judged with the app's own code
 │  ├─ deno-sync.ts      generated single file for Deno Deploy (free, no CLI)
 │  ├─ node-sync.mjs     the same core, self-hosted, storing to files
 │  ├─ deploy/           the generated server on its own, for a one-folder deploy
