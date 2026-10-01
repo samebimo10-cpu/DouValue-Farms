@@ -94,8 +94,20 @@ export async function launchChrome(executable = findChrome()) {
     async close() {
       try { await Promise.race([send('Browser.close'), sleep(3000)]); } catch { /* already gone */ }
       try { ws.close(); } catch { /* closed */ }
-      if (proc.exitCode === null) proc.kill('SIGKILL');
-      rmSync(profile, { recursive: true, force: true });
+      // Chrome is still writing into its profile as it shuts down, so wait for
+      // it to go before taking the folder away — removing it underneath a live
+      // process fails with ENOTEMPTY, which is the test failing for a reason
+      // that has nothing to do with the app.
+      const running = () => proc.exitCode === null && proc.signalCode === null;
+      const exited = () => new Promise((resolve) => { if (!running()) resolve(); else proc.once('exit', resolve); });
+      await Promise.race([exited(), sleep(5000)]);
+      if (running()) {
+        proc.kill('SIGKILL');
+        await Promise.race([exited(), sleep(2000)]);
+      }
+      // Helper processes can outlive the browser by a moment; retry, then leave
+      // a temporary folder to the OS rather than fail a test over it.
+      try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* tmp */ }
     },
   };
 }
