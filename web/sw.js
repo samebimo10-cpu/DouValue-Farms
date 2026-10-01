@@ -9,7 +9,7 @@
 // rules file is cached with it: the plan checks, the gate checks and both
 // calculators are required to work with no signal (FR-DOC-03), and they cannot
 // do that if their own rule book needs a network.
-const CACHE = 'douvalue-v25';
+const CACHE = 'douvalue-v26';
 
 const SHELL = [
   './',
@@ -75,6 +75,8 @@ const SHELL = [
   './js/domain/diagnose.js',
   './js/domain/sickplant.js',
   './js/domain/learn.js',
+  './js/domain/selfcheck.js',
+  './js/domain/notify.js',
   // The source of truth itself. NFR-OFF-01: the clinic has to work on a
   // phone with no signal, and it cannot diagnose anything without this.
   '../rules/douvalue_rules_rev5_1.json',

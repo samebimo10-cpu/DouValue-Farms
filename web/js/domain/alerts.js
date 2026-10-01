@@ -602,7 +602,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const name = d.problemName || d.problemId || 'something';
     if (VIRUS_RE.test(text)) {
       out.push({
-        kind: 'virus', rule: IMMEDIATE_TO_OWNER[0], at: d.at || `${date}T12:00:00.000Z`, date,
+        id: d.id, kind: 'virus', rule: IMMEDIATE_TO_OWNER[0], at: d.at || `${date}T12:00:00.000Z`, date,
         zoneName: where(d.cycleId), cycleId: d.cycleId || null,
         line: `VIRUS SUSPECTED: ${name} on ${where(d.cycleId)}`,
         detail: 'Isolate those plants, do not move tools or hands between houses, pull and burn '
@@ -610,7 +610,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
       });
     } else if (BACTERIAL_WILT_RE.test(text)) {
       out.push({
-        kind: 'bacterial_wilt', rule: IMMEDIATE_TO_OWNER[1], at: d.at || `${date}T12:00:00.000Z`, date,
+        id: d.id, kind: 'bacterial_wilt', rule: IMMEDIATE_TO_OWNER[1], at: d.at || `${date}T12:00:00.000Z`, date,
         zoneName: where(d.cycleId), cycleId: d.cycleId || null,
         line: `BACTERIAL WILT SUSPECTED on ${where(d.cycleId)}`,
         detail: 'Do not irrigate from that bed into the others. A lab sample decides it — the '
@@ -628,7 +628,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const date = (o.at || '').slice(0, 10);
     const zone = (state.plots || {})[o.zoneId];
     out.push({
-      kind: 'gate_override', rule: IMMEDIATE_TO_OWNER[2], at: o.at, date,
+      id: o.id, kind: 'gate_override', rule: IMMEDIATE_TO_OWNER[2], at: o.at, date,
       zoneName: zone ? zone.name : 'a zone', cycleId: null,
       line: `Gate override on ${zone ? zone.name : 'a zone'} — ${o.gate}`,
       detail: `Reason given: ${o.reason || 'none recorded'}`,
@@ -646,7 +646,7 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     const plants = Number(sc.plantsAffected ?? NaN);
     if (!Number.isFinite(plants) || plants <= POD_BORER_TO_OWNER) continue;
     out.push({
-      kind: 'pod_borer', rule: IMMEDIATE_TO_OWNER[3], at: sc.at || `${date}T12:00:00.000Z`, date,
+      id: sc.id, kind: 'pod_borer', rule: IMMEDIATE_TO_OWNER[3], at: sc.at || `${date}T12:00:00.000Z`, date,
       zoneName: where(sc.cycleId), cycleId: sc.cycleId || null,
       line: `Pod borer on ${plants} plants in ${where(sc.cycleId)}`,
       detail: 'Over ten plants with entry holes: spray the whole field today, do not wait for the '
@@ -662,12 +662,33 @@ export function straightToOwner(state, { now = new Date().toISOString(), days = 
     if (week == null || week < ORGANICS_ONLY_FROM_WEEK) continue;
     if (!isSyntheticFromWeek10(sp.productId)) continue;
     out.push({
-      kind: 'week10_synthetic', rule: IMMEDIATE_TO_OWNER[4], at: sp.at || `${date}T12:00:00.000Z`, date,
+      id: sp.id, kind: 'week10_synthetic', rule: IMMEDIATE_TO_OWNER[4], at: sp.at || `${date}T12:00:00.000Z`, date,
       zoneName: where(sp.cycleId), cycleId: sp.cycleId || null,
       line: `Synthetic sprayed in Week ${week} on ${where(sp.cycleId)}`
         + ` — ${sp.productName || sp.productId}`,
       detail: 'From Week 10 it is organics only: neem, garlic-chilli, copper. A synthetic this '
         + 'late puts residue on fruit that is already being picked.',
+    });
+  }
+
+  // FR-ROLE-13 — a treatment that went ahead before its approval, because the
+  // alert was due before the next spray window. The Owner hears at once, and
+  // it stays on the list, however old, until the approval lands.
+  const diagnosisById = new Map((state.diagnoses || []).map((d) => [d.id, d]));
+  for (const sp of state.sprays || []) {
+    if (!sp.beforeApproval) continue;
+    const d = diagnosisById.get(sp.diagnosisId);
+    if (!d || d.approvedBy) continue;
+    const who = d.approvalFrom === 'ceo' ? 'Owner' : 'Farm Manager';
+    const raiser = ((state.people || {})[d.confirmedBy] || {}).name || 'the person who raised it';
+    out.push({
+      id: sp.id, kind: 'treated_before_approval', rule: 'FR-ROLE-13 treated before approval',
+      at: sp.at, date: (sp.at || '').slice(0, 10),
+      zoneName: where(sp.cycleId), cycleId: sp.cycleId || null,
+      line: `Treated before approval on ${where(sp.cycleId)} — ${sp.productName || sp.productId || 'a spray'} `
+        + `against ${d.problemName || d.problemId}`,
+      detail: `Self-confirmed by ${raiser}. The alert was due before the next spray window, so it went ahead. `
+        + `The ${who} still approves it; Gate 3 is red if that has not happened within 48 hours.`,
     });
   }
 

@@ -15,6 +15,7 @@
 import {
   countUnsynced, getMeta, markSynced, mergeEvents, setMeta, unsyncedEvents,
 } from './db.js';
+import { ownerMessages } from './domain/notify.js';
 
 const PUSH_BATCH = 400;
 const PULL_BATCH = 500;
@@ -362,6 +363,9 @@ export async function syncNow({ silent = false } = {}) {
         lastSyncAt: at, withheld: pulled.withheld,
       });
       if (pulled.received && store) await store.reload();
+      // FR-REP-02: once the records are in step, so what this phone offers
+      // the Owner is what the farm actually knows. Never fails the sync.
+      await deliverOwnerMessages().catch(() => {});
       return { ok: true, sent: pushed.sent, refused: pushed.refused, received: pulled.received };
     } catch (err) {
       failures++;
@@ -384,6 +388,58 @@ export async function syncNow({ silent = false } = {}) {
     }
   })();
   return inFlight;
+}
+
+// --- The Owner's WhatsApp — FR-REP-02 ---------------------------------------
+//
+// Every phone offers what it has seen: straight-to-Owner items the moment it
+// has signal, and, on a phone that runs the work, the day's digest. The server
+// sends each key once, so offering twice, or from five phones, costs nothing.
+
+const OWNER_RETRY_MS = 15 * 60000;        // a failed message is offered again after this
+const OWNER_OFF_RETRY_MS = 6 * 3600000;   // no WhatsApp set up on the server: ask again after this
+const OWNER_FORGET_MS = 3 * 24 * 3600000;
+
+let ownerLast = { at: null, configured: null, results: [] };
+export function ownerDelivery() { return { ...ownerLast }; }
+
+export async function deliverOwnerMessages({ now = new Date().toISOString() } = {}) {
+  if (!auth || !store) return ownerLast;
+  const offUntil = await getMeta('ownerChannelOffUntil', null);
+  if (offUntil && offUntil > now) return ownerLast;
+
+  const sent = await getMeta('ownerSent', {});
+  const retryAt = await getMeta('ownerRetryAt', {});
+  const due = ownerMessages(store.state, { now, role: auth.role })
+    .filter((m) => !sent[m.key] && !(retryAt[m.key] && retryAt[m.key] > now));
+  if (!due.length) return ownerLast;
+
+  const reply = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/notify`, {
+    method: 'POST', body: { items: due },
+  });
+  const later = new Date(Date.parse(now) + OWNER_RETRY_MS).toISOString();
+  if (reply && reply.reason === 'not-configured') {
+    await setMeta('ownerChannelOffUntil', new Date(Date.parse(now) + OWNER_OFF_RETRY_MS).toISOString());
+  }
+  for (const r of (reply && reply.results) || []) {
+    if (r.status === 'sent' || r.status === 'already-sent' || r.status === 'refused') {
+      sent[r.key] = now;                    // done, or it will never go: stop offering it
+      delete retryAt[r.key];
+    } else retryAt[r.key] = later;
+  }
+  const cutoff = new Date(Date.parse(now) - OWNER_FORGET_MS).toISOString();
+  for (const k of Object.keys(sent)) if (sent[k] < cutoff) delete sent[k];
+  for (const k of Object.keys(retryAt)) if (retryAt[k] < cutoff) delete retryAt[k];
+  await setMeta('ownerSent', sent);
+  await setMeta('ownerRetryAt', retryAt);
+  ownerLast = { at: now, configured: reply ? reply.configured : null, results: (reply && reply.results) || [] };
+  return ownerLast;
+}
+
+/** Whether WhatsApp is set up on the farm server, for the Alerts screen. */
+export async function ownerChannelStatus() {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/notify`);
 }
 
 function schedule() {

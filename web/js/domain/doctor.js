@@ -45,6 +45,7 @@ import {
 import { mediaOf } from './media.js';
 import { sourcesOf } from '../sources.js';
 import { releasedFor } from './nursery.js';
+import { awaitingApproval, roleTitle, treatable } from './selfcheck.js';
 
 /**
  * The catalogue, in the shape the rest of this file reads.
@@ -630,7 +631,15 @@ function treatableDiagnosis(state, cycleId, { today = isoDate(), maxAgeDays = 14
     return { ok: false, why: 'Nothing has been diagnosed on this bed in the last two weeks.',
       fix: 'Run the Farm Doctor on a sick plant, then have the diagnosis confirmed.' };
   }
-  const confirmed = recent.find((d) => d.confirmedBy && d.confirmedBy !== DOCTOR.id);
+  const confirmed = recent.find((d) => d.confirmedBy && d.confirmedBy !== DOCTOR.id && treatable(d));
+  const waiting = recent.find(awaitingApproval);
+  if (!confirmed && waiting) {
+    // FR-ROLE-13 — self-confirmed, and the next level up has not approved it.
+    return { ok: false,
+      why: `"${waiting.problemName || waiting.problemId}" was confirmed by the person who raised it, `
+        + `and the ${roleTitle(waiting.approvalFrom)} has not approved it yet.`,
+      fix: `The ${roleTitle(waiting.approvalFrom)} approves it on the Clinic screen, then the plan can go ahead.` };
+  }
   if (!confirmed) {
     return { ok: false,
       why: `"${recent[0].problemName || recent[0].problemId}" was diagnosed on ${recent[0].date}, `

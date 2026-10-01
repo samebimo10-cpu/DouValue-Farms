@@ -278,9 +278,17 @@ test('no diagnosis can be confirmed without the confirm step', () => {
   assert.equal(dx.canConfirm(recorded(), { by: 'u_sup', senior: true }).ok, true);
 });
 
-test('nobody confirms their own diagnosis (FR-DIAG-03, FR-DOC-08)', () => {
-  assert.equal(dx.canConfirm(recorded(), { by: 'u_hand', senior: true }).reason, 'self');
+test('confirming your own diagnosis is allowed only with nobody else in, and marked (FR-ROLE-12, FR-DOC-08)', () => {
+  // FR-ROLE-12 replaces the old flat refusal: a second person is preferred,
+  // and the raiser may confirm only when no other qualified person is there.
+  const alone = dx.canConfirm(recorded(), { by: 'u_hand', senior: true, role: 'supervisor' });
+  assert.equal(alone.ok, true);
+  assert.equal(alone.self, true);
+  assert.equal(alone.approver, 'manager');
+  const withOthers = dx.canConfirm(recorded(), { by: 'u_hand', senior: true, others: [{ id: 'u_mgr', name: 'Ada' }] });
+  assert.equal(withOthers.reason, 'second-person');
   assert.equal(dx.canConfirm(recorded(), { by: 'u_hand2', senior: false }).reason, 'rank');
+  assert.equal(dx.canConfirm(recorded(), { by: 'farm-doctor', senior: true }).reason, 'doctor');
 });
 
 test('the event log refuses a confirmation with no confirm step behind it', () => {

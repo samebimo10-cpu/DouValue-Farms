@@ -42,6 +42,7 @@ export const RULES_VERSION = rulesVersion(RULES) || 'unknown';
 import { PROBLEMS, PROBLEM_BY_ID } from './pests.js';
 import { wetnessIndex, drynessIndex, waterloggingIndex } from './climate.js';
 import { clamp } from '../util.js';
+import { approverFor, awaitingApproval, FARM_DOCTOR_ID, roleTitle, treatable } from './selfcheck.js';
 
 
 // --- Reading the rules' prose ---------------------------------------------
@@ -599,9 +600,15 @@ export function confirmStepDone(d) {
 /**
  * FR-DIAG-03 — a hand may start a diagnosis; a Field Supervisor or Farm Manager
  * performs the confirm test and confirms it. FR-DOC-08 — the Farm Doctor never
- * confirms its own. And nobody signs off their own work.
+ * confirms its own.
+ *
+ * FR-ROLE-12 — a second person is preferred. The person who raised it may
+ * confirm it only when nobody else qualified is on the farm (`others`, from
+ * selfcheck.otherConfirmers). That is allowed and the answer says so: `self`
+ * is true and `approver` names who approves a treatment from it (null for the
+ * Owner, whose own confirmation is recorded rather than sent up).
  */
-export function canConfirm(diagnosis, { by = null, senior = true } = {}) {
+export function canConfirm(diagnosis, { by = null, senior = true, role = null, others = [] } = {}) {
   if (!diagnosis) return { ok: false, reason: 'missing', why: 'There is no such diagnosis.' };
   if (isLegacyDiagnosis(diagnosis)) {
     return {
@@ -620,13 +627,31 @@ export function canConfirm(diagnosis, { by = null, senior = true } = {}) {
       missing: gate.missing.length ? gate.missing : [{ id: 'confirmTest', need: 'Record the confirm test and what it showed' }],
     };
   }
-  if (by && diagnosis.by && by === diagnosis.by) {
-    return { ok: false, reason: 'self', why: 'The person who started a diagnosis does not confirm it.' };
+  if (by === FARM_DOCTOR_ID) {
+    return { ok: false, reason: 'doctor', why: 'The Farm Doctor never confirms its own diagnosis (FR-DOC-08).' };
   }
   if (!senior) {
     return { ok: false, reason: 'rank', why: 'Only the Field Supervisor or the Farm Manager confirms a diagnosis.' };
   }
-  return { ok: true };
+  if (by && diagnosis.by && by === diagnosis.by) {
+    if (others.length) {
+      const names = others.map((p) => p.name || p.id).join(' or ');
+      return { ok: false, reason: 'second-person', others,
+        why: `You raised this one, and ${names} ${others.length === 1 ? 'is' : 'are'} on the farm. A second person confirms it.`,
+        fix: `Ask ${names} to do the confirm test and confirm it.` };
+    }
+    const approver = approverFor(role);
+    return {
+      ok: true,
+      self: true,
+      approver,
+      why: approver
+        ? 'You raised this one and nobody else qualified is in, so you may confirm it. It is marked '
+          + `self-confirmed, and the ${roleTitle(approver)} approves it before any treatment.`
+        : 'You raised this one. Your confirmation is recorded as self-confirmed.',
+    };
+  }
+  return { ok: true, self: false, approver: null };
 }
 
 // --- Old records ----------------------------------------------------------
@@ -708,6 +733,11 @@ export function readDiagnosis(record) {
     mapping: legacy ? (mapped ? 'mapped' : 'legacy') : 'rules',
     confirmed: Boolean(record.confirmedBy),
     confirmStep: confirmStepDone(record),
+    // FR-ROLE-12/13 — confirmed by the person who raised it, and whether a
+    // treatment is still waiting on the next level up.
+    selfConfirmed: Boolean(record.confirmedBy && record.selfConfirmed),
+    awaitingApproval: awaitingApproval(record),
+    treatable: treatable(record),
   };
 }
 

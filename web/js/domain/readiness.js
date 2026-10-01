@@ -77,7 +77,7 @@ export function sharedPinCheck(state) {
  * Two rows cannot be answered by a computer and say so plainly rather than
  * pretending: the field-screen review with the training consultant (UX-26), and
  * confirming the Owner actually received a digest on the chosen channel
- * (FR-REP-02, open decision D-1).
+ * (FR-REP-02, D-1 settled: WhatsApp).
  */
 export function readiness(state, { today = isoDate(), now = new Date().toISOString() } = {}) {
   const sample = sampleDataCheck(state);
@@ -149,10 +149,10 @@ export function readiness(state, { today = isoDate(), now = new Date().toISOStri
     },
     {
       id: 'FR-REP-02',
-      label: 'Owner receives the digest on the chosen channel',
+      label: 'Owner receives the digest on WhatsApp',
       ok: null,
-      detail: 'Open decision D-1: WhatsApp, email, or both. The digest is ready to copy; how it '
-        + 'is sent is still yours to choose.',
+      detail: 'D-1 is settled: WhatsApp, text first. Set WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID and '
+        + 'OWNER_WHATSAPP on the farm server, then check the Owner actually gets the 7 AM digest.',
     },
   ];
 

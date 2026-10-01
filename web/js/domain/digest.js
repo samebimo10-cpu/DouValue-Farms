@@ -25,6 +25,7 @@ import { batchName, failedBatches, traceText } from './media.js';
 import { sampleDataCheck } from './readiness.js';
 import { uncoveredToday } from './positions.js';
 import { lowStock } from './stock.js';
+import { selfConfirmedSince } from './selfcheck.js';
 
 /**
  * Everything wrong on the farm right now, in priority order.
@@ -194,10 +195,12 @@ export function digestText(state, opts = {}) {
   const farm = (state.settings || {}).farmName || 'The farm';
   const date = new Date(now).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' });
   const head = `${farm} — ${date}`;
+  // FR-ROLE-15 — not an alert, just visible, so the pattern is known.
+  const self = selfConfirmedLine(state, now);
 
   if (!items.length) {
     // The one-line nothing-wrong case, which FR-REP-01 asks for by name.
-    return `${head}\nNothing needs you today. No open alerts, no overdue work, no overrides.`;
+    return `${head}\nNothing needs you today. No open alerts, no overdue work, no overrides.${self ? `\n${self}` : ''}`;
   }
 
   const critical = items.filter((i) => i.severity === 'critical');
@@ -209,8 +212,18 @@ export function digestText(state, opts = {}) {
     if (i.detail) lines.push(`   ${i.detail}`);
   }
 
+  if (self) lines.push('', self);
   lines.push('', 'Open the app for the detail and the photos.');
   return lines.join('\n');
+}
+
+/**
+ * FR-ROLE-15 — how many diagnoses were confirmed by the person who raised them
+ * in the last 7 days. One line, only when there were any; never an exception.
+ */
+export function selfConfirmedLine(state, now = new Date().toISOString()) {
+  const n = selfConfirmedSince(state, { now, days: 7 }).length;
+  return n ? `Self-confirmed diagnoses this week: ${n}.` : '';
 }
 
 /** How big the message is, since FR-REP-02 is a size requirement as much as a content one. */
@@ -232,6 +245,8 @@ export function digest(state, opts = {}) {
       watch: items.filter((i) => i.severity === 'watch').length,
     },
     allWell: items.length === 0,
+    // FR-ROLE-15 — visible, not an alert.
+    selfConfirmedWeek: selfConfirmedSince(state, { now, days: 7 }).length,
     kpis: kpis(state, { now, settings: opts.settings }),
     text: digestText(state, { ...opts, now }),
   };
