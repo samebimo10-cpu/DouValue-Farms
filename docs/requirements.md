@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.9 (draft for restructuring) |
+| Version | 1.10 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -75,6 +75,15 @@ Supervising roles also do field work. Their own rounds are tasks like anyone els
 - **FR-ROLE-09 (MUST):** A supervising role's own tasks follow the same rules as anyone else's: proof photos (`FR-PROOF-01`), overdue escalation (`FR-TASK-03`) and the end-of-shift report (`FR-TASK-05`).
 - **FR-ROLE-10 (MUST):** Overdue escalation skips any rung held by the person whose task is overdue, and goes one level up. The Field Supervisor's own overdue task goes to the Farm Manager; the Farm Manager's goes to the Owner. The Owner's own stays on the Owner's list.
 - **FR-ROLE-11 (MUST):** A screen shows how the week's work is spread across people: jobs per person per day, and jobs nobody holds.
+
+### 4.2 Checking your own work
+
+A supervisor who scouts a zone may end up confirming his own finding. That is normal on a small farm, and refusing it would stop work. But it must be visible, because unchecked self-confirmation is how a wrong call becomes a farm-wide decision.
+
+- **FR-ROLE-12 (MUST):** Confirmation of a diagnosis prefers a second person. If the only qualified person available is the one who raised it, the app allows it and marks the record **self-confirmed**.
+- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner. Approval can be given from the phone. Until it lands the treatment is blocked, with one exception: where the treatment closes an open alert (`FR-SCOUT-03`) whose deadline falls before the next spray window (rules SR-01, C-3), the treatment proceeds, is marked **treated before approval**, and the Owner is notified at once. The approval is still required afterwards, and the record stays flagged until it lands.
+- **FR-ROLE-14 (MUST):** Gate 0 and Gate 4 clearance is unchanged (FR-GATE-00): Farm Manager confirmation plus Owner approval, whoever did the field work.
+- **FR-ROLE-15 (SHOULD):** The Owner digest counts self-confirmed diagnoses for the week. Not an alert — just visible, so the pattern is known.
 
 ---
 
@@ -380,6 +389,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.10 | 1 Oct 2026 | Checking your own work (§4.2, FR-ROLE-12 to FR-ROLE-15): self-confirmed diagnoses marked, next level up approves the treatment as a hard block, except a treatment that closes an alert due before the next spray window, which proceeds flagged "treated before approval" with the Owner notified at once |
 | 1.9 | 30 Sep 2026 | Learn area for Greenhouse Hands: problem cards without doses, groups or plans; supervising view keeps them; offline search; diagnosed reports link to the card (§6.6a, FR-LEARN-01 to FR-LEARN-05) |
 | 1.8 | 30 Sep 2026 | Sick-plant flow split by role: short report for Greenhouse Hands, guided diagnosis from the report for Field Supervisor and Farm Manager, serious reports alert at once, confirmed result back to the reporter (FR-DIAG-03 amended, FR-DIAG-07 to FR-DIAG-10) |
 | 1.7 | 30 Sep 2026 | Field assignments for every role, My work / The farm, own-rung escalation skip, week spread (§4.1, FR-ROLE-05 to FR-ROLE-11) |
