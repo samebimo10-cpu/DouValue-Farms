@@ -152,6 +152,10 @@ export const EVENT_POLICY = {
   // step that makes the confirmation mean something: the senior performs the
   // confirm test the card names and records what it showed.
   'diagnosis.confirm': { write: 'verifyHarvest', read: ANY, guard: guardConfirmDiagnosis },
+  // FR-ROLE-13: a self-confirmed diagnosis waits for the next level up before
+  // a treatment. Who that is depends on who confirmed it, which only the log
+  // knows, so writeEvents checks it against the stored records as well.
+  'diagnosis.approve': { write: 'prescribe',     read: ANY, guard: guardDoctorConfirm },
   // FR-GATE-07: the Owner alone may override a gate, and the reason is part of
   // the record. `manageOwners` is held by the CEO and nobody else.
   'gate.override':        { write: 'manageOwners', read: ANY, guard: guardOverride },
@@ -325,6 +329,194 @@ export async function mayWritePerson(event, author, farmId, store) {
   return { ok: true };
 }
 
+// --- Checking your own work — §4.2, FR-ROLE-12 to FR-ROLE-14 ----------------
+//
+// Mirrors web/js/domain/selfcheck.js. The app judges every record on replay;
+// this is the fence that holds when a record arrives from something that is
+// not the app. Who raised a diagnosis, who confirmed it, who is on the farm
+// and when an alert opened are only in the log, so these checks read it.
+//
+// The spray window is SR-01's 4-7 PM. The server does not read the rules file,
+// so it is repeated here, and tests/self-confirm.test.mjs fails the moment the
+// rules say anything else (as BANNED_ACTIVES below is kept honest).
+
+export const SPRAY_WINDOW = { open: 16, close: 19 };
+const FARM_OFFSET_MS = 3600 * 1000;           // WAT, UTC+1
+const HOUR_MS = 3600 * 1000;
+const NO_SHOW_HOUR = 9;
+const ALERT_DEADLINE_HOURS = 24;              // FR-SCOUT-03, and C-3's "never later than 24 h"
+const CONFIRMING_ROLES = new Set(['supervisor', 'manager', 'ceo']);
+const DOCTOR_ID = 'farm-doctor';
+
+/** FR-ROLE-13 — who approves a treatment from a diagnosis this role confirmed on itself. */
+export function approverFor(role) {
+  if (role === 'ceo') return null;
+  if (role === 'manager') return 'ceo';
+  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  return 'ceo';
+}
+
+function farmMidnight(ms) {
+  const shifted = ms + FARM_OFFSET_MS;
+  return shifted - (((shifted % (24 * HOUR_MS)) + 24 * HOUR_MS) % (24 * HOUR_MS)) - FARM_OFFSET_MS;
+}
+
+/** The first spray window to open strictly after `at`. */
+export function nextWindowOpens(at) {
+  const t = Date.parse(at);
+  const today = farmMidnight(t) + SPRAY_WINDOW.open * HOUR_MS;
+  return new Date(today > t ? today : today + 24 * HOUR_MS).toISOString();
+}
+
+/** C-3: the close of the first spray window after the breach, never later than 24 h. */
+export function alertDeadline(alertAt) {
+  const t = Date.parse(alertAt);
+  const close = farmMidnight(t) + SPRAY_WINDOW.close * HOUR_MS;
+  return new Date(Math.min(close > t ? close : close + 24 * HOUR_MS, t + ALERT_DEADLINE_HOURS * HOUR_MS)).toISOString();
+}
+
+/** What the log says about diagnoses, scouting, sprays and who is in. Built once per push. */
+function emptyFacts() {
+  return { diagnoses: {}, scouts: {}, sprays: [], decisions: [], attendance: [], absences: {} };
+}
+
+/** Fold one stored (or just-accepted) record into the facts. `e.by` is the server's stamp. */
+export function foldFact(facts, e) {
+  const p = (e && e.payload) || {};
+  switch (e && e.type) {
+    case 'diagnosis.record':
+      facts.diagnoses[p.id || e.id] = { id: p.id || e.id, by: e.by, cycleId: p.cycleId || null,
+        problemId: p.problemId || null, confirmedBy: null, self: false, approvedBy: null };
+      break;
+    case 'diagnosis.confirm': {
+      const d = facts.diagnoses[p.id];
+      if (!d || d.confirmedBy || e.by === DOCTOR_ID) break;          // the first confirmation stands
+      d.confirmedBy = e.by; d.self = !!d.by && e.by === d.by;
+      break;
+    }
+    case 'diagnosis.approve': {
+      const d = facts.diagnoses[p.id];
+      if (d && d.confirmedBy && !d.approvedBy) d.approvedBy = e.by;
+      break;
+    }
+    case 'scout.record':
+      if (p.pestId) facts.scouts[p.id || e.id] = { cycleId: p.cycleId, pestId: p.pestId, at: e.at, date: p.date || String(e.at || '').slice(0, 10) };
+      break;
+    case 'spray.record':
+      facts.sprays.push({ cycleId: p.cycleId, date: String(p.date || e.at || '').slice(0, 10), at: e.at });
+      break;
+    case 'alert.decide':
+      facts.decisions.push({ cycleId: p.cycleId, pestId: p.pestId, at: e.at });
+      break;
+    case 'attendance.in':
+      facts.attendance.push({ personId: p.personId || e.by, in: e.at, out: null });
+      break;
+    case 'attendance.out': {
+      const open = [...facts.attendance].reverse().find((a) => a.personId === (p.personId || e.by) && !a.out);
+      if (open) open.out = e.at;
+      break;
+    }
+    case 'absence.record':
+      facts.absences[p.id || e.id] = { personId: p.personId, date: p.date, cancelled: false };
+      break;
+    case 'absence.cancel':
+      if (facts.absences[p.id]) facts.absences[p.id].cancelled = true;
+      break;
+    default:
+  }
+}
+
+export async function logFacts(farmId, store) {
+  const facts = emptyFacts();
+  for (let since = 0; ;) {
+    const page = await store.listEvents(farmId, since, MAX_PULL);
+    for (const e of page.events) foldFact(facts, e);
+    if (!page.more || page.cursor <= since) break;
+    since = page.cursor;
+  }
+  return facts;
+}
+
+const declaredOff = (facts, personId, day) => Object.values(facts.absences)
+  .some((a) => a.personId === personId && a.date === day && !a.cancelled);
+
+function onFarmAt(facts, personId, at) {
+  const day = String(at).slice(0, 10);
+  if (declaredOff(facts, personId, day)) return false;
+  return facts.attendance.some((a) => a.personId === personId && String(a.in || '').slice(0, 10) === day
+    && a.in <= at && (!a.out || a.out > at));
+}
+
+function managerAwayFrom(facts, members, at) {
+  const day = String(at).slice(0, 10);
+  const hour = new Date(Date.parse(at) + FARM_OFFSET_MS).getUTCHours();
+  const managers = members.filter((m) => m.role === 'manager' && m.status === 'active');
+  return !managers.some((m) => !declaredOff(facts, m.id, day)
+    && (hour < NO_SHOW_HOUR || facts.attendance.some((a) => a.personId === m.id && String(a.in || '').slice(0, 10) === day && a.in <= at)));
+}
+
+/** The records this section judges from the log. */
+const LOG_CHECKED = new Set(['diagnosis.confirm', 'diagnosis.approve', 'spray.record']);
+export const needsLog = (event) => LOG_CHECKED.has(event && event.type);
+
+/**
+ * FR-ROLE-12/13 against the log. `me` is the authenticated member; `at` is the
+ * record's own time, which is the moment the phone says it happened.
+ */
+export async function mayWriteFromLog(event, me, facts, members) {
+  const p = event.payload || {};
+  const at = String(event.at || new Date().toISOString());
+  const who = me.memberId || me.id;
+  const roleOf = (id) => ((members.find((m) => m.id === id) || {}).role) || null;
+
+  if (event.type === 'diagnosis.confirm') {
+    const d = facts.diagnoses[p.id];
+    if (!d) return { ok: true };                    // not here yet; the app parks it until it is
+    if (d.by && who === d.by) {
+      const others = members.filter((m) => m.status === 'active' && CONFIRMING_ROLES.has(m.role)
+        && m.id !== who && onFarmAt(facts, m.id, at));
+      if (others.length) {
+        return { ok: false, why: `A second person confirms it: ${others.map((m) => m.name || m.id).join(' or ')} is on the farm (FR-ROLE-12)` };
+      }
+    }
+    return { ok: true };
+  }
+
+  if (event.type === 'diagnosis.approve') {
+    const d = facts.diagnoses[p.id];
+    if (!d || !d.confirmedBy) return { ok: false, why: 'That diagnosis has not been confirmed on the farm server yet' };
+    if (!d.self) return { ok: false, why: 'A second person confirmed that diagnosis; it needs no approval' };
+    const needed = approverFor(roleOf(d.confirmedBy));
+    if (!needed) return { ok: false, why: "The Owner's own confirmation is recorded, not sent up for approval" };
+    if (d.approvedBy) return { ok: false, why: 'That diagnosis is already approved' };
+    if (who === d.confirmedBy) return { ok: false, why: 'Nobody approves a diagnosis they confirmed themselves (FR-ROLE-13)' };
+    if (needed === 'ceo') return me.role === 'ceo' ? { ok: true } : { ok: false, why: 'The Owner approves a Farm Manager\'s self-confirmed diagnosis' };
+    if (me.role === 'manager') return { ok: true };
+    if (me.role === 'ceo') {
+      return managerAwayFrom(facts, members, at)
+        ? { ok: true }
+        : { ok: false, why: 'The Farm Manager is in today, so the Farm Manager approves it' };
+    }
+    return { ok: false, why: 'The Farm Manager approves a self-confirmed diagnosis from the field' };
+  }
+
+  if (event.type === 'spray.record') {
+    const d = p.diagnosisId && facts.diagnoses[p.diagnosisId];
+    if (!d || !d.confirmedBy || !d.self || d.approvedBy || !approverFor(roleOf(d.confirmedBy))) return { ok: true };
+    // FR-ROLE-13: blocked until the approval lands, unless the treatment
+    // closes an open alert due before the next spray window.
+    const blocked = { ok: false, why: 'That diagnosis was self-confirmed and is waiting on its approval; the treatment is blocked until it lands (FR-ROLE-13)' };
+    const alertId = String(((p.beforeApproval || {}).alertId) || '');
+    const scout = alertId.startsWith('alert:') ? facts.scouts[alertId.slice(6)] : null;
+    if (!scout || scout.cycleId !== p.cycleId || scout.at > at || (d.problemId && scout.pestId !== d.problemId)) return blocked;
+    const closed = facts.sprays.some((s) => s.cycleId === scout.cycleId && s.date >= scout.date && s.at <= at)
+      || facts.decisions.some((x) => x.cycleId === scout.cycleId && x.pestId === scout.pestId && x.at >= scout.at && x.at <= at);
+    if (closed) return blocked;
+    return alertDeadline(scout.at) < nextWindowOpens(at) ? { ok: true } : blocked;
+  }
+  return { ok: true };
+}
+
 export function mayWrite(event, author) {
   const policy = EVENT_POLICY[event.type];
   if (!policy) return { ok: false, why: `Unknown record type ${event.type}` };
@@ -465,6 +657,8 @@ async function readJson(req) {
  *   POST /api/farms/:id/events      file records, each checked against the author
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
+ *   GET  /api/farms/:id/notify      whether WhatsApp to the Owner is set up (FR-REP-02)
+ *   POST /api/farms/:id/notify      send the Owner the digest or a straight-to-Owner item
  */
 export async function handleRequest(req, store) {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -512,6 +706,10 @@ export async function handleRequest(req, store) {
   // FR-DOC-03: photo review. Online only, by design — the app's guided
   // diagnosis is what answers when this cannot be reached.
   if (action === 'photo-review' && req.method === 'POST') return photoReview(farmId, body, me, store);
+  // FR-REP-02: the Owner's WhatsApp. The phones decide what to say; the key
+  // to send it lives here and nowhere else.
+  if (action === 'notify' && req.method === 'GET') return json(await notifyStatus(farmId, store));
+  if (action === 'notify' && req.method === 'POST') return json(await notifyOwner(farmId, body, me, store));
 
   return json({ error: 'Not found' }, 404);
 }
@@ -685,9 +883,12 @@ function guardShift(event, author) {
  * confirm test and confirms". Performing it is the point, so the confirmation
  * carries what the confirmer saw, not just their name.
  */
-function guardConfirmDiagnosis(event) {
+function guardConfirmDiagnosis(event, author = {}) {
   const p = event.payload || {};
   if (!p.id) return { ok: false, why: 'Say which diagnosis is being confirmed' };
+  if ((author.memberId || author.id) === 'farm-doctor') {
+    return { ok: false, why: 'The Farm Doctor does not confirm its own diagnosis (FR-DOC-08)' };
+  }
   if (!String(p.confirmTest || '').trim()) {
     return { ok: false, why: 'Say which confirm test you did' };
   }
@@ -1158,12 +1359,15 @@ async function readEvents(farmId, url, me, store) {
   });
 }
 
-async function writeEvents(farmId, body, me, store) {
+export async function writeEvents(farmId, body, me, store) {
   const incoming = Array.isArray(body.events) ? body.events : [];
   if (incoming.length > MAX_PUSH) return json({ error: 'Too many records in one push' }, 413);
 
   const allowed = [];
   const refused = [];
+  // §4.2: read the log once, and only when a record in this push needs it.
+  let facts = null;
+  let members = null;
   for (const event of incoming) {
     if (!event || typeof event.id !== 'string' || !event.id || typeof event.type !== 'string') {
       refused.push({ id: event && event.id, why: 'Malformed record' });
@@ -1176,8 +1380,21 @@ async function writeEvents(farmId, body, me, store) {
     // in the record, so this check cannot be folded into the table above.
     const overPerson = await mayWritePerson(event, me, farmId, store);
     if (!overPerson.ok) { refused.push({ id: event.id, why: overPerson.why }); continue; }
+    // Likewise a confirmation, an approval or a spray (FR-ROLE-12/13): who
+    // may do it depends on who raised and confirmed, and who is in.
+    if (needsLog(event)) {
+      if (!facts) {
+        facts = await logFacts(farmId, store);
+        for (const earlier of allowed) foldFact(facts, earlier);
+        members = await store.listMembers(farmId);
+      }
+      const fromLog = await mayWriteFromLog(event, me, facts, members);
+      if (!fromLog.ok) { refused.push({ id: event.id, why: fromLog.why }); continue; }
+    }
     // Authorship is the server's to decide, never the client's claim.
-    allowed.push({ ...event, by: me.id, serverAt: new Date().toISOString() });
+    const stamped = { ...event, by: me.id, serverAt: new Date().toISOString() };
+    allowed.push(stamped);
+    if (facts) foldFact(facts, stamped);
   }
 
   const stored = await store.appendEvents(farmId, allowed);
@@ -1283,6 +1500,153 @@ function envVar(name) {
     if (typeof process !== 'undefined' && process.env) return process.env[name] || '';
   } catch { /* not Node */ }
   return '';
+}
+
+// --- The Owner's WhatsApp — FR-REP-02 ----------------------------------------
+//
+// The digest and the straight-to-Owner items go to the Owner by WhatsApp,
+// text first. The server holds no farm model, so the phones work out what to
+// say (web/js/domain/notify.js) and hand it over with a key; the server sends
+// each key once, whichever phone offers it first, so every phone can safely
+// offer everything it has seen. The WhatsApp key lives here and nowhere else.
+//
+// Set on the server (Deno Deploy → Settings → Environment Variables):
+//   WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID   WhatsApp Cloud API credentials
+//   OWNER_WHATSAPP                             the Owner's number(s), e.g. 2348030000000
+//   WHATSAPP_TEMPLATE, WHATSAPP_TEMPLATE_LANG  optional: an approved template with one
+//                                              body variable, used only when WhatsApp's
+//                                              24-hour rule refuses a plain text
+
+const NOTIFY_MAX_ITEMS = 20;
+const NOTIFY_MAX_CHARS = 4096;           // WhatsApp's own ceiling on a text body
+const NOTIFY_PER_DAY = 60;               // a bound on what one farm can send in a day
+const NOTIFY_KEEP = 200;                 // sent keys remembered, newest kept
+const NOTIFY_TIMEOUT_MS = 15000;
+const NOTIFY_KEY = /^(now|digest):[A-Za-z0-9_:.-]{1,120}$/;
+// WhatsApp's codes for "outside the 24-hour window: use a template".
+const WA_OUTSIDE_WINDOW = new Set([131047, 470]);
+
+/** What is set up. Nothing here ever leaves the server. */
+export function whatsappChannel(env = envVar) {
+  const to = String(env('OWNER_WHATSAPP') || '').split(',').map((n) => n.replace(/\D/g, '')).filter(Boolean);
+  const wa = {
+    token: env('WHATSAPP_TOKEN'), phoneId: env('WHATSAPP_PHONE_NUMBER_ID'), to,
+    template: env('WHATSAPP_TEMPLATE'), lang: env('WHATSAPP_TEMPLATE_LANG') || 'en',
+    version: env('WHATSAPP_API_VERSION') || 'v22.0',
+  };
+  return wa.token && wa.phoneId && wa.to.length ? wa : null;
+}
+
+/** A template variable may not hold line breaks or long runs of spaces. */
+export function templateParameter(text) {
+  const flat = String(text).replace(/\s*\n+\s*/g, ' · ').replace(/\s{2,}/g, ' ').trim();
+  return flat.length <= 900 ? flat : `${flat.slice(0, 890).trimEnd()} …`;
+}
+
+async function sendWhatsApp(wa, to, text, fetchFn) {
+  const post = (message) => fetchFn(`https://graph.facebook.com/${wa.version}/${wa.phoneId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${wa.token}` },
+    signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, ...message }),
+  });
+  const errorOf = async (res) => { try { return ((await res.json()) || {}).error || {}; } catch { return {}; } };
+
+  // Text first: the whole message, line breaks and all.
+  const res = await post({ type: 'text', text: { body: text, preview_url: false } });
+  if (res.ok) return { ok: true, via: 'text' };
+  const error = await errorOf(res);
+  if (!WA_OUTSIDE_WINDOW.has(Number(error.code)) || !wa.template) {
+    return { ok: false, why: `WhatsApp refused it: ${error.message || res.status}` };
+  }
+  const again = await post({
+    type: 'template',
+    template: { name: wa.template, language: { code: wa.lang },
+      components: [{ type: 'body', parameters: [{ type: 'text', text: templateParameter(text) }] }] },
+  });
+  if (again.ok) return { ok: true, via: 'template' };
+  const second = await errorOf(again);
+  return { ok: false, why: `WhatsApp refused the template: ${second.message || again.status}` };
+}
+
+/** Whether WhatsApp is set up, and the last few keys that went. */
+export async function notifyStatus(farmId, store, { env = envVar } = {}) {
+  const farm = (await store.getFarm(farmId)) || {};
+  const sent = Object.entries(farm.notified || {})
+    .sort((a, b) => ((a[1].at || '') < (b[1].at || '') ? 1 : -1)).slice(0, 10)
+    .map(([key, rec]) => ({ key, at: rec.at }));
+  return { ok: true, configured: { whatsapp: !!whatsappChannel(env) }, sent };
+}
+
+/**
+ * Send what a phone offered: `{ items: [{ key, kind, text }] }`. Anyone on the
+ * farm may raise a straight-to-Owner item; the digest comes from a role that
+ * runs the work. Each key goes once to each number.
+ */
+export async function notifyOwner(farmId, body, me, store, {
+  env = envVar, fetchFn = fetch, now = new Date().toISOString(),
+} = {}) {
+  const wa = whatsappChannel(env);
+  const items = Array.isArray(body && body.items) ? body.items.slice(0, NOTIFY_MAX_ITEMS) : [];
+  const configured = { whatsapp: !!wa };
+  if (!wa) {
+    return { ok: false, reason: 'not-configured', configured,
+      message: 'WhatsApp to the Owner is not set up on the farm server yet. Until it is, copy the digest '
+        + 'into WhatsApp from the Alerts screen.',
+      results: items.map((i) => ({ key: i && i.key, status: 'not-configured' })) };
+  }
+
+  const farm = (await store.getFarm(farmId)) || {};
+  const notified = { ...(farm.notified || {}) };
+  const day = farmDay();
+  let budget = farm.notifyDay && farm.notifyDay.day === day ? farm.notifyDay.count : 0;
+  const results = [];
+
+  for (const item of items) {
+    const key = String((item && item.key) || '');
+    const kind = item && item.kind;
+    // Plain text and nothing else: no control characters but the line break.
+    const text = String((item && item.text) || '').replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, '').trim();
+    const expected = key.startsWith('digest:') ? 'digest' : 'immediate';
+    if (!NOTIFY_KEY.test(key) || kind !== expected) {
+      results.push({ key, status: 'refused', why: 'Not a message this server sends' });
+      continue;
+    }
+    if (!text || text.length > NOTIFY_MAX_CHARS) {
+      results.push({ key, status: 'refused', why: 'A message is text, up to 4096 characters' });
+      continue;
+    }
+    if (kind === 'digest' && !can(me.role, 'assignTasks')) {
+      results.push({ key, status: 'refused', why: 'The digest comes from a phone that runs the work' });
+      continue;
+    }
+    const rec = notified[key] || { at: null, done: {} };
+    const owed = wa.to.filter((to) => !rec.done[to]);
+    if (!owed.length) { results.push({ key, status: 'already-sent' }); continue; }
+    if (budget >= NOTIFY_PER_DAY) {
+      results.push({ key, status: 'failed', why: `That is ${NOTIFY_PER_DAY} messages today; the rest wait for tomorrow` });
+      continue;
+    }
+    const failures = [];
+    const via = [];
+    for (const to of owed) {
+      let sent;
+      try { sent = await sendWhatsApp(wa, to, text, fetchFn); }
+      catch (err) { sent = { ok: false, why: `Could not reach WhatsApp: ${err.message || err}` }; }
+      if (sent.ok) { rec.done[to] = now; via.push(sent.via); } else failures.push(sent.why);
+    }
+    if (via.length) { rec.at = now; budget++; }
+    notified[key] = rec;
+    results.push(failures.length
+      ? { key, status: via.length ? 'partly-sent' : 'failed', via, why: failures.join('; ') }
+      : { key, status: 'sent', via });
+  }
+
+  const kept = Object.entries(notified)
+    .sort((a, b) => ((a[1].at || '') < (b[1].at || '') ? 1 : -1)).slice(0, NOTIFY_KEEP);
+  await store.setFarm(farmId, { ...farm, notified: Object.fromEntries(kept), notifyDay: { day, count: budget } });
+  return { ok: true, configured, results };
 }
 
 /** Count one use against this person's day, and refuse once they are over. */

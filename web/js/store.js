@@ -6,6 +6,9 @@
 
 import { appendEvents, deviceId, loadEvents } from './db.js';
 import { confirmStepDone, isLegacyDiagnosis, isPhotoSlot } from './domain/diagnose.js';
+import {
+  approverFor, awaitingApproval, beforeApprovalCheck, canApprove, otherConfirmers,
+} from './domain/selfcheck.js';
 import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { releaseCheck } from './domain/nursery.js';
 import { fillCheck } from './domain/gates.js';
@@ -266,7 +269,7 @@ export function reduce(events) {
       case 'label.retire': return `label:${p.id}`;
       case 'person.deactivate': return `person:${p.id}`;
       case 'attendance.out': return `attendance:${p.personId}`;
-      case 'diagnosis.confirm': return `diagnosis:${p.id}`;
+      case 'diagnosis.confirm': case 'diagnosis.approve': return `diagnosis:${p.id}`;
       case 'topsoil.assign': return `topsoil:${p.batchId}`;
       case 'gate.override.revoke': return `override:${p.id}`;
       case 'doctor.confirm': case 'doctor.approve': case 'doctor.owner-seen': return `doctor:${p.id}`;
@@ -281,6 +284,19 @@ export function reduce(events) {
       case 'media.fill': return `media:${p.batchId}`;
       default: return null;
     }
+  };
+
+  /** FR-ROLE-13 — apply one approval to a diagnosis, or record why not. */
+  const approveDiagnosis = (d, e) => {
+    const person = state.people[e.by];
+    const verdict = canApprove(state, d, { id: e.by, role: person && person.active !== false ? person.role : null }, { at: e.at });
+    if (!verdict.ok) {
+      if (verdict.reason !== 'done') d.approveRefused = verdict.why;
+      return;
+    }
+    d.approvedBy = e.by; d.approvedAt = e.at; d.approveNote = (e.payload || {}).note || '';
+    d.approvedCovering = verdict.how === 'covering';
+    delete d.approveRefused;
   };
 
   const exists = (key) => {
@@ -670,15 +686,40 @@ export function reduce(events) {
       case 'sale.record':
         state.sales.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
-      case 'spray.record':
-        state.sprays.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+      // FR-ROLE-13 — a spray resting on a self-confirmed diagnosis that nobody
+      // above has approved is judged here, from the records as they stood when
+      // it went on. Whether it was treated before approval is computed from
+      // the alert deadline and the window times; what the payload claims is
+      // thrown away. One that does not qualify is kept (it happened) and
+      // marked, and Gate 3 shows it red.
+      case 'spray.record': {
+        const spray = { ...p, id: p.id || e.id, by: e.by, at: e.at, beforeApproval: null };
+        delete spray.unapproved;
+        const d = p.diagnosisId && state.diagnoses.find((x) => x.id === p.diagnosisId);
+        if (d && awaitingApproval(d)) {
+          const verdict = beforeApprovalCheck(state, d, { cycleId: p.cycleId, at: e.at });
+          if (verdict.ok) {
+            spray.beforeApproval = { alertId: verdict.alertId, deadline: verdict.deadline, nextWindow: verdict.nextWindow };
+          } else {
+            spray.unapproved = verdict.why;
+          }
+        }
+        state.sprays.push(spray);
         break;
+      }
       case 'scout.record':
         state.scouts.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
-      case 'diagnosis.record':
-        state.diagnoses.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
+      // Who confirmed it, whether that was its own raiser, and who approved it
+      // come from the confirm and approve records below, never from the
+      // record's own payload (FR-ROLE-12/13).
+      case 'diagnosis.record': {
+        const d = { ...p, id: p.id || e.id, by: e.by, at: e.at };
+        for (const k of ['confirmedBy', 'confirmedAt', 'selfConfirmed', 'approvalFrom', 'approvedBy', 'approvedAt',
+          'approvedCovering', 'earlyApprovals', 'confirmRefused', 'approveRefused']) delete d[k];
+        state.diagnoses.push(d);
         break;
+      }
 
       // FR-DIAG-02 / FR-DOC-01 — a diagnosis the Farm Doctor produced cannot be
       // confirmed until the card, the photos and the confirm test are all on
@@ -689,14 +730,52 @@ export function reduce(events) {
       // They are left exactly as they were confirmed at the time: the event log
       // is a record of what people actually did, and rewriting history here
       // would make every past treatment look ungated.
+      //
+      // FR-ROLE-12 — the person who raised it may confirm it only when nobody
+      // else qualified is on the farm, and then the record says so. Who that
+      // person is decides who approves a treatment from it (FR-ROLE-13); the
+      // payload has no say in either. The first confirmation stands: a later
+      // one cannot turn a self-confirmed record into a second person's, or the
+      // approval could be skipped. FR-DOC-08: the Farm Doctor confirms nothing.
       case 'diagnosis.confirm': {
         const d = state.diagnoses.find((x) => x.id === p.id);
-        if (!d) break;
+        if (!d || d.confirmedBy) break;
+        if (e.by === DOCTOR.id) {
+          d.confirmRefused = 'The Farm Doctor does not confirm its own diagnosis.';
+          break;
+        }
         if (!isLegacyDiagnosis(d) && !confirmStepDone(d)) {
           d.confirmRefused = 'The confirm test and the photos were not on the record.';
           break;
         }
+        const self = !!d.by && e.by === d.by;
+        if (self) {
+          const others = otherConfirmers(state, d, e.at);
+          if (others.length) {
+            d.confirmRefused = `Raised and confirmed by the same person while ${others.map((x) => x.name || x.id).join(' and ')} `
+              + 'could have confirmed it (FR-ROLE-12).';
+            break;
+          }
+        }
         d.confirmedBy = e.by; d.confirmedAt = e.at; d.confirmNote = p.note || '';
+        d.selfConfirmed = self;
+        d.approvalFrom = self ? approverFor((state.people[e.by] || {}).role) : null;
+        d.approvedBy = null; d.approvedAt = null;
+        delete d.confirmRefused;
+        // An approval whose clock ran ahead of this confirmation is judged now.
+        for (const early of d.earlyApprovals || []) approveDiagnosis(d, early);
+        delete d.earlyApprovals;
+        break;
+      }
+
+      // FR-ROLE-13 — the next level up approves a treatment from a
+      // self-confirmed diagnosis. Judged here from the record itself, so a
+      // phone that skipped the screen cannot approve its own work by syncing.
+      case 'diagnosis.approve': {
+        const d = state.diagnoses.find((x) => x.id === p.id);
+        if (!d) break;
+        if (!d.confirmedBy) { (d.earlyApprovals ||= []).push(e); break; }
+        approveDiagnosis(d, e);
         break;
       }
 

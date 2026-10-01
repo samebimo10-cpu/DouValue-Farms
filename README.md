@@ -116,6 +116,23 @@ supervisor's late round goes to the manager and the manager's to the CEO.
 **How the week is spread** (`#/week`) shows each person's jobs per day and any
 zone nobody holds.
 
+### Checking your own work (§4.2)
+
+A second person confirms a diagnosis where one is in. When the only qualified
+person on the farm is the one who raised it, they may confirm it themselves and
+the record is marked **self-confirmed** (`FR-ROLE-12`). A treatment from it then
+waits for the next level up (`FR-ROLE-13`): the supervisor's for the manager, the
+manager's for the CEO, and the CEO may stand in for a manager who is not in. The
+approval is one tap on the Clinic screen. Until it lands the spray screen refuses
+the treatment — except where it closes an open alert due before the next spray
+window, which the app works out from the alert and SR-01's window, never from a
+button. That spray goes ahead marked **treated before approval**, the CEO hears on
+WhatsApp at once, and Gate 3 is yellow until the approval lands, green when it
+does, and red after 48 hours without it. The CEO's own self-confirmation is
+recorded, not sent up. Gate 0 and Gate 4 are unchanged (`FR-ROLE-14`), and the
+digest counts the week's self-confirmed diagnoses (`FR-ROLE-15`). The phone, the
+record rebuild and the farm server each enforce all of it.
+
 ## What each person gets
 
 ### Farm hand — *Today*
@@ -415,6 +432,21 @@ recorded, when the app returns to the foreground, and on a slow background tick.
 Failures back off (5s, 15s, 45s, 2m, 5m) instead of hammering a bad connection,
 and overlapping triggers share one exchange. A line across the top of every
 screen says where the phone stands; tapping it forces an exchange.
+
+### The CEO's WhatsApp
+
+The digest goes to the CEO on WhatsApp from 7 AM, text first; anything on the
+rules' straight-to-Owner list (a suspected virus, bacterial wilt, a gate
+override, pod borer past ten plants, a synthetic from Week 10) and any treatment
+made before its approval goes as soon as a phone that has seen it has signal
+(`FR-REP-02`). Phones offer the messages after each sync and the farm server
+sends each one once. Set these on the server (Deno Deploy → Settings →
+Environment Variables): `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` from the
+WhatsApp Cloud API, and `OWNER_WHATSAPP` (the CEO's number, e.g. 2348030000000).
+WhatsApp refuses a plain text to someone who has not written to the number in 24
+hours; set `WHATSAPP_TEMPLATE` (an approved template with one body variable) and
+the message goes as that template instead. Until it is set up, **Copy for
+WhatsApp** on the Alerts screen still works.
 
 ### Accounts, and who can read what
 

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.10 (draft for restructuring) |
+| Version | 1.11 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -81,8 +81,8 @@ Supervising roles also do field work. Their own rounds are tasks like anyone els
 A supervisor who scouts a zone may end up confirming his own finding. That is normal on a small farm, and refusing it would stop work. But it must be visible, because unchecked self-confirmation is how a wrong call becomes a farm-wide decision.
 
 - **FR-ROLE-12 (MUST):** Confirmation of a diagnosis prefers a second person. If the only qualified person available is the one who raised it, the app allows it and marks the record **self-confirmed**.
-- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner. Approval can be given from the phone. Until it lands the treatment is blocked, with one exception: where the treatment closes an open alert (`FR-SCOUT-03`) whose deadline falls before the next spray window (rules SR-01, C-3), the treatment proceeds, is marked **treated before approval**, and the Owner is notified at once. The approval is still required afterwards, and the record stays flagged until it lands.
-- **FR-ROLE-14 (MUST):** Gate 0 and Gate 4 clearance is unchanged (FR-GATE-00): Farm Manager confirmation plus Owner approval, whoever did the field work.
+- **FR-ROLE-13 (MUST):** A self-confirmed diagnosis that leads to a treatment needs the next level up to approve: the Field Supervisor's goes to the Farm Manager, the Farm Manager's goes to the Owner, and the Owner may approve a Field Supervisor's when the Farm Manager is away. Approval can be given from the phone. Until it lands the treatment is blocked, with one exception: where the treatment closes an open alert (`FR-SCOUT-03`) whose deadline falls before the next spray window (rules SR-01, C-3), the treatment proceeds, is marked **treated before approval**, and the Owner is notified at once. The exception is computed from the alert deadline and the window times, never chosen by the person. The approval is still required afterwards, and the record stays flagged until it lands: Gate 3 shows yellow while treated before approval, green when the approval lands, red if it has not landed within 48 hours. An Owner's own self-confirmation is recorded, not escalated.
+- **FR-ROLE-14 (MUST):** Gate 0 and Gate 4 clearance is unchanged (FR-GATE-00): Farm Manager confirmation plus Owner approval, whoever did the field work. A self-confirmed diagnosis never clears a gate.
 - **FR-ROLE-15 (SHOULD):** The Owner digest counts self-confirmed diagnoses for the week. Not an alert — just visible, so the pattern is known.
 
 ---
@@ -245,7 +245,7 @@ Fixes staff who cannot tell one problem from another until it is too late.
 
 ### 6.11 Owner oversight
 - **FR-REP-01 (MUST):** **Exceptions-only daily digest** for the Owner: missed tasks, open alerts, gate overrides, virus suspicions, low stock. If nothing is wrong, it says so in one line.
-- **FR-REP-02 (MUST):** The digest is small enough to receive over a weak or expensive connection (text first, photos on request) and can be sent by WhatsApp or email **[choose channel]**.
+- **FR-REP-02 (MUST):** The digest is small enough to receive over a weak or expensive connection (text first, photos on request) and is sent to the Owner by WhatsApp (D-1). Items on the rules' `immediate_to_owner` list, and a treatment marked treated before approval (`FR-ROLE-13`), are sent when they happen rather than waiting for the daily digest.
 - **FR-REP-03 (MUST):** A KPI screen shows the measures in section 3, per week and per zone.
 - **FR-REP-04 (SHOULD):** A weekly summary per zone with photo highlights.
 - **FR-REP-05 (SHOULD):** Records can be exported for EBIMS, funders, and audits.
@@ -356,7 +356,7 @@ The farm starts using the app with cycles already running. This section says how
 - [ ] Threshold breach escalates correctly with times shortened for testing (`FR-SCOUT-04`)
 - [ ] All field screens work in airplane mode, then sync (`NFR-OFF-01/02`)
 - [ ] Sample farm erased and real PINs set (`NFR-SEC-01/02`)
-- [ ] Owner digest received on the chosen channel (`FR-REP-02`)
+- [ ] Owner digest received on WhatsApp (`FR-REP-02`)
 - [ ] Injection tests pass (`NFR-SEC-04`)
 
 ---
@@ -373,7 +373,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | # | Decision | Owner |
 |---|---|---|
-| D-1 | Digest channel: WhatsApp, email, or both | Owner |
+| D-1 | ~~Digest channel: WhatsApp, email, or both~~ Settled: WhatsApp, text first (FR-REP-02) | Done |
 | D-2 | ~~Pest thresholds and rotation rules~~ Settled in Build Rules Extract rules-1.1 | Done |
 | D-3 | Whether to add Pidgin and other languages at launch | Farm Manager |
 | D-4 | ~~Escalation timings~~ Settled: 4 h / 12 h / 24 h (C-12) | Done |
@@ -389,6 +389,7 @@ The farm starts using the app with cycles already running. This section says how
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 16 Sep 2026 | First draft |
+| 1.11 | 1 Oct 2026 | FR-ROLE-13: the Owner may approve a Field Supervisor's self-confirmed diagnosis when the Farm Manager is away; the exception is computed, never chosen; Gate 3 yellow / green / red after 48 h. FR-ROLE-14: a self-confirmed diagnosis never clears a gate. D-1 settled: FR-REP-02 digest by WhatsApp, text first, `immediate_to_owner` items sent as they happen |
 | 1.10 | 1 Oct 2026 | Checking your own work (§4.2, FR-ROLE-12 to FR-ROLE-15): self-confirmed diagnoses marked, next level up approves the treatment as a hard block, except a treatment that closes an alert due before the next spray window, which proceeds flagged "treated before approval" with the Owner notified at once |
 | 1.9 | 30 Sep 2026 | Learn area for Greenhouse Hands: problem cards without doses, groups or plans; supervising view keeps them; offline search; diagnosed reports link to the card (§6.6a, FR-LEARN-01 to FR-LEARN-05) |
 | 1.8 | 30 Sep 2026 | Sick-plant flow split by role: short report for Greenhouse Hands, guided diagnosis from the report for Field Supervisor and Farm Manager, serious reports alert at once, confirmed result back to the reporter (FR-DIAG-03 amended, FR-DIAG-07 to FR-DIAG-10) |

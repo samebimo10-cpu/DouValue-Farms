@@ -42,6 +42,7 @@ import {
   BARRIERS, bagRules, batchFailure, batchName, batchesIn, fillsFor, galledCycle, mediaOf,
 } from './media.js';
 import { mediaLimePlan } from './calc.js';
+import { approvalStanding, awaitingApproval, beforeApprovalCheck, roleTitle, treatable } from './selfcheck.js';
 import { PRE_GATES, PRE_GATES_LABEL, plantedBeforeGates, preGatesEvidence, treatmentHistoryBlock } from './onboarding.js';
 
 /**
@@ -954,7 +955,14 @@ function standingControls(state, zone, w, { today, now }) {
   ];
 }
 
-function diagnosisFirst(state, w) {
+/**
+ * G3 — a diagnosis precedes every spray. FR-ROLE-13 adds the approval: a spray
+ * resting on a self-confirmed diagnosis is clear only once the next level up
+ * has approved it. Treated before approval is yellow while the approval is
+ * inside 48 hours, red after; a spray that went on without the approval or the
+ * exception is red. A self-confirmed diagnosis clears nothing on its own.
+ */
+function diagnosisFirst(state, w, { now = new Date().toISOString() } = {}) {
   const name = ((gateSpec('G3') || {}).pass_all || [])[0] || 'a diagnosis precedes every spray';
   const cycle = w.active;
   if (!cycle) {
@@ -963,12 +971,29 @@ function diagnosisFirst(state, w) {
   }
   const sprays = (state.sprays || []).filter((s) => s.cycleId === cycle.id);
   const bare = sprays.filter((s) => !s.diagnosisId && !s.woundCare);
-  return [bare.length
-    ? { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
+  if (bare.length) {
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail',
       why: `${bare.length} spray${bare.length === 1 ? '' : 's'} on this cycle with no diagnosis behind ${bare.length === 1 ? 'it' : 'them'}.`,
-      fix: 'RC4 red flag. The treatment screen refuses new ones; diagnose what those sprays were for.' }
-    : { id: 'g3_diagnosis_first', gate: 'G3', name, state: 'pass',
-      why: sprays.length ? `All ${sprays.length} sprays have a diagnosis behind them.` : 'No sprays yet.' }];
+      fix: 'RC4 red flag. The treatment screen refuses new ones; diagnose what those sprays were for.' }];
+  }
+  const byId = new Map((state.diagnoses || []).map((d) => [d.id, d]));
+  const standing = sprays.filter((s) => s.diagnosisId)
+    .map((s) => ({ spray: s, ...approvalStanding(s, byId.get(s.diagnosisId), { now }) }));
+  const red = standing.filter((x) => x.state === 'fail');
+  if (red.length) {
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'fail', approval: 'missing',
+      why: red.map((x) => x.why).join(' '),
+      fix: 'FR-ROLE-13: the next level up approves a self-confirmed diagnosis. Approve it on the Clinic screen, '
+        + 'and record why the spray went ahead without it.' }];
+  }
+  const held = standing.filter((x) => x.state === 'held');
+  if (held.length) {
+    return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'held', approval: 'treated-before-approval',
+      why: held.map((x) => x.why).join(' '),
+      fix: 'The approval is still owed: approve it on the Clinic screen.' }];
+  }
+  return [{ id: 'g3_diagnosis_first', gate: 'G3', name, state: 'pass',
+    why: sprays.length ? `All ${sprays.length} sprays have a diagnosis behind them.` : 'No sprays yet.' }];
 }
 
 // --- The model ---------------------------------------------------------------
@@ -1072,7 +1097,7 @@ export function gateModel(state, zoneId, opts = {}) {
   });
 
   gates.push({ ...spec('G2'), blocksTransplant: false, conditions: standingControls(state, zone, w, { today, now }) });
-  gates.push({ ...spec('G3'), blocksTransplant: false, conditions: diagnosisFirst(state, w) });
+  gates.push({ ...spec('G3'), blocksTransplant: false, conditions: diagnosisFirst(state, w, { now }) });
 
   // G4 — Cycle Close & Learn. What it is about depends on where the zone is:
   // an empty zone after a cycle has to close that cycle before the next goes
@@ -1200,6 +1225,11 @@ export function canPlant(state, zoneId, opts = {}) {
  * spray needs a diagnosis that names the problem, was recorded for this zone,
  * is recent enough to still describe it, and — FR-DIAG-03 — was confirmed by
  * somebody senior to the person who started it.
+ *
+ * FR-ROLE-13: a self-confirmed diagnosis waits for the next level up. Until
+ * the approval lands the treatment is blocked, unless it closes an open alert
+ * due before the next spray window — then `beforeApproval` says so, and the
+ * spray is recorded as treated before approval. `opts.now` is the instant.
  */
 export function canTreat(state, cycleId, opts = {}) {
   const { today = isoDate(), productId = null, activeId = null, maxAgeDays = 14 } = opts;
@@ -1215,6 +1245,8 @@ export function canTreat(state, cycleId, opts = {}) {
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const confirmed = recent.filter((d) => d.confirmedBy);
+  // FR-ROLE-13 — self-confirmed and not yet approved is not enough to spray on.
+  const usable = confirmed.filter(treatable);
 
   if (!recent.length) {
     return {
@@ -1237,11 +1269,40 @@ export function canTreat(state, cycleId, opts = {}) {
     };
   }
 
-  const diagnosis = confirmed[0];
+  let diagnosis = usable[0];
+  let beforeApproval = null;
+  if (!diagnosis) {
+    const waiting = confirmed.find(awaitingApproval);
+    if (!waiting) {
+      return {
+        ok: false,
+        reason: 'unconfirmed',
+        diagnosis: confirmed[0],
+        why: `"${confirmed[0].problemName || confirmed[0].problemId}" has no person's confirmation behind it.`,
+        fix: 'The Field Supervisor or Farm Manager confirms the diagnosis, then the treatment can be logged.',
+      };
+    }
+    // The one exception, computed from the alert deadline and the window times.
+    const at = opts.now || new Date().toISOString();
+    const verdict = beforeApprovalCheck(state, waiting, { cycleId, at });
+    const who = roleTitle(waiting.approvalFrom);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        reason: 'awaiting-approval',
+        diagnosis: waiting,
+        why: `"${waiting.problemName || waiting.problemId}" was confirmed by the person who raised it, `
+          + `so the ${who} approves it before a treatment. ${verdict.why}`,
+        fix: `Ask the ${who} to approve it from their phone, on the Clinic screen (FR-ROLE-13).`,
+      };
+    }
+    diagnosis = waiting;
+    beforeApproval = verdict;
+  }
   const rotation = rotationCheck(state, cycleId, activeId || productId, { ...opts, today, diagnosis });
   if (!rotation.ok) return rotation;
 
-  return { ok: true, diagnosis };
+  return beforeApproval ? { ok: true, diagnosis, beforeApproval } : { ok: true, diagnosis };
 }
 
 /**

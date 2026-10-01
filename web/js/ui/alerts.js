@@ -17,6 +17,7 @@ import {
   alerts, ALERT_LEVEL, ladderFor, risingWarnings, straightToOwner, zoneTrends,
 } from '../domain/alerts.js';
 import { digest } from '../domain/digest.js';
+import { deliverOwnerMessages, isConnected, ownerDelivery } from '../sync.js';
 import { openReportAlerts, WHERE_BY_ID } from '../domain/sickplant.js';
 import { trendChart } from './chart.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
@@ -268,6 +269,16 @@ export const digestView = {
   },
 
   actions: {
+    'digest-send': async (ctx) => {
+      try {
+        const res = await deliverOwnerMessages();
+        const bad = (res.results || []).find((r) => r.status === 'failed' || r.status === 'not-configured');
+        toast(bad ? (bad.why || 'WhatsApp is not set up on the farm server yet') : 'Sent, or already sent today.', !!bad);
+      } catch (err) {
+        toast(`Could not reach the farm server: ${err.message || err}`, true);
+      }
+      ctx.refresh();
+    },
     'digest-copy': async (ctx) => {
       const d = digest(ctx.state, { now: new Date().toISOString() });
       try {
@@ -315,8 +326,30 @@ function sendBlock(d) {
     + `<pre class="working">${esc(d.text)}</pre>`
     + `<p><small>${bytes} bytes — text only, no photos, so it goes over one bar of signal without `
     + 'costing anything to receive.</small></p>'
-    + `<div class="row wrap">${button('Copy for WhatsApp', 'digest-copy', { icon: '📋' })}</div>`,
+    + (d.selfConfirmedWeek
+      ? `<p><small>Self-confirmed diagnoses this week: <b>${d.selfConfirmedWeek}</b>. Not an alert — `
+        + 'just visible, so the pattern is known (FR-ROLE-15).</small></p>'
+      : '')
+    + `<p><small>${esc(channelLine())}</small></p>`
+    + '<div class="row wrap">'
+    + (isConnected() ? button('Send to WhatsApp now', 'digest-send', { icon: '📨' }) : '')
+    + button('Copy for WhatsApp', 'digest-copy', { icon: '📋', cls: isConnected() ? 'btn-ghost' : '' })
+    + '</div>',
   );
+}
+
+/** FR-REP-02 — where the Owner's WhatsApp stands, from the last exchange with the farm server. */
+function channelLine() {
+  if (!isConnected()) return 'This phone is not linked to the farm server, so copy the digest into WhatsApp yourself.';
+  const last = ownerDelivery();
+  if (!last.at) return 'The digest goes to the Owner on WhatsApp from 7 AM; anything straight-to-Owner goes as it happens.';
+  if (last.configured && last.configured.whatsapp === false) {
+    return 'WhatsApp is not set up on the farm server yet, so copy the digest for now.';
+  }
+  const failed = last.results.filter((r) => r.status === 'failed' || r.status === 'partly-sent');
+  return failed.length
+    ? `Last try ${last.at.slice(11, 16)} UTC: ${failed[0].why || 'WhatsApp did not take it'}. It tries again on the next sync.`
+    : `WhatsApp to the Owner is working (last checked ${last.at.slice(11, 16)} UTC).`;
 }
 
 /** FR-REP-03 — the success measures from section 3, computed from the records. */

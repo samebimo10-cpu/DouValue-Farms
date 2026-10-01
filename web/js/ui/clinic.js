@@ -24,6 +24,9 @@ import {
 } from './photo.js';
 import { navigate, params } from './shell.js';
 import {
+  approvalsFor, awaitingApproval, canApprove, otherConfirmers, roleTitle,
+} from '../domain/selfcheck.js';
+import {
   diagnosesFor, HOW_MANY_BY_ID, isSickPlantReport, seriousReasons, SPREADING_BY_ID, WHERE_BY_ID,
 } from '../domain/sickplant.js';
 
@@ -186,6 +189,24 @@ export const clinicView = {
       );
     }
 
+    // FR-ROLE-13 — self-confirmed diagnoses waiting on this person. Approval
+    // is one tap from the phone; until it lands a treatment is blocked.
+    const mine = approvalsFor(state, ctx.user, { at: new Date().toISOString() });
+    const pending = state.diagnoses.filter(awaitingApproval);
+    if (mine.length) {
+      out += card(
+        cardHead('Waiting on your approval', badge(`${mine.length}`, 'warn'))
+        + '<ul class="list">' + mine.map((d) => approvalItem(ctx, d, true)).join('') + '</ul>'
+        + '<p><small>Confirmed by the person who raised them, with nobody else in to check. '
+        + 'A treatment from one waits for you (FR-ROLE-13).</small></p>',
+      );
+    } else if (pending.length && can(ctx.user, 'verifyHarvest')) {
+      out += card(
+        cardHead('Self-confirmed, waiting on approval', badge(`${pending.length}`, 'warn'))
+        + '<ul class="list">' + pending.map((d) => approvalItem(ctx, d, false)).join('') + '</ul>',
+      );
+    }
+
     if (recent.length) {
       out += card(
         cardHead('Recent diagnoses')
@@ -194,7 +215,8 @@ export const clinicView = {
           + `<small>${esc(d.cycleId ? cycleLabel(state, d.cycleId) : 'No bed recorded')} — `
           + `${esc(friendlyDate(d.date))}, ${esc(d.confidence || 'no confidence recorded')}`
           + (d.legacy ? ` · ${d.mapping === 'mapped' ? 'legacy, read as a card' : 'legacy record'}` : '')
-          + (d.confirmed ? ' · confirmed' : ' · not confirmed') + '</small></div>'
+          + (d.confirmed ? (d.selfConfirmed ? ' · self-confirmed' : ' · confirmed') : ' · not confirmed')
+          + (d.awaitingApproval ? ' · waiting on approval' : '') + '</small></div>'
           + (d.cardId
             ? `<a class="btn btn-sm btn-ghost" href="#/guide/item?id=${esc(d.cardId)}">Open</a>`
             : badge('legacy', ''))
@@ -219,8 +241,34 @@ export const clinicView = {
     },
     'open-confirm': (ctx, el) => openConfirmSheet(ctx, el.dataset.id),
     'save-confirm': (ctx, form) => saveConfirm(ctx, form),
+    'approve-diagnosis': (ctx, el) => approveDiagnosis(ctx, el.dataset.id),
   },
 };
+
+/** One self-confirmed diagnosis in a queue — FR-ROLE-13. */
+function approvalItem(ctx, d, mine) {
+  const { state } = ctx;
+  const read = readDiagnosis(d);
+  const by = state.people[d.confirmedBy];
+  const early = (state.sprays || []).some((s) => s.diagnosisId === d.id && s.beforeApproval);
+  return '<li><div class="grow">'
+    + `<b>${esc(read.label)}</b>`
+    + `<small>${esc(d.cycleId ? cycleLabel(state, d.cycleId) : 'No bed recorded')} — self-confirmed by `
+    + `${esc(by ? by.name : 'the person who raised it')}, ${esc(friendlyDate((d.confirmedAt || '').slice(0, 10)))}`
+    + `<br>Confirm test: ${esc(d.confirmTest || '')} — ${esc(d.confirmResult || '')}`
+    + (early ? '<br><b>Treated before approval</b> to meet an alert deadline.' : '')
+    + (mine ? '' : `<br>Approved by the ${esc(roleTitle(d.approvalFrom))}.`) + '</small></div>'
+    + (mine ? button('Approve', 'approve-diagnosis', { cls: 'btn-sm', data: { id: d.id } }) : badge('waiting', 'warn'))
+    + '</li>';
+}
+
+async function approveDiagnosis(ctx, id) {
+  const d = ctx.state.diagnoses.find((x) => x.id === id);
+  const verdict = canApprove(ctx.state, d, ctx.user, { at: new Date().toISOString() });
+  if (!verdict.ok) { toast(verdict.why, true); return; }
+  await ctx.store.dispatch('diagnosis.approve', { id, note: verdict.how === 'covering' ? verdict.why : '' });
+  toast('Approved — a treatment can go ahead');
+}
 
 /** A free-text problem report, as it always was. */
 function generalReportItem(state, r) {
@@ -277,7 +325,11 @@ function sickPlantItem(ctx, r, guided) {
 function openConfirmSheet(ctx, id) {
   const record = readDiagnosis(ctx.state.diagnoses.find((d) => d.id === id));
   if (!record) { toast('That diagnosis is gone', true); return; }
-  const verdict = canConfirm(record, { by: ctx.user && ctx.user.id, senior: true });
+  const raw = ctx.state.diagnoses.find((d) => d.id === id);
+  const verdict = canConfirm(record, {
+    by: ctx.user && ctx.user.id, senior: true, role: ctx.user && ctx.user.role,
+    others: otherConfirmers(ctx.state, raw, new Date().toISOString()),
+  });
   const row = record.triageRow != null ? TRIAGE_BY_N.get(Number(record.triageRow)) : null;
 
   openSheet(`<h2>Confirm: ${esc(record.label)}</h2>`
@@ -285,6 +337,8 @@ function openConfirmSheet(ctx, id) {
     + `recorded ${esc(friendlyDate(record.date))}</small></p>`
     + (record.reasoning ? note('info', 'What they wrote', `<small>${esc(record.reasoning)}</small>`) : '')
     + (record.photos || []).map((ph) => photoThumb(ph, { small: true })).join('')
+    // FR-ROLE-12 — allowed, and said before it happens.
+    + (verdict.ok && verdict.self ? note('warn', 'You raised this one', `<small>${esc(verdict.why)}</small>`) : '')
     + (verdict.ok
       ? `<p><b>Do this test yourself:</b><br>${esc(row ? row.confirm : record.confirmTest)}</p>`
         + '<form data-act="save-confirm">'
@@ -307,7 +361,10 @@ async function saveConfirm(ctx, form) {
     note: data.note || '',
   });
   closeSheet();
-  toast('Confirmed — treatment can now be planned');
+  const d = (ctx.store.state || ctx.state).diagnoses.find((x) => x.id === data.id);
+  toast(d && d.confirmRefused ? d.confirmRefused : d && awaitingApproval(d)
+    ? `Self-confirmed — the ${roleTitle(d.approvalFrom)} approves it before a treatment`
+    : 'Confirmed — treatment can now be planned');
 }
 
 // --- Reference photos (FR-DIAG-01, UX-11) --------------------------------

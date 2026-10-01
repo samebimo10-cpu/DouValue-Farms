@@ -722,7 +722,7 @@ async function saveSpray(ctx, form) {
   // must pass the rotation, the thrips programme and the Week 10 rule, all of
   // which are read out of the rules file by resistance group.
   const allowed = canTreat(ctx.state, data.cycleId, {
-    today: isoDate(), activeId: data.activeId, catalogue, target: data.targetProblem,
+    today: isoDate(), now: new Date().toISOString(), activeId: data.activeId, catalogue, target: data.targetProblem,
   });
   if (!allowed.ok) {
     closeSheet();
@@ -734,6 +734,12 @@ async function saveSpray(ctx, form) {
         + (can(ctx.user, 'settings')
           ? `<div style="margin-top:12px">${button('Enter it now', 'go',
             { cls: 'btn-block btn-lg', data: { to: '#/setup' } })}</div>` : ''));
+      return;
+    }
+    if (allowed.reason === 'awaiting-approval') {
+      // FR-ROLE-13 — blocked until the next level up approves it.
+      openSheet('<h2>Waiting on approval</h2>'
+        + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`));
       return;
     }
     openSheet(`<h2>${refusedOnProduct ? 'Not this product' : 'Diagnose it first'}</h2>`
@@ -771,12 +777,18 @@ async function saveSpray(ctx, form) {
       ['No picking until', phiDays
         ? isoDate(addDays(new Date(data.date || isoDate()), phiDays)) : 'no waiting period'],
       ['Keep people out for', reiHours ? `${reiHours} hours` : 'no re-entry period'],
-    ]), 'Yes, record it');
+    ]) + (allowed.beforeApproval
+      // FR-ROLE-13 exception: computed, not chosen. Said before it happens.
+      ? note('warn', 'Treated before approval', `<small>${esc(allowed.beforeApproval.why)}</small>`)
+      : ''), 'Yes, record it');
   if (!goAhead) return;
 
   const sprayId = uid('sp');
   await ctx.store.dispatch('spray.record', {
     diagnosisId: allowed.diagnosis ? allowed.diagnosis.id : null,
+    // FR-ROLE-13: which alert made it urgent. The farm server checks it; every
+    // phone re-judges it from the records and ignores what this says.
+    ...(allowed.beforeApproval ? { beforeApproval: { alertId: allowed.beforeApproval.alertId } } : {}),
     // UX-27: who was watching, while the trial round is still open.
     supervision: supervisionStamp(sprayWatch),
     id: sprayId, cycleId: data.cycleId,
@@ -809,6 +821,10 @@ async function saveSpray(ctx, form) {
 
   resetPhoto();
   closeSheet();
+  if (allowed.beforeApproval) {
+    toast('Logged as treated before approval. The Owner is told now; the approval is still owed.');
+    return;
+  }
   toast(phiDays > 0
     ? `Logged. No picking on that bed until ${isoDate(addDays(data.date || isoDate(), phiDays))}`
     : 'Spray logged');
