@@ -462,15 +462,29 @@ WhatsApp** on the Alerts screen still works.
 server decides what their role may see. This is the part that matters, so it is
 worth being exact about it.
 
-**Joining takes two things, and both come from the CEO.** You create the account
-in the app, and it hands you a link and a six-character password. The person taps
-the link, types the password once, chooses their own PIN, and that phone is
-theirs. The link says *which account*; the password proves *it is them*. Both work
-exactly once and expire after two weeks.
+**Signing in takes two things, and both come from the CEO** (`UX-28`). Once the
+farm is connected, the CEO (or the manager, for the people below them) presses
+**Add a person** on the dashboard or under People, types the name and picks the
+job. The app makes a sign-in name from the name and a six-digit password; either
+can be changed before saving. **Account ready** then shows both, with *Send on
+WhatsApp* and *Copy the message*, and stays open until Done: the password is not
+shown again. The message carries the app link with the farm's address in it.
 
-**A PIN alone gets nobody in.** Enrolling a device requires an invite. Someone who
-watches a farm hand type their PIN cannot use it on another phone, because that
-phone was never invited. Six wrong tries locks the account for fifteen minutes.
+On a new phone the app opens on *Welcome to the DouValue farm management app —
+kindly sign in*. The person types the sign-in name and password and lands on the
+screens of the job the CEO gave them. That phone then remembers them: each day
+they type only the password on the keypad, with or without signal. The password
+also works on a replacement phone; changing someone's job never changes it, and
+the CEO gives a new one from People if it is lost.
+
+So that a phone opened without the link does not ask for the farm's address, put
+the server's address in `web/js/farm-address.js` (`FARM_SERVER`). Until then the
+sign-in page asks for it once, and the link fills it in.
+
+**A password is 6 to 12 digits, and five wrong tries lock it for fifteen
+minutes.** A wrong password and a sign-in name that does not exist get the same
+answer, so the page cannot be used to find out who works on the farm. Removing
+someone from the farm closes their sign-in on the server as well.
 
 **The role is enforced on the server, not in the app.** A farm hand's phone is not
 sent the sales, the costs or anybody else's wages. Not hidden on the screen:
@@ -519,8 +533,9 @@ record stays on that phone; it is simply not on the farm. If the server cannot
 read its rule book, the records it would judge are held on the phone and sent
 again — never waved through.
 
-**Lost phone?** The CEO presses *Sign out their phones*. That device is dead on
-its next exchange, within seconds. Nobody else has to change anything, because
+**Lost phone?** The CEO presses *Sign out their phones* and gives them a new
+password. That device is dead on its next exchange, within seconds, and the old
+password no longer signs anyone in. Nobody else has to change anything, because
 nobody else shared a password with them.
 
 **Setting the server up.** Free, and about five minutes. There is a page that
@@ -583,7 +598,7 @@ has been offline for a week are a reliable source of mystery sign-outs.
 
 Signing in **with** Google is a different and more reasonable idea, and it would
 suit the CEO and manager. It is a poor fit for farm hands sharing cheap handsets
-with patchy data, which is why the app uses invites and a PIN instead.
+with patchy data, which is why the app uses a sign-in name and a short numeric password instead.
 
 If what you want is a copy in your own hands, use **Settings → Export a backup
 file** and mail that to yourself. It is one file, it holds everything, and merging
@@ -611,10 +626,11 @@ backup file*, weekly.
 A PIN is 4 to 12 digits. The sign-in pad takes all of them and signs in on ✓ — it never
 submits on its own at four (`UX-01`).
 
-On a **connected** farm the PIN unlocks one enrolled phone, and the account behind it is
-real: the server decides what that person may read and write, and their phone is never
-sent anything else. The PIN is not what protects the data; the enrolment is. That is why a
-PIN copied over someone's shoulder is worthless on another handset.
+On a **connected** farm the CEO's PIN, and everyone else's password from the CEO, unlocks
+the phone it was signed in on, and the account behind it is real: the server decides what
+that person may read and write, and their phone is never sent anything else. A password
+also signs its owner in on a new phone, which is why it is at least six digits and locks
+after five wrong tries (`UX-28`, `NFR-SEC-02`).
 
 On a farm running **without a server**, the PIN is only a workplace control: it keeps
 entries landing under the right name on a shared phone, but anyone who can open the
@@ -652,7 +668,7 @@ DouValue-Farms/
 │  └─ js/
 │     ├─ app.js          boot and routing table
 │     ├─ generate.js     the day's tasks, generated on any role's phone at open and sign-in
-│     ├─ sync.js         outbox, push/pull, backoff, invites and enrolment
+│     ├─ sync.js         outbox, push/pull, backoff, sign-in and enrolment
 │     ├─ store.js        event log → farm state, roles, selectors
 │     ├─ db.js           IndexedDB log, merge, export/import, photo compression
 │     ├─ util.js         dates, naira, HTML escaping

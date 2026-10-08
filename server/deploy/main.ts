@@ -14582,6 +14582,9 @@ async function readJson(req) {
  * The whole API.
  *
  *   POST /api/farms/:id/bootstrap   create the farm and its CEO (once only)
+ *   POST /api/signin                sign in on a new phone with a sign-in name and password (UX-28)
+ *   POST /api/farms/:id/signin      the same, for one farm
+ *   POST /api/farms/:id/account     give a person a sign-in name and password, or change them (UX-28)
  *   POST /api/farms/:id/invite      issue a single-use invite for a new person
  *   POST /api/farms/:id/join        redeem an invite, enrol this device
  *   POST /api/farms/:id/unlock      exchange a PIN for a fresh token on an enrolled device
@@ -14605,11 +14608,8 @@ async function handleRequest(req, store) {
     return new Response('DouValue farm server is running.\n\nPut this address into the app.\n',
       { status: 200, headers: { 'Content-Type': 'text/plain', ...CORS } });
   }
-  if (parts[0] !== 'api' || parts[1] !== 'farms' || !parts[2]) return json({ error: 'Not found' }, 404);
-
-  const farmId = decodeURIComponent(parts[2]);
-  if (!safeId(farmId)) return json({ error: 'Bad farm id' }, 400);
-  const action = parts[3] || '';
+  const signingIn = parts[0] === 'api' && parts[1] === 'signin' && parts.length === 2;
+  if (!signingIn && (parts[0] !== 'api' || parts[1] !== 'farms' || !parts[2])) return json({ error: 'Not found' }, 404);
 
   let body = {};
   if (req.method === 'POST') {
@@ -14617,8 +14617,17 @@ async function handleRequest(req, store) {
     catch (e) { return json({ error: e.message === 'too large' ? 'That batch is too large' : 'Body was not valid JSON' }, e.message === 'too large' ? 413 : 400); }
   }
 
+  // UX-28: a new phone knows the server's address and nothing else, so the
+  // sign-in name is what finds the farm.
+  if (signingIn) return req.method === 'POST' ? signIn(null, body, store) : json({ error: 'Not found' }, 404);
+
+  const farmId = decodeURIComponent(parts[2]);
+  if (!safeId(farmId)) return json({ error: 'Bad farm id' }, 400);
+  const action = parts[3] || '';
+
   if (action === 'bootstrap' && req.method === 'POST') return bootstrap(farmId, body, store);
   if (action === 'join' && req.method === 'POST') return join(farmId, body, store);
+  if (action === 'signin' && req.method === 'POST') return signIn(farmId, body, store);
 
   // Everything below needs a token.
   const auth = await authenticate(farmId, req, store);
@@ -14633,6 +14642,7 @@ async function handleRequest(req, store) {
     return json({ members: members.map(publicMember) });
   }
   if (action === 'invite' && req.method === 'POST') return invite(farmId, body, me, store);
+  if (action === 'account' && req.method === 'POST') return account(farmId, body, me, store);
   if (action === 'revoke' && req.method === 'POST') return revoke(farmId, body, me, store);
   if (action === 'unlock' && req.method === 'POST') return unlock(farmId, body, me, store, auth.token);
   if (action === 'events' && req.method === 'GET') return readEvents(farmId, url, me, store);
@@ -14650,7 +14660,7 @@ async function handleRequest(req, store) {
 }
 
 const publicMember = (m) => ({
-  id: m.id, name: m.name, role: m.role, status: m.status,
+  id: m.id, name: m.name, role: m.role, status: m.status, login: m.login || null,
   joinedAt: m.joinedAt || null, invitedAt: m.invitedAt || null,
 });
 const publicFarm = (f) => (f ? { id: f.id, name: f.name, created: f.created } : null);
@@ -15209,6 +15219,129 @@ async function bootstrap(farmId, body, store) {
   return json({ ok: true, token, member: publicMember(member), farm: publicFarm(await store.getFarm(farmId)) });
 }
 
+// --- Sign-in names and passwords (UX-28) -----------------------------------
+//
+// The CEO, or a manager for the people below them, makes each account with a
+// sign-in name and a password and sends both to that person. On a new phone
+// those two are all it takes: the server finds the farm from the name and the
+// role from the account, so the person lands on their own screens.
+//
+// The password is 6 to 12 digits. Digits because it is also what unlocks the
+// phone each day on the keypad (UX-01, UX-02); at least six because unlike a
+// PIN it works from any handset, and the lockout (NFR-SEC-02) has to make a
+// million guesses impractical, not ten thousand.
+
+const PASSWORD_MIN = 6;
+const PASSWORD_MAX = 12;
+const isAccountPassword = (p) => new RegExp(`^\\d{${PASSWORD_MIN},${PASSWORD_MAX}}$`).test(String(p || ''));
+
+/** A sign-in name as stored: lower case, no spaces, 3 to 32 letters, digits, dots, dashes. */
+function normalizeLogin(raw) {
+  const login = String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
+  return /^[a-z0-9._-]{3,32}$/.test(login) ? login : '';
+}
+
+/** Give someone a sign-in name and password, or change their name, role or password. */
+async function account(farmId, body, me, store) {
+  if (!can(me.role, 'managePeople')) return json({ error: 'You cannot create accounts' }, 403);
+
+  const name = String(body.name || '').trim();
+  const role = String(body.role || '');
+  const login = normalizeLogin(body.login);
+  const password = body.password == null ? '' : String(body.password);
+  if (!name) return json({ error: 'A name is needed' }, 400);
+  if (!login) return json({ error: 'A sign-in name is 3 to 32 letters or numbers, with no spaces' }, 400);
+  if (!assignableRoles(me.role).includes(role)) {
+    return json({ error: `A ${me.role} cannot appoint a ${role}` }, 403);
+  }
+
+  const memberId = String(body.memberId || `person_${randomHex(6)}`);
+  if (!safeId(memberId)) return json({ error: 'Bad member id' }, 400);
+  if (memberId === me.id) return json({ error: 'You cannot change your own account here' }, 400);
+
+  const existing = await store.getMember(farmId, memberId);
+  if (existing && !assignableRoles(me.role).includes(existing.role)) {
+    return json({ error: `A ${me.role} cannot change a ${existing.role}'s account` }, 403);
+  }
+  if (existing && existing.role === 'ceo' && role !== 'ceo') {
+    const owners = (await store.listMembers(farmId)).filter((m) => m.role === 'ceo' && m.status === 'active');
+    if (owners.length <= 1) return json({ error: 'That is the only CEO account' }, 400);
+  }
+
+  // A password is needed to make an account; changing the rest of one keeps it.
+  const keepsPassword = !password && existing && existing.login && existing.passHash;
+  if (!keepsPassword && !isAccountPassword(password)) {
+    return json({ error: `The password is ${PASSWORD_MIN} to ${PASSWORD_MAX} digits` }, 400);
+  }
+
+  const taken = await store.getLoginIndex(login);
+  if (taken && !(taken.farmId === farmId && taken.memberId === memberId)) {
+    return json({ error: `The sign-in name "${login}" is already taken. Add a number or a surname.` }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const secret = keepsPassword
+    ? { passSalt: existing.passSalt, passHash: existing.passHash }
+    : await hashSecret(password).then(({ salt, hash }) => ({ passSalt: salt, passHash: hash }));
+  const member = {
+    ...(existing || {}),
+    id: memberId, name, role, status: 'active', login, ...secret,
+    invitedBy: (existing && existing.invitedBy) || me.id,
+    invitedAt: (existing && existing.invitedAt) || now,
+    accountSetBy: me.id, accountSetAt: now,
+    ...(keepsPassword ? {} : afterSuccess()),
+  };
+  delete member.invite;
+
+  if (existing && existing.invite) await store.deleteInviteIndex(existing.invite.lookup);
+  if (existing && existing.login && existing.login !== login) await store.deleteLoginIndex(existing.login);
+  await store.setMember(farmId, member);
+  await store.setLoginIndex(login, { farmId, memberId });
+
+  // The password is never returned: the person who typed it already has it.
+  return json({ ok: true, memberId, name, role, login, passwordChanged: !keepsPassword });
+}
+
+/** Sign in on a phone with a sign-in name and password; the account says the farm and the role. */
+async function signIn(farmIdHint, body, store) {
+  const login = normalizeLogin(body.login);
+  const password = String(body.password || '');
+  if (!login || !password) return json({ error: 'Enter your sign-in name and password' }, 400);
+  // One answer for a name that does not exist and a password that is wrong,
+  // so the sign-in page cannot be used to find out who works here.
+  const wrong = () => json({ error: 'That sign-in name or password is not right' }, 403);
+
+  const pointer = await store.getLoginIndex(login);
+  if (!pointer || (farmIdHint && pointer.farmId !== farmIdHint)) return wrong();
+  const farmId = pointer.farmId;
+  const farm = await store.getFarm(farmId);
+  const member = farm ? await store.getMember(farmId, pointer.memberId) : null;
+  if (!member || member.login !== login || !member.passHash) return wrong();
+
+  const now = Date.now();
+  const lock = lockoutState(member, now);
+  if (lock.locked) return json({ error: `Too many wrong tries. Wait ${Math.ceil(lock.seconds / 60)} minutes.` }, 429);
+
+  if (!(await verifySecret(password, member.passSalt, member.passHash))) {
+    await store.setMember(farmId, { ...member, ...afterFailure(member, now) });
+    return wrong();
+  }
+  if (member.status !== 'active') {
+    return json({ error: 'That account has been closed. Ask the CEO.' }, 403);
+  }
+
+  const at = new Date().toISOString();
+  const signedIn = { ...member, ...afterSuccess(), lastSignInAt: at, joinedAt: member.joinedAt || at };
+  await store.setMember(farmId, signedIn);
+
+  const token = randomHex(32);
+  const digest = await tokenDigest(token);
+  await store.setToken(digest, {
+    digest, farmId, memberId: member.id, device: String(body.device || 'unknown'), created: at, lastSeen: at,
+  });
+  return json({ ok: true, token, farmId, member: publicMember(signedIn), farm: publicFarm(farm) });
+}
+
 /** The CEO or a manager creates an account and gets a one-time code for it. */
 async function invite(farmId, body, me, store) {
   if (!can(me.role, 'managePeople')) return json({ error: 'You cannot create accounts' }, 403);
@@ -15339,6 +15472,9 @@ async function revoke(farmId, body, me, store) {
   if (body.devicesOnly) return json({ ok: true, signedOutOfEveryDevice: true });
 
   await store.setMember(farmId, { ...target, status: 'revoked' });
+  // Their sign-in name is freed for someone else; giving them a new password
+  // later (UX-28) opens the account again.
+  if (target.login) await store.deleteLoginIndex(target.login);
   return json({ ok: true, revoked: targetId });
 }
 
@@ -16032,6 +16168,10 @@ const store = {
   async getInviteIndex(lookup) { return (await kv.get(["invite", lookup])).value; },
   async setInviteIndex(lookup, rec) { await kv.set(["invite", lookup], rec); },
   async deleteInviteIndex(lookup) { await kv.delete(["invite", lookup]); },
+
+  async getLoginIndex(login) { return (await kv.get(["login", login])).value; },
+  async setLoginIndex(login, rec) { await kv.set(["login", login], rec); },
+  async deleteLoginIndex(login) { await kv.delete(["login", login]); },
 
   async getToken(digest) { return (await kv.get(["token", digest])).value; },
   async setToken(digest, rec) { await kv.set(["token", digest], rec); },

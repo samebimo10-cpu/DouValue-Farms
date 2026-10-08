@@ -9,13 +9,14 @@
 // What this file adds is identity. Each device holds a token that belongs to one
 // person. The server knows their role and decides what they may read and write,
 // so a farm hand's phone is never sent the wage bill in the first place. A PIN
-// on its own gets nobody in from a new handset: enrolling a device takes an
-// invite, and an invite is single-use and expires.
+// on its own gets nobody in from a new handset: enrolling a device takes the
+// sign-in name and password the CEO made for that person (UX-28).
 
 import {
   countUnsynced, getMeta, markSynced, mergeEvents, setMeta, unsyncedEvents,
 } from './db.js';
 import { ownerMessages } from './domain/notify.js';
+import { FARM_SERVER } from './farm-address.js';
 import { markRead, noteRefusals } from './domain/refusals.js';
 
 const PUSH_BATCH = 400;
@@ -146,32 +147,59 @@ export async function bootstrapFarm({ url, farmId, farmName, name, password, mem
   return result;
 }
 
-/** Create an account for someone and get the one-time code to hand them. */
-export async function inviteMember({ name, role, memberId }) {
+/**
+ * UX-28: give someone a sign-in name and password, or change their name, role
+ * or password. Leave the password out to keep the one they have.
+ */
+export async function setAccount({ memberId, name, role, login, password }) {
   if (!auth) throw new Error('This phone is not connected to a farm server');
-  const result = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/invite`, {
-    method: 'POST', body: { name, role, memberId },
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/account`, {
+    method: 'POST', body: { memberId, name, role, login, password: password || undefined },
   });
-  return { ...result, link: joinLink(result.joinCode) };
 }
 
-/** The link that opens the app straight on the join screen with the code filled in. */
-export function joinLink(joinCode, at = location.href) {
-  if (!auth) return '';
+/** A sign-in name the server will accept, made from a person's name. */
+export function suggestLogin(name, taken = []) {
+  const first = String(name || '').trim().toLowerCase().split(/\s+/)[0] || '';
+  const base = first.replace(/[^a-z0-9]/g, '').slice(0, 24) || 'staff';
+  const stem = base.length < 3 ? `${base}${'000'.slice(base.length)}` : base;
+  const used = new Set(taken.map((t) => String(t || '').toLowerCase()));
+  if (!used.has(stem)) return stem;
+  for (let n = 2; ; n++) if (!used.has(`${stem}${n}`)) return `${stem}${n}`;
+}
+
+/** A password of six digits, which is what the server and the keypad both take. */
+export function makePassword() {
+  const a = new Uint32Array(1);
+  (globalThis.crypto || {}).getRandomValues?.(a);
+  const n = a[0] || Math.floor(Math.random() * 2 ** 32);
+  return String(100000 + (n % 900000));
+}
+
+/** The farm server a phone that has never signed in should use, if it knows one. */
+export function knownServer() {
+  if (auth) return auth.url;
+  if (FARM_SERVER) return trimUrl(FARM_SERVER);
+  try { return trimUrl(localStorage.getItem('douvalue.server') || ''); } catch { return ''; }
+}
+
+/** The link to send with a person's sign-in details: the app, with the server filled in. */
+export function signInLink(at = location.href) {
   const base = String(at).split('#')[0];
-  const params = new URLSearchParams({ s: auth.url, f: auth.farmId, c: joinCode });
-  return `${base}#/join?${params.toString()}`;
+  const server = knownServer();
+  return server ? `${base}#/signin?${new URLSearchParams({ s: server }).toString()}` : base;
 }
 
-/** Redeem an invite on this phone and set the person's own PIN. */
-export async function joinFarm({ url, farmId, joinCode, joinPassword, pin }) {
+/** Sign this phone in as the person the name and password belong to (UX-28). */
+export async function signIn({ url, login, password }) {
   const base = trimUrl(url);
-  const result = await api(`/api/farms/${encodeURIComponent(farmId)}/join`, {
+  const result = await api('/api/signin', {
     method: 'POST', base, token: null,
-    body: { joinCode, joinPassword, pin, device: await deviceLabel() },
+    body: { login, password, device: await deviceLabel() },
   });
+  try { localStorage.setItem('douvalue.server', base); } catch { /* remembered next time instead */ }
   await saveAuth({
-    url: base, farmId, token: result.token,
+    url: base, farmId: result.farmId, token: result.token,
     memberId: result.member.id, role: result.member.role, name: result.member.name,
     farmName: (result.farm && result.farm.name) || 'DouValue Farms Limited',
   });
@@ -396,7 +424,7 @@ export async function syncNow({ silent = false } = {}) {
       // A token that no longer works means this device was cut off, or the
       // person was removed. Say so plainly rather than retrying for ever.
       if (err.status === 401 || err.status === 403) {
-        setStatus({ state: 'error', lastError: `${err.message} Ask the CEO for a new invite.` });
+        setStatus({ state: 'error', lastError: `${err.message} Sign out of this phone and sign in again with your password.` });
         clearTimeout(timer);
         return { ok: false, reason: err.message, signedOut: true };
       }
@@ -533,12 +561,10 @@ export function statusLine(s = getStatus()) {
   }
 }
 
-/** Read an invite link's parameters, so a tapped link fills the join form in. */
-export function readJoinLink(hash = location.hash) {
+/** Read the server address from a tapped sign-in link, so the page need not ask for it. */
+export function readSignInLink(hash = location.hash) {
   const query = String(hash).split('?')[1];
   if (!query) return null;
-  const p = new URLSearchParams(query);
-  const url = p.get('s'), farmId = p.get('f'), joinCode = p.get('c');
-  if (!url || !farmId) return null;
-  return { url: trimUrl(url), farmId, joinCode: joinCode || '' };
+  const url = new URLSearchParams(query).get('s');
+  return url ? { url: trimUrl(url) } : null;
 }

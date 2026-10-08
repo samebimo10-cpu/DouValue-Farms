@@ -76,6 +76,11 @@ const INVITES_PATH = join(DATA_DIR, 'invites.json');
 let invites = readJsonFile(INVITES_PATH, {});
 const saveInvites = () => writeJsonFile(INVITES_PATH, invites);
 
+// Sign-in names (UX-28), each pointing at the farm and the person it belongs to.
+const LOGINS_PATH = join(DATA_DIR, 'logins.json');
+let logins = readJsonFile(LOGINS_PATH, {});
+const saveLogins = () => writeJsonFile(LOGINS_PATH, logins);
+
 const store = {
   async getFarm(farmId) { return farmState(farmId).meta; },
   async setFarm(farmId, farm) {
@@ -95,6 +100,10 @@ const store = {
   async getInviteIndex(lookup) { return invites[lookup] || null; },
   async setInviteIndex(lookup, rec) { invites[lookup] = rec; saveInvites(); },
   async deleteInviteIndex(lookup) { if (invites[lookup]) { delete invites[lookup]; saveInvites(); } },
+
+  async getLoginIndex(login) { return logins[login] || null; },
+  async setLoginIndex(login, rec) { logins[login] = rec; saveLogins(); },
+  async deleteLoginIndex(login) { if (logins[login]) { delete logins[login]; saveLogins(); } },
 
   async getToken(digest) { return tokens[digest] || null; },
   async setToken(digest, rec) { tokens[digest] = rec; saveTokens(); },

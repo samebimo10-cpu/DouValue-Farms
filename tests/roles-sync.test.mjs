@@ -481,6 +481,99 @@ test('signing a phone out stops that token dead', async () => {
   assert.equal(after.status, 401, 'the lost handset is locked out immediately');
 });
 
+// --- UX-28: the CEO makes the sign-in, the person signs in on any phone ------
+
+const account = (token, body) => call(`/api/farms/${FARM}/account`, { method: 'POST', token, body });
+const signIn = (login, password) => call('/api/signin', { method: 'POST', body: { login, password, device: 'test' } });
+
+test('UX-28: the CEO makes a sign-in name and password, and the person lands in the role they were given', async () => {
+  const made = await account(ceoToken, { name: 'Chidi Okafor', role: 'manager', login: 'Chidi', password: '482913' });
+  assert.equal(made.status, 200);
+  assert.equal(made.body.login, 'chidi', 'sign-in names are kept in lower case');
+  assert.equal(made.body.password, undefined, 'the password is never sent back');
+
+  // A new phone knows only the server: the name finds the farm.
+  const inside = await signIn('CHIDI', '482913');
+  assert.equal(inside.status, 200);
+  assert.equal(inside.body.farmId, FARM);
+  assert.equal(inside.body.member.role, 'manager');
+  assert.equal(inside.body.member.name, 'Chidi Okafor');
+  assert.equal(inside.body.member.passHash, undefined);
+
+  const me = await call(`/api/farms/${FARM}/me`, { token: inside.body.token });
+  assert.equal(me.status, 200);
+  assert.equal(me.body.member.role, 'manager');
+
+  // It works again from a second phone: unlike an invite, it is not used up.
+  assert.equal((await signIn('chidi', '482913')).status, 200);
+});
+
+test('UX-28: a wrong password and an unknown name get the same answer', async () => {
+  const wrong = await signIn('chidi', '000000');
+  const nobody = await signIn('nobody-here', '482913');
+  assert.equal(wrong.status, 403);
+  assert.equal(nobody.status, 403);
+  assert.equal(wrong.body.error, nobody.body.error, 'the page must not reveal who works here');
+});
+
+test('UX-28: the password is 6 to 12 digits, and a sign-in name belongs to one person', async () => {
+  for (const password of ['4821', '12345', 'abcdef', '1234567890123']) {
+    const r = await account(ceoToken, { name: 'Short', role: 'hand', login: 'shorty', password });
+    assert.equal(r.status, 400, `${password} should be refused`);
+  }
+  const taken = await account(ceoToken, { name: 'Another Chidi', role: 'hand', login: 'chidi', password: '555111' });
+  assert.equal(taken.status, 409);
+  assert.match(taken.body.error, /taken/);
+  assert.equal((await account(ceoToken, { name: 'Spaces', role: 'hand', login: 'ada b', password: '555111' })).body.login, 'adab');
+  assert.equal((await account(ceoToken, { name: 'Bad', role: 'hand', login: 'no!', password: '555111' })).status, 400);
+});
+
+test('UX-28: a manager makes sign-ins only below their own level', async () => {
+  const mgr = (await signIn('chidi', '482913')).body.token;
+  assert.equal((await account(mgr, { name: 'Rival', role: 'manager', login: 'rival', password: '111222' })).status, 403);
+  assert.equal((await account(mgr, { name: 'Owner 2', role: 'ceo', login: 'owner2', password: '111222' })).status, 403);
+  assert.equal((await account(mgr, { memberId: 'person_ceo', name: 'Ebimo Sam', role: 'ceo', login: 'ebimo', password: '111222' })).status, 403,
+    'nor reset the owner\'s password');
+  const sup = await account(mgr, { name: 'Blessing Ama', role: 'supervisor', login: 'blessing', password: '737373' });
+  assert.equal(sup.status, 200);
+  assert.equal((await signIn('blessing', '737373')).body.member.role, 'supervisor');
+  // A farm hand cannot make anyone.
+  const handT = (await signIn('blessing', '737373')).body.token;
+  assert.equal((await account(handT, { name: 'Friend', role: 'hand', login: 'friend', password: '737373' })).status, 403);
+});
+
+test('UX-28: changing the job keeps the password; a new password replaces the old', async () => {
+  const id = (await signIn('blessing', '737373')).body.member.id;
+  const promoted = await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'agronomist', login: 'blessing' });
+  assert.equal(promoted.status, 200);
+  assert.equal(promoted.body.passwordChanged, false);
+  const after = await signIn('blessing', '737373');
+  assert.equal(after.body.member.role, 'agronomist', 'the next sign-in carries the new job');
+
+  await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'agronomist', login: 'blessing', password: '909090' });
+  assert.equal((await signIn('blessing', '737373')).status, 403);
+  assert.equal((await signIn('blessing', '909090')).status, 200);
+
+  // A new account cannot be made without a password.
+  assert.equal((await account(ceoToken, { name: 'No Pass', role: 'hand', login: 'nopass' })).status, 400);
+});
+
+test('UX-28 / NFR-SEC-02: five wrong passwords lock the sign-in for a while', async () => {
+  await account(ceoToken, { name: 'Musa Bello', role: 'hand', login: 'musa', password: '246810' });
+  for (let i = 0; i < 5; i++) assert.equal((await signIn('musa', '000000')).status, 403);
+  const locked = await signIn('musa', '246810');
+  assert.equal(locked.status, 429, 'even the right password waits out the lock');
+});
+
+test('UX-28: removing someone closes their sign-in', async () => {
+  const made = await account(ceoToken, { name: 'Leaving Soon', role: 'hand', login: 'leaver', password: '135791' });
+  const token = (await signIn('leaver', '135791')).body.token;
+  const removed = await call(`/api/farms/${FARM}/revoke`, { method: 'POST', token: ceoToken, body: { memberId: made.body.memberId } });
+  assert.equal(removed.status, 200);
+  assert.equal((await signIn('leaver', '135791')).status, 403);
+  assert.equal((await call(`/api/farms/${FARM}/me`, { token })).status, 401);
+});
+
 test('one farm cannot read another', async () => {
   const other = await call('/api/farms/farm_someone_else/bootstrap', {
     method: 'POST', body: { name: 'Other Owner', password: '9999' },

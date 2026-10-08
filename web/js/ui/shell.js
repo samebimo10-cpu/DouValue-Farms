@@ -8,8 +8,8 @@ import {
   note, openSheet, readForm, sheetOpen, toast,
 } from './kit.js';
 import {
-  getAuth, getStatus, joinFarm, markRefusalsRead, onStatus, readJoinLink, refusedRecords, signOutDevice,
-  statusLine, syncNow, verifyPin,
+  getAuth, getStatus, knownServer, markRefusalsRead, onStatus, readSignInLink, refusedRecords, signIn,
+  signOutDevice, statusLine, syncNow, verifyPin,
 } from '../sync.js';
 import { refusalsFor } from '../domain/refusals.js';
 import { isoDate } from '../util.js';
@@ -93,6 +93,16 @@ export function pinDotsHtml(length) {
 // --- Login ----------------------------------------------------------------
 
 let pending = { personId: null, pin: '' };
+// What unlocks this phone each day: the PIN its owner chose when they set the
+// farm up, or the password the CEO made for them (UX-28). Both are digits on
+// the same pad; only the words differ.
+let lockKind = 'pin';
+
+/** This phone is signed out, or unlocked by a PIN from now on: forget the password lock. */
+export async function forgetDeviceLock() {
+  await setMeta('deviceLock', null);
+  lockKind = 'pin';
+}
 
 function loginScreen(state) {
   const linked = getAuth();
@@ -107,7 +117,9 @@ function loginScreen(state) {
   }
 
   const people = Object.values(state.people).filter((p) => p.active !== false);
-  if (!people.length) return firstRunScreen(state);
+  // UX-28: a phone nobody has used yet opens on the sign-in page. Setting a
+  // farm up is the CEO's, once, and sits underneath it.
+  if (!people.length) return signInScreen(state);
 
   if (!pending.personId) {
     // Whoever lands here may be nobody on this list: it can be the sample farm
@@ -136,9 +148,8 @@ function loginScreen(state) {
           + 'around. Erase them when you are ready to start on your own farm.</small></p>'
           + button('Erase this and set up my farm', 'start-real-farm', { cls: 'btn-block', icon: '🌱' })
         : '<b>Not one of these people?</b>'
-          + '<p><small>Join a farm that already exists, or start a new one on this '
-          + 'phone.</small></p>')
-      + `<div style="margin-top:10px">${button('Join with a code', 'open-join', { cls: 'btn-ghost btn-block' })}</div>`
+          + '<p><small>Sign in with the sign-in name and password the CEO sent you.</small></p>')
+      + `<div style="margin-top:10px">${button('Sign in with my password', 'open-join', { cls: 'btn-ghost btn-block' })}</div>`
       + '</div>';
   }
 
@@ -159,7 +170,7 @@ function pinScreen(person, subtitle) {
         + `font-weight:800">${esc(initials(person.name))}</div>`)
     + `<div class="grow"><b>${esc(person.name)}</b><br>`
     + `<small>${esc(subtitle || ROLES[person.role]?.name || '')}</small></div></div>`
-    + `<p style="margin-top:12px">${esc(t('login.pin'))}</p>`
+    + `<p style="margin-top:12px">${esc(t(linked && lockKind === 'password' ? 'login.password' : 'login.pin'))}</p>`
     + `<div class="pin-dots" aria-label="${pending.pin.length} digits typed">${dots}</div>`
     + '<div class="pin-pad">'
     + keys.map((k) => {
@@ -226,10 +237,10 @@ function firstRunScreen(state) {
     + 'automatically whenever it finds signal.</small></p>'
     + '</div>'
     + '<div class="card tight">'
-    + '<b>Joining a farm that already exists?</b>'
-    + '<p><small>If the CEO has already set this farm up on another phone, paste the join code '
-    + 'they gave you instead of creating a new farm.</small></p>'
-    + button('Join with a code', 'open-join', { cls: 'btn-ghost btn-block' })
+    + '<b>Not the CEO?</b>'
+    + '<p><small>Do not set up a farm here. Sign in with the sign-in name and password the CEO sent '
+    + 'you, and the app opens on your own work.</small></p>'
+    + button('Back to sign in', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/signin' } })
     + '</div>'
     + '<div class="card tight">'
     + button('Try it on an example farm', 'practice-start', { cls: 'btn-quiet btn-block' })
@@ -240,19 +251,21 @@ function firstRunScreen(state) {
 }
 
 /**
- * What someone sees when they tap the link the CEO sent them.
+ * UX-28 — the front door of a phone nobody has signed in on.
  *
- * Two things to type, both short, both handed over by someone they know: the
- * code (already filled in from the link) and the password. Then they pick their
- * own PIN and never type anything longer again.
+ * The CEO made this person's account with a sign-in name and a password and
+ * sent them both. Those two are all this page asks for: the server finds the
+ * farm from the name, and the account carries the role, so the person lands on
+ * the screens the CEO gave them. The farm's address is asked for only when the
+ * app does not know it already (farm-address.js, the link in the CEO's
+ * message, or an earlier sign-in on this phone).
  */
-function joinScreen(state) {
-  const fromLink = readJoinLink();
+function signInScreen(state) {
   const linked = getAuth();
 
   if (linked) {
     return brandMark(state)
-      + `<div class="card"><h1>Already joined</h1>`
+      + `<div class="card"><h1>Already signed in</h1>`
       + `<p>This phone is signed in as <b>${esc(linked.name)}</b> on `
       + `<b>${esc(linked.farmName)}</b>.</p>`
       + button('Go to the farm', 'go', { cls: 'btn-block btn-lg', data: { to: '#/today' } })
@@ -260,33 +273,38 @@ function joinScreen(state) {
       + '</div>';
   }
 
+  const server = (readSignInLink() || {}).url || knownServer();
+  const address = field('Farm address', input('url', {
+    value: server, required: true, placeholder: 'https://your-farm.deno.net', autocomplete: 'url' }),
+  'It is in the message the CEO sent you. This phone remembers it.');
+  const nobodyHere = !Object.keys(state.people).length;
+
   return brandMark(state)
-    + '<div class="card"><h1>Join the farm</h1>'
-    + '<p>The CEO creates your account and sends you a link and a password. '
-    + 'Enter them once, choose a PIN you will remember, and this phone is yours.</p>'
-    + '<form data-act="do-join">'
-    + field('Farm server', input('url', {
-      value: fromLink ? fromLink.url : '', required: true, placeholder: 'https://your-farm.deno.dev' }),
-      fromLink ? 'Filled in from the link you tapped.' : 'The address the CEO gave you.')
-    + field('Farm', input('farmId', { value: fromLink ? fromLink.farmId : '', required: true }))
-    + field('Join code', input('joinCode', {
-      value: fromLink ? fromLink.joinCode : '', required: true, placeholder: 'ABC123' }))
-    + field('Password you were given', input('joinPassword', { required: true, placeholder: 'XYZ789' }),
-      'Six letters and numbers. It works once, then it is dead.')
-    + field('Choose your PIN', input('pin', {
-      type: 'password', required: true, inputmode: 'numeric', placeholder: '0000' }),
-      `${PIN_MIN} to ${PIN_MAX} digits. This is what you type every day from now on.`)
-    + field('Type the PIN again', input('pin2', { type: 'password', inputmode: 'numeric', placeholder: '0000' }))
-    + '<button class="btn-block btn-lg" type="submit">Join</button>'
+    + '<div class="card"><h1>Welcome to the DouValue farm management app</h1>'
+    + '<p>Kindly sign in.</p>'
+    + '<form data-act="do-signin">'
+    + field('Sign-in name', input('login', {
+      required: true, placeholder: 'e.g. chidi', autocomplete: 'username', autocapitalize: 'none',
+      spellcheck: 'false' }))
+    + field('Password', input('password', {
+      type: 'password', required: true, inputmode: 'numeric', placeholder: '••••••',
+      autocomplete: 'current-password' }), 'The numbers the CEO sent you.')
+    + (server
+      ? `<details class="signin-address"><summary><small>Farm address</small></summary>${address}</details>`
+      : address)
+    + '<button class="btn-block btn-lg" type="submit">Sign in</button>'
     + '</form>'
-    + note('info', 'Why two things?',
-      '<small>The code says which account, the password proves it is you. Neither works twice, '
-      + 'and neither works on a phone that was not invited. If the code is refused, ask the CEO '
-      + 'to send a new one.</small>')
+    + note('info', 'No sign-in name yet?',
+      '<small>The CEO makes your account and sends you your sign-in name and password. '
+      + 'Ask them. Once you are in, this phone remembers you, and each day you type only your password.</small>')
     + '</div>'
-    + (Object.keys(state.people).length
-      ? `<div class="card tight">${button('Back', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/today' } })}</div>`
-      : '');
+    + (nobodyHere
+      ? '<div class="card tight"><b>Setting up the farm for the first time?</b>'
+        + '<p><small>Only the CEO does this, once.</small></p>'
+        + button('I am the CEO: set up the farm', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/new-farm' } })
+        + `<div style="margin-top:10px">${button('Try it on an example farm', 'practice-start', { cls: 'btn-quiet btn-block' })}</div>`
+        + '</div>'
+      : `<div class="card tight">${button('Back', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/today' } })}</div>`);
 }
 
 // --- Chrome ---------------------------------------------------------------
@@ -417,8 +435,13 @@ export function render() {
   const state = ctx.store.state;
   const user = ctx.store.user;
 
-  if (routeKey() === '#/join') { root.innerHTML = joinScreen(state); return; }
-  if (!user) { root.innerHTML = loginScreen(state); return; }
+  // #/join is where invite links used to point; they land on the sign-in page.
+  if (routeKey() === '#/signin' || routeKey() === '#/join') { root.innerHTML = signInScreen(state); return; }
+  if (!user) {
+    const fresh = !getAuth() && !Object.keys(state.people).length;
+    root.innerHTML = fresh && routeKey() === '#/new-farm' ? firstRunScreen(state) : loginScreen(state);
+    return;
+  }
 
   const key = routeKey();
   const view = routes.get(key) || routes.get('#/today');
@@ -492,7 +515,7 @@ const shellActions = {
       const hash = await hashPin(pin, linked.memberId);
       if (!stored || stored !== hash) {
         pending.pin = '';
-        toast(t('login.wrong'), true);
+        toast(t(lockKind === 'password' ? 'login.wrongPassword' : 'login.wrong'), true);
         render();
         return;
       }
@@ -526,11 +549,12 @@ const shellActions = {
 
   'device-signout': async (c) => {
     const ok = await confirmSheet('Sign this phone out?',
-      'This phone stops sending and receiving, and whoever uses it next will need a fresh '
-      + 'invite from the CEO. Records already on the server stay there.', 'Sign out');
+      'This phone stops sending and receiving, and whoever uses it next signs in with their own '
+      + 'sign-in name and password. Records already on the server stay there.', 'Sign out');
     if (!ok) return;
     await signOutDevice();
     await setMeta('devicePin', null);
+    await forgetDeviceLock();
     sessionStorage.removeItem('douvalue.user');
     c.store.setUser(null);
     pending = { personId: null, pin: '' };
@@ -558,7 +582,7 @@ const shellActions = {
     sessionStorage.setItem('douvalue.user', id);
     navigate('#/dashboard');
     toast(rules
-      ? 'CEO account and the farm\'s zones created. Next: add your farm manager under People.'
+      ? 'CEO account and the farm\'s zones created. Next: connect the farm, then add your farm manager.'
       // The register is in the rules file; with no rules there is nothing true to seed.
       : 'CEO account created. The rules file did not load, so add the zones under Zones.', !rules);
   },
@@ -660,7 +684,7 @@ const shellActions = {
       : `Could not sync: ${result.reason}`, !result.ok || !!result.refused);
   },
 
-  'open-join': () => { navigate('#/join'); },
+  'open-join': () => { navigate('#/signin'); },
 
   // Leaving the sample farm is a wipe, so it asks first — but the warning is
   // about pretend records, not real ones, and says so.
@@ -675,38 +699,45 @@ const shellActions = {
     location.reload();
   },
 
-  'do-join': async (c, form) => {
+  // UX-28: sign in with what the CEO sent, and land on this person's own screens.
+  'do-signin': async (c, form) => {
     const data = readForm(form);
-    const pin = String(data.pin || '');
-    if (!isPin(pin)) { toast(`Your PIN must be ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
-    if (pin !== String(data.pin2 || '')) { toast('The two PINs do not match', true); return; }
+    const login = String(data.login || '').trim();
+    const password = String(data.password || '').trim();
+    const url = String(data.url || '').trim();
+    if (!login || !password) { toast('Enter your sign-in name and password', true); return; }
+    if (!/^https?:\/\//.test(url)) { toast('Enter the farm address from the CEO\'s message', true); return; }
 
-    toast('Joining…');
+    toast('Signing in…');
     try {
-      const result = await joinFarm({
-        url: data.url, farmId: data.farmId,
-        joinCode: String(data.joinCode || '').trim().toUpperCase(),
-        joinPassword: String(data.joinPassword || '').trim().toUpperCase(),
-        pin,
-      });
-      // The PIN also unlocks this phone with no network, so it is kept here as a
-      // digest alongside the token the server actually trusts.
-      await setMeta('devicePin', await hashPin(pin, result.member.id));
+      const result = await signIn({ url, login, password });
+      // The password also unlocks this phone with no network, so it is kept
+      // here as a digest alongside the token the server actually trusts.
+      await setMeta('devicePin', await hashPin(password, result.member.id));
+      await setMeta('deviceLock', 'password');
+      lockKind = 'password';
+      // The sample farm is pretend; it must not be sent up as this person's work.
+      if (isSampleFarm(c.store.state)) {
+        const { clearEvents } = await import('../db.js');
+        await clearEvents();
+      }
       const sync = await syncNow();
       await c.store.reload();
       const person = c.store.state.people[result.member.id] || {
         id: result.member.id, name: result.member.name, role: result.member.role, active: true,
       };
-      c.store.setUser(person);
-      adoptLanguage(person);
-      sessionStorage.setItem('douvalue.user', person.id);
-      navigate(ROLES[person.role]?.home || '#/today');
+      // The role is the one the CEO gave on the server, whatever this phone held.
+      const me = { ...person, role: result.member.role };
+      c.store.setUser(me);
+      adoptLanguage(me);
+      sessionStorage.setItem('douvalue.user', me.id);
+      navigate(ROLES[me.role]?.home || '#/today');
       toast(sync.ok
-        ? `Welcome, ${person.name}. Pulled down ${sync.received} records.`
-        : `Welcome, ${person.name}. The first sync will retry on its own.`);
+        ? `Welcome, ${me.name}. You are signed in as ${ROLES[me.role]?.name || me.role}.`
+        : `Welcome, ${me.name}. The farm's records will come down when there is signal.`);
       render();
     } catch (err) {
-      toast(err.message || 'Could not join', true);
+      toast(err.message || 'Could not sign in', true);
     }
   },
 
@@ -749,6 +780,8 @@ export async function startShell(store) {
     refresh: render,
     today: () => isoDate(),
   };
+
+  lockKind = (await getMeta('deviceLock', null)) === 'password' ? 'password' : 'pin';
 
   const savedLang = localStorage.getItem('douvalue.lang');
   if (savedLang) setLang(savedLang);
@@ -806,8 +839,17 @@ export async function startShell(store) {
   // UX-20: a refusal is said out loud the moment it arrives, as well as
   // leaving the bar red — not left in a console nobody reads.
   let refusedSeen = store.user ? myRefusals(store.user).length : 0;
+  // The phone's own sign-in is read after the first screen is drawn. When it
+  // arrives, the front screen becomes that person's lock screen rather than
+  // everybody's names (UX-28). Only then: redrawing on every status change
+  // would wipe a sign-in form being typed into.
+  let linkedSeen = !!getAuth();
   onStatus(() => {
-    if (!ctx || !ctx.store.user) return;
+    if (!ctx) return;
+    if (!ctx.store.user) {
+      if (!!getAuth() !== linkedSeen) { linkedSeen = !!getAuth(); render(); }
+      return;
+    }
     const n = myRefusals(ctx.store.user).length;
     if (n > refusedSeen) {
       toast(`The farm server refused ${n - refusedSeen} record${n - refusedSeen === 1 ? '' : 's'}. `

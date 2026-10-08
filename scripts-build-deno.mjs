@@ -210,6 +210,10 @@ const store = {
   async setInviteIndex(lookup, rec) { await kv.set(["invite", lookup], rec); },
   async deleteInviteIndex(lookup) { await kv.delete(["invite", lookup]); },
 
+  async getLoginIndex(login) { return (await kv.get(["login", login])).value; },
+  async setLoginIndex(login, rec) { await kv.set(["login", login], rec); },
+  async deleteLoginIndex(login) { await kv.delete(["login", login]); },
+
   async getToken(digest) { return (await kv.get(["token", digest])).value; },
   async setToken(digest, rec) { await kv.set(["token", digest], rec); },
   async touchToken(digest, at) {

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.13 (draft for restructuring) |
+| Version | 1.14 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -104,6 +104,7 @@ Field staff are trained to use the app, including writing notes and reports. The
 **Sign-in**
 - **UX-01 (MUST):** Sign-in shows each person's face photo and name. The person taps their own, then enters their PIN: 4 to 12 digits, submitted with ✓, never on its own after the fourth.
 - **UX-02 (MUST):** Field staff sign in without emails or long passwords.
+- **UX-28 (MUST):** On a connected farm the CEO, or a manager for the people below them, creates each person's account with their name, their job, a sign-in name and a password of 6 to 12 digits, and sends the sign-in name and password to them. A phone nobody has signed in on opens on a sign-in page ("Welcome to the DouValue farm management app. Kindly sign in."). The person enters the two and lands on the screens of the job they were given; after that the phone asks only for the password, on the keypad, with or without signal. Five wrong tries lock the sign-in for 15 minutes (`NFR-SEC-02`), and a removed person's sign-in stops working.
 
 **Layout and reading**
 - **UX-03 (MUST):** Buttons are at least 56 × 56 dp with space between them, usable with dirty or gloved hands.
@@ -389,6 +390,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.14 | 8 Oct 2026 | UX-28 added: the CEO makes each person's sign-in name and password and sends them; a new phone opens on a sign-in page and lands on that person's job. Replaces the single-use invite link and code |
 | 1.13 | 1 Oct 2026 | The farm server enforces FR-GATE-01 to 05, FR-TREAT-02 (PHI/REI from the server's own catalogue), FR-PROOF-01/02, FR-STOCK-04/07/08 and the Week 10 organics rule with the app's own gate code. NFR-OFF-06 added: a refused record tells the person why. FR-GATE-03 as written: a topsoil delivery records the zone it is for and is assigned only once tested clean |
 | 1.12 | 1 Oct 2026 | UX-01: a PIN is 4 to 12 digits, matching what joining and the server already accepted; the pad submits on ✓. FR-TASK-01: the day's tasks are generated on any role's phone, at open and at sign-in. FR-SCOUT-01/03, FR-FARM-04: a Greenhouse Hand records the trap count as a number, and it opens an alert — the nursery's daily count included; FR-PROOF-01 covers the nursery's trap check |
 | 1.0 | 16 Sep 2026 | First draft |

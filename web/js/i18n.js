@@ -25,6 +25,8 @@ const STRINGS = {
   'login.who': { en: 'Who are you?', pcm: 'Na who you be?' },
   'login.pin': { en: 'Enter your PIN, then press ✓', pcm: 'Put your PIN, then press ✓' },
   'login.wrong': { en: 'Wrong PIN. Try again.', pcm: 'PIN no correct. Try again.' },
+  'login.password': { en: 'Enter your password, then press ✓', pcm: 'Put your password, then press ✓' },
+  'login.wrongPassword': { en: 'Wrong password. Try again.', pcm: 'Password no correct. Try again.' },
   'login.back': { en: 'Not me', pcm: 'No be me' },
 
   // Today

@@ -10,8 +10,8 @@ import {
   payrollBetween, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
 import {
-  bootstrapFarm, checkServer, getAuth, getStatus, inviteMember, isConnected,
-  joinLink, listMembers, newFarmId, revokeMember, signOutDevice, statusLine, syncNow,
+  bootstrapFarm, checkServer, getAuth, getStatus, isConnected, makePassword, newFarmId,
+  revokeMember, setAccount, signInLink, signOutDevice, statusLine, suggestLogin, syncNow,
 } from '../sync.js';
 import { getMeta, setMeta } from '../db.js';
 import {
@@ -29,7 +29,7 @@ import {
 } from '../domain/catalogue.js';
 import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domain/climate.js';
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
-import { hashPin, isPin, PIN_MAX, PIN_MIN } from './shell.js';
+import { forgetDeviceLock, hashPin, isPin, params, PIN_MAX, PIN_MIN } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
 
@@ -83,6 +83,10 @@ export const dashboardView = {
       + badge(`${cycles.length} beds`, cycles.length ? 'ok' : '') + '</div>',
       { tight: true },
     );
+
+    // UX-28: getting people onto their own phones is the first thing a new
+    // farm needs, so until everyone has a sign-in it is the first card here.
+    if (can(ctx.user, 'managePeople')) out += peopleCard(ctx);
 
     // Sales and costs are withheld from roles without money authority, so their
     // totals here would be zeroes that read as fact. Show the crop instead.
@@ -424,23 +428,43 @@ export const reportsView = {
 
 export const peopleView = {
   perm: 'managePeople',
+  // The dashboard's "Add a person" lands here with ?add=1 and opens the form,
+  // so its buttons answer to this screen's actions wherever it was started.
+  mounted(ctx) {
+    if (!params().add) return;
+    history.replaceState(null, '', '#/people');
+    openPersonSheet(ctx, null);
+  },
   render(ctx) {
     const people = ROLE_LIST.flatMap((role) =>
       Object.values(ctx.state.people).filter((p) => p.role === role.id));
     const canAppoint = assignableRoles(ctx.user);
     const isOwner = can(ctx.user, 'manageOwners');
+    const connected = isConnected();
 
     return card(
-      cardHead('People', button('Add someone', 'open-person', { cls: 'btn-sm' }))
+      cardHead('Add a person')
+      + (connected
+        ? '<p><small>Type their name and pick their job. The app makes a sign-in name and a password; '
+          + 'you send both to them. On their own phone they sign in and see the screens for that job.</small></p>'
+        : notConnectedNote(ctx))
+      + button('Add a person', 'open-person', { cls: 'btn-block btn-lg', icon: '👤' }),
+    )
+    + card(
+      cardHead('People')
       + '<ul class="list">' + people.map((p) => {
         const role = ROLES[p.role];
         const editable = canEditPerson(ctx.user, p);
+        const me = p.id === ctx.user.id;
+        const signIn = !connected || me || p.active === false ? ''
+          : p.login ? ` · signs in as ${esc(p.login)}` : ' · <b>no sign-in yet</b>';
         return `<li><div class="grow"><b>${esc(p.name)}</b>`
           + `<small>${esc(role?.name || p.role)} · ${p.dailyRate ? esc(naira(p.dailyRate)) + ' a day' : 'no rate set'}`
-          + `${p.active === false ? ' · removed' : ''}${p.id === ctx.user.id ? ' · you' : ''}</small></div>`
+          + `${p.active === false ? ' · removed' : ''}${me ? ' · you' : ''}${signIn}</small></div>`
           + (p.role === 'ceo' ? badge('owner', 'ok') : '')
           + (editable
-            ? button('Edit', 'open-person', { cls: 'btn-sm btn-ghost', data: { id: p.id } })
+            ? button(connected && !me && !p.login && p.active !== false ? 'Give sign-in' : 'Edit',
+              'open-person', { cls: 'btn-sm btn-ghost', data: { id: p.id } })
             : badge('locked'))
           + '</li>';
       }).join('') + '</ul>'
@@ -469,25 +493,30 @@ export const peopleView = {
   actions: {
     'open-person': (ctx, el) => openPersonSheet(ctx, el.dataset.id),
     'save-person': (ctx, form) => savePerson(ctx, form),
+    'make-password': (ctx, el) => {
+      const box = el.closest('form') && el.closest('form').querySelector('input[name="password"]');
+      if (box) { box.value = makePassword(); box.focus(); }
+    },
     'invite-copy': async (ctx, el) => {
       try { await navigator.clipboard.writeText(el.dataset.text); toast('Copied'); }
       catch { toast('Could not copy. Select it and copy by hand.', true); }
     },
     'invite-share': async (ctx, el) => {
-      const text = `${el.dataset.name}, here is your login for the DouValue farm app: ${el.dataset.text}`;
       if (navigator.share) {
-        try { await navigator.share({ title: 'DouValue farm app', text }); return; } catch { /* cancelled */ }
+        try { await navigator.share({ title: 'DouValue farm app', text: el.dataset.text }); return; }
+        catch { /* cancelled, or not allowed: copy instead */ }
       }
-      try { await navigator.clipboard.writeText(el.dataset.text); toast('Link copied'); }
-      catch { toast('Could not share on this phone', true); }
+      try { await navigator.clipboard.writeText(el.dataset.text); toast('Message copied. Paste it to them.'); }
+      catch { toast('Could not share on this phone. Copy the details by hand.', true); }
     },
     'invite-done': () => closeSheet(),
+    'go-connect': (ctx) => { closeSheet(); ctx.go('#/settings?connect=1'); },
 
     'revoke-devices': async (ctx, el) => {
       const target = ctx.state.people[el.dataset.id];
       const ok = await confirmSheet('Sign out their phones?',
-        `${target.name} will be signed out everywhere and will need a fresh invite to get back in. `
-        + 'Use this the moment a phone goes missing.', 'Sign them out');
+        `${target.name} will be signed out everywhere and must sign in again with their password. `
+        + 'If a phone went missing, give them a new password too, so whoever has it cannot.', 'Sign them out');
       if (!ok) return;
       try {
         await revokeMember(target.id, { devicesOnly: true });
@@ -504,6 +533,12 @@ export const peopleView = {
         `${target.name} will not be able to sign in and will drop off the payroll. `
         + 'Everything they recorded stays in the farm\'s records.', 'Remove');
       if (!ok) return;
+      // On a connected farm the server closes their account too, or their
+      // password would still sign them in on a phone (UX-28).
+      if (isConnected() && target.login) {
+        try { await revokeMember(target.id); }
+        catch (err) { toast(err.message || 'The server did not close their account. Try again.', true); return; }
+      }
       await ctx.store.dispatch('person.deactivate', { id: target.id });
       closeSheet();
       toast('Removed');
@@ -528,32 +563,85 @@ function openPersonSheet(ctx, id) {
   if (!options.length) { toast('You cannot create accounts.', true); return; }
 
   const removable = p ? canRemovePerson(ctx.user, p, ctx.state) : { ok: false };
+  // UX-28: on a connected farm everyone but yourself signs in with a name and
+  // a password made here. Your own account is the one this phone is signed in on.
+  const signsIn = isConnected() && !(p && p.id === ctx.user.id);
+  const hasSignIn = !!(p && p.login);
 
-  openSheet(`<h2>${p ? 'Edit' : 'Add'} person</h2>`
+  openSheet(`<h2>${p ? (signsIn && !hasSignIn ? `Give ${esc(p.name)} a sign-in` : 'Edit person') : 'Add a person'}</h2>`
+    + (isConnected() ? '' : notConnectedNote(ctx))
     + '<form data-act="save-person">'
     + (p ? `<input type="hidden" name="id" value="${esc(p.id)}">` : '')
-    + field('Name', input('name', { value: p?.name || '', required: true }))
-    + field('Role', select('role', options, p?.role || options[options.length - 1].value))
-    + field('Phone', input('phone', { value: p?.phone || '', type: 'tel', placeholder: '080...' }))
+    + field('Name', input('name', { value: p?.name || '', required: true, autocomplete: 'off' }))
+    + field('Job', select('role', options, p?.role || options[options.length - 1].value),
+      'This is what they see when they sign in.')
+    + field('Phone', input('phone', { value: p?.phone || '', type: 'tel', placeholder: '080...' }),
+      'Used to send them their sign-in on WhatsApp.')
     + field('Daily rate', input('dailyRate', { type: 'number', min: 0, step: '100',
       value: p?.dailyRate ?? ctx.state.settings.defaultDailyWage }))
-    + (!p && isConnected()
-      ? note('info', 'They choose their own PIN',
-        '<small>Saving this creates their account on the farm server and gives you a link and a '
-        + 'one-time password to send them. They set their own PIN when they join, and you never '
-        + 'see it.</small>')
+    + (signsIn
+      ? '<h3 style="margin-top:16px">Their sign-in</h3>'
+        + field('Sign-in name', input('login', {
+          value: p?.login || '', placeholder: 'made from their name if left empty',
+          autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' }),
+        'What they type to sign in. Letters and numbers, no spaces.')
+        + field(hasSignIn ? 'New password (leave empty to keep theirs)' : 'Password',
+          input('password', { value: hasSignIn ? '' : makePassword(), inputmode: 'numeric',
+            placeholder: hasSignIn ? 'leave empty to keep' : '6 to 12 numbers', autocomplete: 'off' }),
+          '6 to 12 numbers. You send it to them; they type it to sign in.')
+        + button('Make a new password', 'make-password', { cls: 'btn-quiet btn-sm' })
       : field(p ? 'New PIN (leave empty to keep)' : 'PIN',
         input('pin', { inputmode: 'numeric', placeholder: '0000' }),
         `${PIN_MIN} to ${PIN_MAX} digits. `
         + (p ? 'Set a new one only if they have forgotten it.' : 'Give this to them privately.')))
-    + '<button class="btn-block btn-lg" type="submit">Save</button>'
+    + `<button class="btn-block btn-lg" type="submit" style="margin-top:14px">${signsIn && !hasSignIn ? 'Save and make their sign-in' : 'Save'}</button>`
     + '</form>'
-    + (p && isConnected() && removable.ok
+    + (p && isConnected() && removable.ok && hasSignIn
       ? button('Sign out their phones', 'revoke-devices', { cls: 'btn-ghost btn-block', data: { id: p.id } })
       : '')
     + (removable.ok
       ? button('Remove from the farm', 'deactivate-person', { cls: 'btn-ghost btn-block', data: { id: p.id } })
       : p && p.id !== ctx.user.id ? note('warn', 'Cannot be removed', `<small>${esc(removable.why)}</small>`) : ''));
+}
+
+/** Why a person added on an unconnected farm can use only this phone, and the way out. */
+function notConnectedNote(ctx) {
+  return note('warn', 'This farm is not connected yet',
+    '<small>People added now can sign in only on this phone, by tapping their name. To let each '
+    + 'person sign in on their own phone with a password, connect the farm first.</small>')
+    + (can(ctx.user, 'manageSync')
+      ? button('Connect the farm', 'go-connect', { cls: 'btn-block', icon: '🔗' })
+      : '<p><small>Only the CEO can connect the farm.</small></p>');
+}
+
+/** UX-28: the dashboard's way in to adding people, and what is still missing. */
+function peopleCard(ctx) {
+  const others = Object.values(ctx.state.people)
+    .filter((p) => p.active !== false && p.id !== ctx.user.id);
+  if (!isConnected()) {
+    return card(cardHead('People and sign-in', badge('not connected', 'warn'))
+      + '<ol class="steps">'
+      + '<li>Connect the farm to its server. Once only.</li>'
+      + '<li>Add each person: their name, their job, a sign-in name and a password.</li>'
+      + '<li>Send them both. On their own phone they sign in and see the screens for their job.</li>'
+      + '</ol>'
+      + (can(ctx.user, 'manageSync')
+        ? button('Connect the farm', 'go', { cls: 'btn-block btn-lg', icon: '🔗', data: { to: '#/settings?connect=1' } })
+        : note('info', 'Ask the CEO', '<small>Only the CEO can connect the farm.</small>'))
+      + button('Add a person on this phone only', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/people?add=1' } }));
+  }
+  const missing = others.filter((p) => !p.login && canEditPerson(ctx.user, p));
+  if (others.length && !missing.length) {
+    return card(button(`People and sign-in · ${others.length}`, 'go',
+      { cls: 'btn-ghost btn-block', icon: '👥', data: { to: '#/people' } }), { tight: true });
+  }
+  return card(cardHead('People and sign-in', badge(`${others.length} ${others.length === 1 ? 'person' : 'people'}`))
+    + (missing.length
+      ? note('warn', `${missing.length} without a sign-in yet`,
+        `<small>${esc(missing.map((p) => p.name).join(', '))}. Open People and press Give sign-in.</small>`)
+      : '')
+    + button('Add a person', 'go', { cls: 'btn-block btn-lg', icon: '👤', data: { to: '#/people?add=1' } })
+    + button('See everyone', 'go', { cls: 'btn-ghost btn-block', icon: '👥', data: { to: '#/people' } }));
 }
 
 async function savePerson(ctx, form) {
@@ -571,23 +659,39 @@ async function savePerson(ctx, form) {
 
   const name = String(data.name).trim();
 
-  // On a connected farm the server owns accounts: creating one produces a
-  // single-use invite to hand over, and no PIN is set here at all.
-  if (!existing && isConnected()) {
-    try {
-      toast('Creating the account…');
-      const invite = await inviteMember({ name, role: data.role });
-      await ctx.store.dispatch('person.upsert', {
-        id: invite.memberId, name, role: data.role, phone: data.phone || '',
-        dailyRate: Number(data.dailyRate) || 0, active: true,
-      });
-      closeSheet();
-      showInvite(ctx, invite);
-      return;
-    } catch (err) {
-      toast(err.message || 'Could not create that account', true);
+  // UX-28: on a connected farm the server owns accounts. Saving makes or
+  // changes this person's sign-in, and the details are shown to send to them.
+  if (isConnected() && !(existing && existing.id === ctx.user.id)) {
+    const taken = Object.values(ctx.state.people)
+      .filter((q) => q.login && (!existing || q.id !== existing.id)).map((q) => q.login);
+    const login = String(data.login || '').trim().toLowerCase().replace(/\s+/g, '') || suggestLogin(name, taken);
+    const password = String(data.password || '').trim();
+    const needsPassword = !existing || !existing.login;
+    if ((needsPassword || password) && !/^\d{6,12}$/.test(password)) {
+      toast('The password is 6 to 12 numbers. Press Make a new password for one.', true);
       return;
     }
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) { submit.disabled = true; submit.textContent = 'Saving…'; }
+    try {
+      const result = await setAccount({
+        memberId: existing ? existing.id : undefined, name, role: data.role, login, password,
+      });
+      await ctx.store.dispatch('person.upsert', {
+        id: result.memberId, name, role: data.role, phone: data.phone || '',
+        dailyRate: Number(data.dailyRate) || 0, active: true, login: result.login,
+      });
+      if (password) {
+        showAccountReady(ctx, { name, role: data.role, phone: data.phone, login: result.login, password });
+      } else {
+        closeSheet();
+        toast(`Saved. ${name} still signs in as ${result.login} with the same password.`);
+      }
+    } catch (err) {
+      if (submit) { submit.disabled = false; submit.textContent = 'Try again'; }
+      toast(err.message || 'Could not save that account', true);
+    }
+    return;
   }
 
   const payload = {
@@ -606,33 +710,58 @@ async function savePerson(ctx, form) {
   }
 
   await ctx.store.dispatch('person.upsert', payload);
-  closeSheet();
-  toast(existing ? 'Saved' : `${payload.name} can now sign in as ${ROLES[payload.role].name}`);
+  if (existing) {
+    closeSheet();
+    toast('Saved');
+    return;
+  }
+  // Said on a sheet that stays until it is read, not in a toast that is gone
+  // before anyone has looked up.
+  openSheet(`<h2>✓ ${esc(payload.name)} is on the farm</h2>`
+    + `<p>${esc(ROLES[payload.role].name)}. They sign in on <b>this phone</b>: tap their name, then `
+    + 'type the PIN you gave them.</p>'
+    + notConnectedNote(ctx)
+    + button('Done', 'invite-done', { cls: 'btn-block btn-lg' }));
 }
 
-/** The one-time code and password, shown once, to be handed to that person. */
-function showInvite(ctx, invite) {
-  const link = invite.link || joinLink(invite.joinCode);
-  openSheet(`<h2>Account ready for ${esc(invite.name)}</h2>`
-    + `<p><small>${esc(ROLES[invite.role]?.name || invite.role)}. Send them these two things. `
-    + 'The code and the password each work once, and expire in two weeks.</small></p>'
+/** A Nigerian number as WhatsApp wants it: 0803… becomes 234803… */
+function whatsappNumber(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('234')) return digits;
+  if (digits.startsWith('0')) return `234${digits.slice(1)}`;
+  return digits;
+}
 
-    + '<h3>1. The link</h3>'
-    + `<div class="code-box">${esc(link)}</div>`
-    + `<div class="row wrap">${button('Copy link', 'invite-copy', { data: { text: link } })}`
-    + `${button('Send link', 'invite-share', { cls: 'btn-ghost', data: { text: link, name: invite.name } })}</div>`
+/**
+ * UX-28 — the sign-in details, shown once, to send to the person.
+ *
+ * It stays open until Done is pressed: the password is not kept anywhere it
+ * can be shown again, so this is the one chance to send it.
+ */
+function showAccountReady(ctx, { name, role, phone, login, password }) {
+  const roleName = ROLES[role]?.name || role;
+  const appLink = signInLink();
+  const message = `Hello ${name}, welcome to the DouValue farm management app. `
+    + `Open it here: ${appLink}\n`
+    + `Sign-in name: ${login}\nPassword: ${password}\n`
+    + `Your job in the app: ${roleName}. Keep the password to yourself.`;
+  const wa = `https://wa.me/${whatsappNumber(phone)}?text=${encodeURIComponent(message)}`;
 
-    + '<h3 style="margin-top:16px">2. The password</h3>'
-    + `<div class="code-box" style="font-size:1.5rem;text-align:center;letter-spacing:.18em">${esc(invite.joinPassword)}</div>`
-    + `<div class="row wrap">${button('Copy password', 'invite-copy', { data: { text: invite.joinPassword } })}</div>`
-
-    + note('warn', 'Send the password separately if you can',
-      '<small>The link says which account; the password proves it is them. Sending them down two '
-      + 'different channels, say the link by WhatsApp and the password by voice call, means one '
-      + 'forwarded message is not enough for a stranger to get in.</small>')
-    + note('info', 'If they cannot open the link',
-      `<small>They can open the app, press <b>Join with a code</b>, and type the code `
-      + `<b>${esc(invite.joinCode)}</b> with that password.</small>`)
+  openSheet(`<h2>✓ Account ready for ${esc(name)}</h2>`
+    + `<p>${esc(roleName)}. When they sign in, the app opens on the ${esc(roleName)} screens.</p>`
+    + '<div class="code-box" style="font-size:1.15rem;line-height:1.7">'
+    + `Sign-in name: <b>${esc(login)}</b><br>Password: <b style="letter-spacing:.12em">${esc(password)}</b></div>`
+    + '<h3 style="margin-top:14px">Send it to them</h3>'
+    + link('Send on WhatsApp', wa, { cls: 'btn-block btn-lg', icon: '💬', newTab: true })
+    + '<div class="row wrap" style="margin-top:8px">'
+    + button('Share another way', 'invite-share', { cls: 'btn-ghost', data: { text: message } })
+    + button('Copy the message', 'invite-copy', { cls: 'btn-ghost', data: { text: message } })
+    + '</div>'
+    + `<p style="margin-top:10px"><small>The message holds the app link, the sign-in name and the password:</small></p>`
+    + `<div class="code-box" style="white-space:pre-wrap;font-size:.9rem">${esc(message)}</div>`
+    + note('warn', 'This is the only time the password is shown',
+      '<small>Send it now, or write it down. If it is lost, open the person in People and give them a new one.</small>')
     + button('Done', 'invite-done', { cls: 'btn-block btn-lg' }));
 }
 
@@ -1101,11 +1230,12 @@ export const settingsView = {
     },
     'sync-signout': async (ctx) => {
       const ok = await confirmSheet('Sign this phone out?',
-        'This phone stops sending and receiving, and whoever uses it next needs a fresh invite. '
-        + 'Records already on the server stay there.', 'Sign out');
+        'This phone stops sending and receiving, and whoever uses it next signs in with their own '
+        + 'sign-in name and password. Records already on the server stay there.', 'Sign out');
       if (!ok) return;
       await signOutDevice();
       await setMeta('devicePin', null);
+      await forgetDeviceLock();
       sessionStorage.removeItem('douvalue.user');
       ctx.store.setUser(null);
       closeSheet();
@@ -1169,6 +1299,12 @@ export const settingsView = {
   },
 
   async mounted(ctx) {
+    // The dashboard's "Connect the farm" (UX-28) opens the form straight away;
+    // the Sync card is otherwise a long scroll down this screen.
+    if (params().connect) {
+      history.replaceState(null, '', '#/settings');
+      if (!isConnected() && can(ctx.user, 'manageSync')) openSyncSetup(ctx);
+    }
     const fileEl = document.getElementById('import-file');
     if (fileEl) {
       fileEl.onchange = async () => {
@@ -1322,6 +1458,7 @@ async function saveSyncSetup(ctx, form) {
       name: ctx.user.name, password, memberId: ctx.user.id,
     });
     await setMeta('devicePin', await hashPin(password, result.member.id));
+    await forgetDeviceLock();
     const sync = await syncNow();
     closeSheet();
     await ctx.store.reload();

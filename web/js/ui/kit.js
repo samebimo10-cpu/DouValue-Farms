@@ -55,6 +55,9 @@ export function input(name, opts = {}) {
     opts.required ? 'required' : '',
     opts.inputmode ? `inputmode="${esc(opts.inputmode)}"` : '',
     opts.autofocus ? 'autofocus' : '',
+    opts.autocomplete ? `autocomplete="${esc(opts.autocomplete)}"` : '',
+    opts.autocapitalize ? `autocapitalize="${esc(opts.autocapitalize)}"` : '',
+    opts.spellcheck != null ? `spellcheck="${esc(opts.spellcheck)}"` : '',
   ].filter(Boolean).join(' ');
   return `<input ${attrs}>`;
 }
