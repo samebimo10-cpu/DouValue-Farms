@@ -1323,7 +1323,7 @@ export function normalizeLogin(raw) {
   return /^[a-z0-9._-]{3,32}$/.test(login) ? login : '';
 }
 
-/** Give someone a sign-in name and password, or change their name, role or password. */
+/** Give someone a sign-in name and password, or change their name, role or password; or set your own. */
 async function account(farmId, body, me, store) {
   if (!can(me.role, 'managePeople')) return json({ error: 'You cannot create accounts' }, 403);
 
@@ -1333,16 +1333,18 @@ async function account(farmId, body, me, store) {
   const password = body.password == null ? '' : String(body.password);
   if (!name) return json({ error: 'A name is needed' }, 400);
   if (!login) return json({ error: 'A sign-in name is 3 to 32 letters or numbers, with no spaces' }, 400);
-  if (!assignableRoles(me.role).includes(role)) {
+  const memberId = String(body.memberId || `person_${randomHex(6)}`);
+  if (!safeId(memberId)) return json({ error: 'Bad member id' }, 400);
+  // Your own sign-in, so you can use the app on another phone: the name and
+  // the password are yours to set, the role is not.
+  const self = memberId === me.id;
+  if (self && role !== me.role) return json({ error: 'You cannot change your own role' }, 403);
+  if (!self && !assignableRoles(me.role).includes(role)) {
     return json({ error: `A ${me.role} cannot appoint a ${role}` }, 403);
   }
 
-  const memberId = String(body.memberId || `person_${randomHex(6)}`);
-  if (!safeId(memberId)) return json({ error: 'Bad member id' }, 400);
-  if (memberId === me.id) return json({ error: 'You cannot change your own account here' }, 400);
-
-  const existing = await store.getMember(farmId, memberId);
-  if (existing && !assignableRoles(me.role).includes(existing.role)) {
+  const existing = self ? me : await store.getMember(farmId, memberId);
+  if (!self && existing && !assignableRoles(me.role).includes(existing.role)) {
     return json({ error: `A ${me.role} cannot change a ${existing.role}'s account` }, 403);
   }
   if (existing && existing.role === 'ceo' && role !== 'ceo') {

@@ -558,6 +558,22 @@ test('UX-28: changing the job keeps the password; a new password replaces the ol
   assert.equal((await account(ceoToken, { name: 'No Pass', role: 'hand', login: 'nopass' })).status, 400);
 });
 
+test('UX-28: the CEO sets their own sign-in to use another phone, but cannot change their own role', async () => {
+  const mine = await account(ceoToken, { memberId: 'person_ceo', name: 'Ebimo Sam', role: 'ceo', login: 'ebimo', password: '774411' });
+  assert.equal(mine.status, 200);
+  const second = await signIn('ebimo', '774411');
+  assert.equal(second.status, 200);
+  assert.equal(second.body.member.role, 'ceo');
+  assert.equal(second.body.member.id, 'person_ceo', 'the same account, not a second CEO');
+
+  const demote = await account(ceoToken, { memberId: 'person_ceo', name: 'Ebimo Sam', role: 'hand', login: 'ebimo' });
+  assert.equal(demote.status, 403);
+  const mgr = (await signIn('chidi', '482913')).body.token;
+  const self = (await signIn('chidi', '482913')).body.member;
+  assert.equal((await account(mgr, { memberId: self.id, name: self.name, role: 'ceo', login: 'chidi' })).status, 403,
+    'nobody promotes themselves this way');
+});
+
 test('UX-28 / NFR-SEC-02: five wrong passwords lock the sign-in for a while', async () => {
   await account(ceoToken, { name: 'Musa Bello', role: 'hand', login: 'musa', password: '246810' });
   for (let i = 0; i < 5; i++) assert.equal((await signIn('musa', '000000')).status, 403);

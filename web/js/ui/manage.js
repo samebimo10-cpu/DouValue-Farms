@@ -563,12 +563,14 @@ function openPersonSheet(ctx, id) {
   if (!options.length) { toast('You cannot create accounts.', true); return; }
 
   const removable = p ? canRemovePerson(ctx.user, p, ctx.state) : { ok: false };
-  // UX-28: on a connected farm everyone but yourself signs in with a name and
-  // a password made here. Your own account is the one this phone is signed in on.
-  const signsIn = isConnected() && !(p && p.id === ctx.user.id);
+  // UX-28: on a connected farm everyone signs in with a name and a password
+  // made here. Your own is optional: this phone already knows you, and the
+  // sign-in is for using the app on another one.
+  const self = !!(p && p.id === ctx.user.id);
+  const signsIn = isConnected();
   const hasSignIn = !!(p && p.login);
 
-  openSheet(`<h2>${p ? (signsIn && !hasSignIn ? `Give ${esc(p.name)} a sign-in` : 'Edit person') : 'Add a person'}</h2>`
+  openSheet(`<h2>${p ? (signsIn && !hasSignIn && !self ? `Give ${esc(p.name)} a sign-in` : 'Edit person') : 'Add a person'}</h2>`
     + (isConnected() ? '' : notConnectedNote(ctx))
     + '<form data-act="save-person">'
     + (p ? `<input type="hidden" name="id" value="${esc(p.id)}">` : '')
@@ -580,13 +582,17 @@ function openPersonSheet(ctx, id) {
     + field('Daily rate', input('dailyRate', { type: 'number', min: 0, step: '100',
       value: p?.dailyRate ?? ctx.state.settings.defaultDailyWage }))
     + (signsIn
-      ? '<h3 style="margin-top:16px">Their sign-in</h3>'
+      ? (self
+        ? '<h3 style="margin-top:16px">Your sign-in, for another phone</h3>'
+          + '<p><small>This phone already knows you. Set a sign-in name and password to use the app '
+          + 'on another phone or a computer: open the app there and sign in with them.</small></p>'
+        : '<h3 style="margin-top:16px">Their sign-in</h3>')
         + field('Sign-in name', input('login', {
           value: p?.login || '', placeholder: 'made from their name if left empty',
           autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false' }),
         'What they type to sign in. Letters and numbers, no spaces.')
         + field(hasSignIn ? 'New password (leave empty to keep theirs)' : 'Password',
-          input('password', { value: hasSignIn ? '' : makePassword(), inputmode: 'numeric',
+          input('password', { value: hasSignIn || self ? '' : makePassword(), inputmode: 'numeric',
             placeholder: hasSignIn ? 'leave empty to keep' : '6 to 12 numbers', autocomplete: 'off' }),
           '6 to 12 numbers. You send it to them; they type it to sign in.')
         + button('Make a new password', 'make-password', { cls: 'btn-quiet btn-sm' })
@@ -594,7 +600,7 @@ function openPersonSheet(ctx, id) {
         input('pin', { inputmode: 'numeric', placeholder: '0000' }),
         `${PIN_MIN} to ${PIN_MAX} digits. `
         + (p ? 'Set a new one only if they have forgotten it.' : 'Give this to them privately.')))
-    + `<button class="btn-block btn-lg" type="submit" style="margin-top:14px">${signsIn && !hasSignIn ? 'Save and make their sign-in' : 'Save'}</button>`
+    + `<button class="btn-block btn-lg" type="submit" style="margin-top:14px">${signsIn && !hasSignIn && !self ? 'Save and make their sign-in' : 'Save'}</button>`
     + '</form>'
     + (p && isConnected() && removable.ok && hasSignIn
       ? button('Sign out their phones', 'revoke-devices', { cls: 'btn-ghost btn-block', data: { id: p.id } })
@@ -661,12 +667,19 @@ async function savePerson(ctx, form) {
 
   // UX-28: on a connected farm the server owns accounts. Saving makes or
   // changes this person's sign-in, and the details are shown to send to them.
-  if (isConnected() && !(existing && existing.id === ctx.user.id)) {
+  // Your own record goes to the server only when you set your own sign-in.
+  const self = !!(existing && existing.id === ctx.user.id);
+  const settingOwn = self && (String(data.login || '').trim() || String(data.password || '').trim());
+  if (isConnected() && (!self || settingOwn)) {
     const taken = Object.values(ctx.state.people)
       .filter((q) => q.login && (!existing || q.id !== existing.id)).map((q) => q.login);
     const login = String(data.login || '').trim().toLowerCase().replace(/\s+/g, '') || suggestLogin(name, taken);
     const password = String(data.password || '').trim();
     const needsPassword = !existing || !existing.login;
+    if (self && !existing.login && !password) {
+      toast('Choose a password of 6 to 12 numbers for your sign-in', true);
+      return;
+    }
     if ((needsPassword || password) && !/^\d{6,12}$/.test(password)) {
       toast('The password is 6 to 12 numbers. Press Make a new password for one.', true);
       return;
@@ -681,7 +694,11 @@ async function savePerson(ctx, form) {
         id: result.memberId, name, role: data.role, phone: data.phone || '',
         dailyRate: Number(data.dailyRate) || 0, active: true, login: result.login,
       });
-      if (password) {
+      if (self) {
+        closeSheet();
+        toast(`Your sign-in is ${result.login}${password ? ' with the password you chose' : ''}. `
+          + 'Use it to open the app on another phone.');
+      } else if (password) {
         showAccountReady(ctx, { name, role: data.role, phone: data.phone, login: result.login, password });
       } else {
         closeSheet();
@@ -1424,6 +1441,11 @@ function syncCard(ctx) {
 
 function openSyncSetup(ctx) {
   openSheet('<h2>Connect the farm</h2>'
+    + note('warn', 'Already connected it on another phone or computer?',
+      '<small>Do not connect again here: that makes a second, empty farm. On the device that is '
+      + 'connected, open People, tap your own name and set your sign-in. Then sign in here with it.</small>')
+    + button('Sign in to my connected farm', 'go', { cls: 'btn-ghost btn-block', data: { to: '#/signin' } })
+    + '<h3 style="margin-top:16px">First time: connect this farm</h3>'
     + '<p><small>This creates the farm on your server and makes you its first account. '
     + 'From then on you create everyone else here, and each of them signs in as themselves.</small></p>'
     + '<form data-act="sync-save">'

@@ -477,6 +477,12 @@ they type only the password on the keypad, with or without signal. The password
 also works on a replacement phone; changing someone's job never changes it, and
 the CEO gives a new one from People if it is lost.
 
+**The CEO on a second phone or a computer.** Each device connects on its own, and
+pressing *Connect the farm* on a second one makes a second, empty farm (the
+connect form warns about this). Instead, on the device that is connected, open
+People, tap your own name and set **Your sign-in, for another phone**; then sign
+in with it on the other device.
+
 So that a phone opened without the link does not ask for the farm's address, put
 the server's address in `web/js/farm-address.js` (`FARM_SERVER`). Until then the
 sign-in page asks for it once, and the link fills it in.
