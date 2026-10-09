@@ -50,7 +50,7 @@ Each check compares two records that should agree. Each runs on existing data, e
 | **XC-08** | Digit patterns | Harvest weights clustering on round numbers, or an unnatural leading-digit spread over a season | Estimated rather than weighed | Crates really do come in standard sizes — weigh this check carefully before trusting it |
 | **XC-09** | Alert to action | Threshold crossed, treatment logged, but the follow-up count doesn't move | The treatment didn't happen, or the wrong product went on | Resistance, re-infestation, a genuinely bad spray |
 | **XC-10** | Scouting coverage | Zones scouted per week against zones assigned | Houses being skipped, likely the furthest ones | Reassignment, absence |
-| **XC-11** | Gate evidence age | Soil, pH and lab results reused across cycles or back-dated | Evidence recycled rather than re-taken | A test genuinely covering two cycles |
+| **XC-11** | Gate evidence age | Soil, pH and lab results reused across cycles or back-dated | Evidence recycled rather than re-taken | None. Reuse across cycles is a Gate 0 violation (FR-GATE-01), not a question |
 | **XC-12** | Self-confirmation rate | Diagnoses self-confirmed as a share of all diagnoses, per person | Approval being routed around | Working alone, which is normal and expected |
 
 ### 2.2 Requirements
