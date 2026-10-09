@@ -10,7 +10,7 @@ import { activeCycles, cycleLabel, isClockedIn } from '../store.js';
 import { getCrop, stageAt } from '../domain/crops.js';
 import { SPRAY_RULES } from '../domain/safety.js';
 import { harvestCheck, reentryCheck } from '../domain/onboarding.js';
-import { forecastHeadline, seasonOn } from '../domain/climate.js';
+import { seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { canComplete, judgeZoneStart, stampFor, zoneStamp } from '../domain/proof.js';
@@ -37,9 +37,10 @@ const zoneConfirmations = new Map();
 export function confirmationFor(taskId) { return zoneConfirmations.get(taskId) || null; }
 export function clearConfirmations() { zoneConfirmations.clear(); }
 
-let weather = null; // filled in by app.js when a forecast is available
+// Filled in by app.js when a forecast is available. Not shown on Home: it is
+// read by the spray screen (SR-04) and the adviser, where it changes an action.
+let weather = null;
 export function setWeather(w) { weather = w; }
-/** The adviser screen needs the same forecast this one is drawn from. */
 export function getWeather() { return weather; }
 
 function bedOptions(state) {
@@ -64,7 +65,6 @@ export const todayView = {
     const lang = getLang();
     const today = isoDate();
     const clockedIn = isClockedIn(state, user.id);
-    const head = forecastHeadline(weather);
     const season = seasonOn(today);
 
     const blocked = activeCycles(state)
@@ -81,9 +81,7 @@ export const todayView = {
         ? button(t('today.clockOut'), 'clock-out', { cls: 'btn-ghost' })
         : button(t('today.clockIn'), 'clock-in', {}))
       + '</div>'
-      + (clockedIn ? note('ok', t('today.clockedIn'), `<small>Since ${esc(clockInTime(state, user.id))}</small>`) : '')
-      + `<div class="note info" style="margin-bottom:0"><b>${esc(head.text)}</b>`
-      + `<small>${head.live ? 'Live forecast' : 'From the Port Harcourt seasonal average, no network needed'}</small></div>`,
+      + (clockedIn ? note('ok', t('today.clockedIn'), `<small>Since ${esc(clockInTime(state, user.id))}</small>`) : ''),
       { tight: true },
     );
 

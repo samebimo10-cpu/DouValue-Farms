@@ -31,7 +31,7 @@ import {
 } from '../domain/doctor.js';
 import { rulesLoaded } from '../rules.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
-import { activeCycles, can, cycleLabel } from '../store.js';
+import { activeCycles, can, cycleLabel, roleRank } from '../store.js';
 import { reviewPhotos } from '../sync.js';
 import { friendlyDate, isoDate, uid } from '../util.js';
 import { params } from './shell.js';
@@ -60,17 +60,22 @@ let limeForm = null;          // the three readings, the texture and the area
 let limeResult = null;
 let planFor = null;         // { cycleId, problemId, plan }
 
-function currentTab() {
+// FR-DOC-03: photo review is the Field Supervisor's and above; the server
+// refuses anyone else, so the tab is not offered to them.
+const mayReviewPhotos = (user) => roleRank(user) >= roleRank('supervisor');
+const tabsFor = (user) => TABS.filter((t) => t.id !== 'photo' || mayReviewPhotos(user));
+
+function currentTab(user) {
   const wanted = params().tab || tab;
-  return TABS.some((t) => t.id === wanted) ? wanted : 'ask';
+  return tabsFor(user).some((t) => t.id === wanted) ? wanted : 'ask';
 }
 
 export const doctorView = {
   perm: 'viewGuide',
 
   render(ctx) {
-    const active = currentTab();
-    let body = head(ctx, active) + tabBar(active);
+    const active = currentTab(ctx.user);
+    let body = head(ctx, active) + tabBar(active, ctx.user);
 
     switch (active) {
       case 'photo': body += photoPanel(ctx); break;
@@ -314,9 +319,9 @@ function head(ctx, active) {
   );
 }
 
-function tabBar(active) {
+function tabBar(active, user) {
   return '<div class="card tight"><div class="row wrap">'
-    + TABS.map((t) => `<button class="chip ${t.id === active ? 'on' : ''}" data-act="doctor-tab" `
+    + tabsFor(user).map((t) => `<button class="chip ${t.id === active ? 'on' : ''}" data-act="doctor-tab" `
       + `data-tab="${t.id}">${t.icon} ${esc(t.label)}</button>`).join(' ')
     + '</div></div>';
 }

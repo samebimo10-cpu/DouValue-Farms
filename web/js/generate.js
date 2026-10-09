@@ -5,6 +5,7 @@
 
 import { missingTasks } from './domain/schedule.js';
 import { missingFollowUps } from './domain/doctor.js';
+import { respraysDue, resprayTaskFor } from './domain/climate.js';
 import { isoDate } from './util.js';
 
 /**
@@ -35,6 +36,23 @@ export async function generateToday(ctx) {
   ];
   if (!due.length) return;
 
+  for (const task of due) {
+    await ctx.store.dispatch('task.create', task, { eventId: `ev_${task.id}` });
+  }
+  ctx.refresh();
+}
+
+/**
+ * SR-04 — open field, more than 15 mm of rain within 4 h after a spray: a
+ * re-spray task for the next dry window. Run whenever the hourly weather
+ * arrives. Like the schedule, the task is derived from the spray alone, so any
+ * phone may file it and five phones file it once.
+ */
+export async function generateResprays(ctx, forecast) {
+  if (!ctx.user || !forecast) return;
+  const today = isoDate();
+  const due = respraysDue(ctx.store.state, forecast).map((d) => resprayTaskFor(d, forecast, { today }));
+  if (!due.length) return;
   for (const task of due) {
     await ctx.store.dispatch('task.create', task, { eventId: `ev_${task.id}` });
   }

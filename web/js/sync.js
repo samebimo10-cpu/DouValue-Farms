@@ -488,6 +488,26 @@ export async function deliverOwnerMessages({ now = new Date().toISOString() } = 
   return ownerLast;
 }
 
+/** FR-XCHK-09 — run the record checks on the farm server now, over all history (Owner). */
+export async function runChecksNow() {
+  if (!auth) return null;
+  const out = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/checks`, { method: 'POST', body: {} });
+  await syncNow({ silent: true });
+  return out;
+}
+
+/** FR-ADV-07 — this month's spend on outside advice and photo review, and the Owner's cap. */
+export async function getSpendCap() {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`);
+}
+
+/** FR-ADV-07 — set the monthly cap in US dollars; null clears it. The server takes it from the Owner only. */
+export async function setSpendCap(monthlyUsd) {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`, { method: 'POST', body: { monthlyUsd } });
+}
+
 /** Whether WhatsApp is set up on the farm server, for the Alerts screen. */
 export async function ownerChannelStatus() {
   if (!auth) return null;

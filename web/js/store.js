@@ -13,6 +13,7 @@ import { CONFIRMS, DOCTOR } from './domain/doctor.js';
 import { releaseCheck } from './domain/nursery.js';
 import { fillCheck } from './domain/gates.js';
 import { checkAssignment, mayAssignZones, zonesHeldBy } from './domain/assignments.js';
+import { sprayDrawdown } from './domain/drawdown.js';
 import { peekRules } from './rules.js';
 import { isoDate, sortBy, sum, uid } from './util.js';
 
@@ -73,7 +74,7 @@ export const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates', 'viewProfit'],
     home: '#/dashboard',
     blurb: 'Owns the farm. Sees everything, appoints the manager and everyone else, '
       + 'and controls the link that keeps every phone in step.',
@@ -210,6 +211,9 @@ const EMPTY = () => ({
   // FR-COST-05 — the Owner's daily rate per position, keyed by role. Only the
   // Owner's phone is ever sent these; everywhere else it stays empty.
   rates: {},
+  // FR-XCHK-01 — the latest run of the record checks, from the farm server.
+  // Only the Owner's phone is sent these.
+  checks: null,
   workLogs: [],
   weather: [],
   reports: [],
@@ -692,6 +696,9 @@ export function reduce(events) {
       case 'sale.record':
         state.sales.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
+      case 'checks.record':
+        if (!state.checks || (e.at || '') >= (state.checks.at || '')) state.checks = { ...p, at: e.at };
+        break;
       case 'rate.set':
         if (p.role) state.rates[p.role] = { perDay: Math.max(0, Number(p.perDay) || 0), by: e.by, at: e.at };
         break;
@@ -712,6 +719,21 @@ export function reduce(events) {
           } else {
             spray.unapproved = verdict.why;
           }
+        }
+        // FR-STOCK-01: the product comes out of the store with the spray,
+        // worked out from the litres and the rate. A spray without litres
+        // (any recorded before they were asked for) draws nothing, and says so.
+        const draw = sprayDrawdown(state, spray);
+        if (draw.itemId) {
+          state.inputs[draw.itemId].qty = (Number(state.inputs[draw.itemId].qty) || 0) - draw.qty;
+          state.stockMoves.push({
+            id: `draw_${spray.id}`, itemId: draw.itemId, qty: draw.qty, cycleId: spray.cycleId || null,
+            sprayId: spray.id, auto: true, date: spray.date || (e.at || '').slice(0, 10),
+            direction: 'out', by: e.by, at: e.at,
+          });
+          spray.drawn = draw;
+        } else {
+          spray.drawn = draw;
         }
         state.sprays.push(spray);
         break;

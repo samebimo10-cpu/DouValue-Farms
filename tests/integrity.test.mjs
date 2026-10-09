@@ -136,12 +136,27 @@ test('a picking on a day the person never clocked in is queried', () => {
   assert.ok(findings.find((f) => f.kind === 'no-matching-shift'));
 });
 
-test('weights that are always round are noticed, gently', () => {
+// XC-08 was removed from the verification spec: crates come in standard
+// sizes, and the app itself turns crates into round kilograms.
+test('round weights raise no question (XC-08 removed)', () => {
   const harvests = [1, 2, 3, 4, 5, 6].map((n) => pick({ id: `h${n}`, kg: n * 10, date: day(-n) }));
   const { findings } = integrity.audit(farm({ harvests }), { today: TODAY });
-  const round = findings.find((f) => f.kind === 'estimated-weights');
-  assert.ok(round);
-  assert.equal(round.severity, 'low', 'this is a nudge, not an accusation');
+  assert.equal(findings.some((f) => f.kind === 'estimated-weights'), false);
+});
+
+// FR-XCHK-10: a headline names records and beds, never a person. Who entered
+// them stays on the finding, one tap away.
+test('no headline names a person', () => {
+  const harvests = [1, 2, 3, 4, 5].map((n) => pick({ id: `h${n}`, kg: 12, date: day(-n - 6),
+    at: at(day(-1), 9) }));
+  const attendance = [{ id: 'a1', personId: 'u_hand', in: at(day(-30), 7), out: at(day(-30), 15) }];
+  const { findings } = integrity.audit(farm({ harvests, attendance }), { today: TODAY, group: false });
+  assert.ok(findings.length > 2);
+  for (const f of findings) {
+    assert.doesNotMatch(f.title, /Emeka|Tamuno/, f.title);
+    if (f.kind !== 'clock-skew' && f.kind !== 'sold-more-than-picked') assert.ok('who' in f);
+  }
+  assert.ok(findings.some((f) => f.xc === 'XC-05'), 'the late entries carry their XC ID');
 });
 
 test('a phone with a wrong clock is identified as the phone, not the person', () => {

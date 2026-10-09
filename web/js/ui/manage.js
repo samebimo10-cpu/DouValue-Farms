@@ -10,7 +10,7 @@ import {
   attendanceBetween, dailyRateFor, hasRates, labourByZone, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
 import {
-  bootstrapFarm, checkServer, getAuth, getStatus, isConnected, makePassword, newFarmId,
+  bootstrapFarm, checkServer, getAuth, getSpendCap, getStatus, isConnected, makePassword, newFarmId, setSpendCap,
   revokeMember, setAccount, signInLink, signOutDevice, statusLine, suggestLogin, syncNow,
 } from '../sync.js';
 import { getMeta, setMeta } from '../db.js';
@@ -91,6 +91,8 @@ export const dashboardView = {
     // Sales and costs are withheld from roles without money authority, so their
     // totals here would be zeroes that read as fact. Show the crop instead.
     const showsMoney = can(ctx.user, 'manageMoney');
+    // FR-SIMP-04: what the crop on the plants is worth is the Owner's.
+    const showsValue = can(ctx.user, 'viewProfit');
 
     out += card(
       '<div class="grid">'
@@ -101,7 +103,7 @@ export const dashboardView = {
       + (showsMoney
         ? stat('Spent this month', naira(costsThisMonth, true), hasRates(state) ? 'inputs and labour' : 'inputs')
         : stat('Still to pick', kg(sum(forecasts, (f) => f.forecast.remainingKg), 0), 'across all beds'))
-      + (showsMoney
+      + (showsValue
         ? stat('Still on the plants', naira(expectedRemaining, true), 'forecast value')
         : stat('Open jobs', String(openTasks(state).length), 'assigned and due'))
       + '</div>'
@@ -140,13 +142,13 @@ export const dashboardView = {
         cardHead('Beds')
         + table(
           [{ label: 'Bed' }, { label: 'Stage' }, { label: 'Picked', num: true }, { label: 'To come', num: true }]
-            .concat(showsMoney ? [{ label: 'Worth', num: true }] : [{ label: 'First pick' }]),
+            .concat(showsValue ? [{ label: 'Worth', num: true }] : [{ label: 'First pick' }]),
           forecasts.map(({ cycle, forecast }, i) => [
             cycleLabel(state, cycle.id),
             forecast.stage.name,
             kg(cycle.harvestedKg || 0, 0),
             kg(forecast.remainingKg, 0),
-            showsMoney ? naira(revenues[i].remainingRevenue, true)
+            showsValue ? naira(revenues[i].remainingRevenue, true)
               : friendlyDate(forecast.milestones.firstHarvest),
           ]),
         ),
@@ -171,8 +173,8 @@ export const dashboardView = {
       + button('Success measures', 'go', { cls: 'btn-ghost', icon: '📈', data: { to: '#/kpis' } })
       + button('End-of-shift reports', 'go', { cls: 'btn-ghost', icon: '📝', data: { to: '#/shifts' } })
       + button('Ask the adviser', 'go', { cls: 'btn-ghost', icon: '🧠', data: { to: '#/adviser' } })
-      + button('Farm check', 'go', { cls: 'btn-ghost', icon: '🔎', data: { to: '#/audit' } })
-      + button('Planting planner', 'go', { cls: 'btn-ghost', icon: '📅', data: { to: '#/plan' } })
+      + (can(ctx.user, 'viewAudit') ? button('Farm check', 'go', { cls: 'btn-ghost', icon: '🔎', data: { to: '#/audit' } }) : '')
+      + (showsValue ? button('Planting planner', 'go', { cls: 'btn-ghost', icon: '📅', data: { to: '#/plan' } }) : '')
       + button('Reports', 'go', { cls: 'btn-ghost', icon: '📄', data: { to: '#/reports' } })
       + button('Money', 'go', { cls: 'btn-ghost', icon: '💰', data: { to: '#/money' } })
       + button('People', 'go', { cls: 'btn-ghost', icon: '👥', data: { to: '#/people' } })
@@ -246,8 +248,9 @@ function buildAlerts(ctx, cycles, cal) {
 
 let planState = { cropId: 'habanero', plants: 1000 };
 
+// FR-SIMP-04: naira per plant by sowing date is a crop-value forecast, the Owner's.
 export const planView = {
-  perm: 'viewReports',
+  perm: 'viewProfit',
   render(ctx) {
     const { state } = ctx;
     const crop = getCrop(planState.cropId);
@@ -364,6 +367,9 @@ export const reportsView = {
     // totals would come out as zeroes, which reads as "the farm sold nothing"
     // rather than "you were not shown this".
     const showsMoney = can(ctx.user, 'manageMoney');
+    // FR-SIMP-04: margin, cost against revenue and the cashflow forecast are the
+    // Owner's. The Farm Manager sees what was sold and what was spent.
+    const showsProfit = can(ctx.user, 'viewProfit');
 
     return `<div class="print-head"><b>${esc(state.settings.farmName)}</b> — farm report, ${esc(friendlyDate(today))}</div>`
       + card(
@@ -372,8 +378,10 @@ export const reportsView = {
         + (showsMoney
           ? stat('Sold', naira(revenue, true), 'recorded sales')
             + stat('Spent', naira(totalCost, true), hasRates(state) ? 'labour and inputs' : 'inputs')
-            + stat('Margin', naira(revenue - totalCost, true),
-              revenue > 0 ? `${Math.round(((revenue - totalCost) / revenue) * 100)}% of sales` : '—')
+            + (showsProfit
+              ? stat('Margin', naira(revenue - totalCost, true),
+                revenue > 0 ? `${Math.round(((revenue - totalCost) / revenue) * 100)}% of sales` : '—')
+              : '')
           : stat('Beds', String(cycles.length), 'cycles on record')
             + stat('Pickings', String(state.harvests.filter((h) => h.date >= from).length), 'in the period'))
         + stat('Picked', kg(sum(state.harvests.filter((h) => h.date >= from), (h) => h.kg), 0), 'all beds')
@@ -402,7 +410,7 @@ export const reportsView = {
           ? '<h3 style="margin-top:14px">Hours by job</h3>' + table([{ label: 'Job' }, { label: 'Hours', num: true }],
             [...workByType.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, round(v, 1)]))
           : ''))
-      + (showsMoney ? card(cardHead('Money coming in and going out')
+      + (showsProfit ? card(cardHead('Money coming in and going out')
         + (cash.rows.length
           ? table([{ label: 'Month' }, { label: 'Expected in', num: true }, { label: 'Out', num: true }, { label: 'Running', num: true }],
             cash.rows.map((r) => [r.month, naira(r.income, true), naira(r.cost, true), naira(r.balance, true)]))
@@ -1060,10 +1068,11 @@ export const moneyView = {
     const expenses = state.expenses.filter((e) => e.date >= from);
     const totalSales = sum(sales, (s) => s.amount);
     const totalExpenses = sum(expenses, (e) => e.amount);
-    // FR-COST-05: labour is priced from the Owner's rate table, so labour, net
-    // and break-even are the Owner's. Another role's figure would leave labour
-    // out and read as a profit the farm did not make.
+    // FR-COST-05: labour is priced from the Owner's rate table. FR-SIMP-04: net
+    // and break-even set cost against revenue, which is the Owner's too. The
+    // Farm Manager records and reads sales and input costs.
     const ownerBooks = can(ctx.user, 'manageRates');
+    const showsProfit = can(ctx.user, 'viewProfit');
     const labourCost = labourByZone(state, from, today).total;
     const cal = calibrationFor(state);
     const expectedKg = sum(activeCycles(state).map((c) => harvestForecast(c, { today, calibration: cal })), (f) => f.totalKg);
@@ -1074,10 +1083,8 @@ export const moneyView = {
       + '<div class="grid">'
       + stat('Sales', naira(totalSales, true), `${sales.length} recorded`)
       + stat('Inputs', naira(totalExpenses, true), `${expenses.length} entries`)
-      + (ownerBooks
-        ? stat('Labour', naira(labourCost, true), 'days worked × position rate')
-          + stat('Net', naira(totalSales - totalExpenses - labourCost, true), '')
-        : '')
+      + (ownerBooks ? stat('Labour', naira(labourCost, true), 'days worked × position rate') : '')
+      + (showsProfit ? stat('Net', naira(totalSales - totalExpenses - labourCost, true), '') : '')
       + '</div>'
       + '<div class="row wrap" style="margin-top:12px">'
       + button('Record a sale', 'open-sale', { icon: '💵' })
@@ -1085,7 +1092,7 @@ export const moneyView = {
       + '</div>',
       { tight: true },
     )
-    + (ownerBooks
+    + (showsProfit
       ? card(cardHead('Break-even') + note(be.verdict === 'comfortable' ? 'ok' : be.verdict === 'loss at this price' ? 'danger' : 'warn',
         be.verdict, `<small>${esc(be.text)}</small>`))
       : '')
@@ -1228,6 +1235,11 @@ export const settingsView = {
       + `<p><small>Climate for reference: ${MONTH_NAMES.map((n, i) =>
         `${n} ${climateFor(i + 1).rain}mm`).join(' · ')}</small></p>`)
     + (can(ctx.user, 'manageRates') ? ratesCard(ctx) : '')
+    + (can(ctx.user, 'manageOwners') && isConnected() ? card(cardHead('Outside advice: monthly limit')
+      + '<p><small>The wider adviser and photo review are paid for on the farm server\'s key. '
+      + 'Each person is limited per day; this limits the whole farm per month, in US dollars, '
+      + 'which is what the bill is in. Only you see or set it.</small></p>'
+      + button('See this month\'s spend', 'open-spend-cap', { cls: 'btn-ghost', icon: '💳' })) : '')
     + syncCard(ctx)
     + trialCard(ctx)
     + card(cardHead('Backup and sharing')
@@ -1293,6 +1305,30 @@ export const settingsView = {
       ctx.store.setUser(null);
       closeSheet();
       toast('This phone is signed out');
+    },
+
+    'open-spend-cap': async () => {
+      let s;
+      try { s = await getSpendCap(); } catch (err) { toast(err.message || 'Could not reach the farm server', true); return; }
+      if (!s) { toast('This phone is not connected to the farm server', true); return; }
+      openSheet('<h2>Outside advice this month</h2>'
+        + note(s.over ? 'danger' : 'info', `$${s.spentUsd} spent in ${esc(s.month)}`,
+          `<small>${s.capUsd == null ? 'No monthly limit is set.' : `The limit is $${s.capUsd}.`} `
+          + 'Worked out from what each answer used, at list prices.</small>')
+        + '<form data-act="save-spend-cap">'
+        + field('Monthly limit (US dollars)', input('monthlyUsd', {
+          type: 'number', min: 0, step: '1', value: s.capUsd ?? '', placeholder: 'empty for no limit' }))
+        + '<button class="btn-block btn-lg" type="submit">Save limit</button></form>');
+    },
+    'save-spend-cap': async (ctx, form) => {
+      const raw = readForm(form).monthlyUsd;
+      try {
+        const s = await setSpendCap(raw === '' || raw == null ? null : Number(raw));
+        closeSheet();
+        toast(s && s.capUsd != null ? `Limit set: $${s.capUsd} a month` : 'No monthly limit');
+      } catch (err) {
+        toast(err.message || 'Could not save the limit', true);
+      }
     },
 
     'save-rates': async (ctx, form) => {

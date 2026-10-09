@@ -11,7 +11,8 @@ import { knapsackPlan, SPRAY_RULES } from '../domain/safety.js';
 import { harvestCheck, isOnboarded, reentryCheck, sprayHistory } from '../domain/onboarding.js';
 import { buildCatalogue, canUseActive, rateFor, resolveActive, sprayIntervals, usableActives } from '../domain/catalogue.js';
 import { cropWeek, rotationVerdict, WEEK_10, week10Actives } from '../domain/rotation.js';
-import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn } from '../domain/climate.js';
+import { irrigationGapMmPerDay, litresPerPlantPerDay, seasonOn, SR04, sprayWeather } from '../domain/climate.js';
+import { getWeather } from './worker.js';
 import { canPlant, canTreat, expiredOnly, gateBoard, GATE_STATE } from '../domain/gates.js';
 import { isNursery } from '../domain/farm.js';
 import { batchList } from '../domain/nursery.js';
@@ -194,10 +195,9 @@ export const cycleView = {
     const clearance = harvestCheck(state, cycle.id);
     const plants = cycle.plants || plantsForArea(cycle.cropId, cycle.areaM2 || 0);
 
-    // Prices and crop values are commercial. A role without money authority is
-    // not sent the farm's real prices at all, so showing a value here would be
-    // the app's built-in estimate dressed up as this farm's figure.
-    const showsMoney = can(ctx.user, 'manageMoney');
+    // Crop value and the price forecast behind it are the Owner's (FR-SIMP-04).
+    // The Farm Manager sees sales and prices as recorded, not what a bed is worth.
+    const showsMoney = can(ctx.user, 'viewProfit');
 
     let out = card(
       `<div class="card-head">${cropDot(cycle.cropId)}<h2>${esc(cycleLabel(state, cycle.id))}</h2>`
@@ -613,11 +613,12 @@ function openSprayForm(ctx, cycleId) {
 
   const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
-    + (watched && watched.how === 'confirmed'
-      ? note('info', `${watched.byName} is confirmed as present`,
+    + (sprayWatch && sprayWatch.how === 'confirmed'
+      ? note('info', `${sprayWatch.byName} is confirmed as present`,
         '<small>Their name goes on this record with yours, until the Owner signs off the '
         + 'field trial.</small>')
       : supervisionBanner(ctx.state, 'spray'))
+    + sprayWeatherNote(ctx.state, cycleId)
     + '<form data-act="save-spray">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     + field('Active ingredient', `<select name="activeId" data-act="spray-product-change">`
@@ -629,6 +630,15 @@ function openSprayForm(ctx, cycleId) {
       + catalogue.labels.map((l) => `<option value="${esc(l.id)}">${esc(l.brand)}${l.formulation ? ` ${esc(l.formulation)}` : ''}</option>`).join('')
       + '</select>')
     + field('Date', input('date', { type: 'date', value: isoDate() }))
+    // FR-TREAT-01, FR-STOCK-01: how much mix went on, and over how much ground.
+    // The litres and the rate are what take the product out of the store.
+    + field('Litres of mix sprayed', input('litres', {
+      type: 'number', min: '0.5', step: '0.5', inputmode: 'decimal', required: true, placeholder: 'e.g. 32 (two knapsacks)' }),
+      'Count the knapsacks or tanks: 16 L each for a knapsack.')
+    + field('Area treated (m²)', input('areaM2', {
+      type: 'number', min: '1', step: '1', inputmode: 'numeric', required: true,
+      value: (ctx.state.cycles[cycleId] || {}).areaM2 || '' }),
+      'The whole bed unless you only sprayed part of it.')
     + field('What were you treating?', input('targetProblem', { placeholder: 'e.g. thrips' }))
     + field('Who sprayed?', input('operator', { value: ctx.user.name }))
     + '<div id="spray-hint"></div>'
@@ -644,6 +654,26 @@ function openSprayForm(ctx, cycleId) {
   bindPhoto(el);
   const sel = document.querySelector('.sheet select[name=activeId]');
   if (sel) updateSprayHints(ctx, sel);
+}
+
+/**
+ * SR-04 on the spray screen, and nowhere else on a field screen: open field
+ * only. A greenhouse or the nursery shows nothing, because rain changes
+ * nothing there.
+ */
+function sprayWeatherNote(state, cycleId) {
+  const cycle = state.cycles[cycleId];
+  const zone = cycle ? state.plots[cycle.plotId] : null;
+  const w = sprayWeather(zone, getWeather());
+  if (!w.applies) return '';
+  const rule = `<small>${SR04.id}: in open field, more than ${SR04.mm} mm of rain within ${SR04.hours} hours `
+    + 'after spraying washes it off, and a re-spray task is added for the next dry day.</small>';
+  if (!w.live) return note('info', 'No hourly rain forecast on this phone', rule);
+  if (w.over) {
+    return note('danger', `${w.mm} mm of rain forecast in the next ${SR04.hours} hours`,
+      `<small>Hold the spray: it would be washed off. </small>${rule}`);
+  }
+  return note('ok', `${w.mm} mm of rain forecast in the next ${SR04.hours} hours`, rule);
 }
 
 function updateSprayHints(ctx, el) {
@@ -690,6 +720,10 @@ function updateSprayHints(ctx, el) {
 
 async function saveSpray(ctx, form) {
   const data = readForm(form);
+  if (!(Number(data.litres) > 0) || !(Number(data.areaM2) > 0)) {
+    toast('Enter the litres sprayed and the area treated', true);
+    return;
+  }
   const catalogue = buildCatalogue(ctx.state);
   const active = catalogue.byId[data.activeId];
   const label = catalogue.labels.find((l) => l.id === data.labelId) || null;
@@ -756,6 +790,7 @@ async function saveSpray(ctx, form) {
       ['Brand', label ? `${label.brand} ${label.formulation || ''}`.trim() : 'not recorded'],
       ['Resistance group', active ? active.group : null],
       ['Rate', rate.ok ? rate.rate : null],
+      ['Mix sprayed', `${Number(data.litres) || 0} L over ${Number(data.areaM2) || 0} m²`],
       ['No picking until', phiDays
         ? isoDate(addDays(new Date(data.date || isoDate()), phiDays)) : 'no waiting period'],
       ['Keep people out for', reiHours ? `${reiHours} hours` : 'no re-entry period'],
@@ -780,6 +815,7 @@ async function saveSpray(ctx, form) {
     labelId: label ? label.id : null,
     productName: active ? active.name : '', group: active ? active.group : '',
     rate: rate.ok ? rate.rate : '', phiDays, reiHours,
+    litres: Number(data.litres) || null, areaM2: Number(data.areaM2) || null,
     targetProblem: data.targetProblem || '',
     operator: data.operator || '', note: data.note || '', date: data.date || isoDate(),
     // FR-TREAT-04: the confirmation is part of the record, not a screen that

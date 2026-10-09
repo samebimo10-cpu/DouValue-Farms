@@ -22,7 +22,7 @@ import { shiftView } from './ui/shift.js';
 import { farmView, weekView } from './ui/farm.js';
 import { fetchForecast, summariseObserved } from './domain/climate.js';
 import { buildCatalogue, migrateStockToActives } from './domain/catalogue.js';
-import { generateOnSignIn, generateToday } from './generate.js';
+import { generateOnSignIn, generateResprays, generateToday } from './generate.js';
 import { loadRules } from './rules.js';
 import { loadSources } from './sources.js';
 import { startSync } from './sync.js';
@@ -78,6 +78,7 @@ async function warmWeather(ctx) {
   const cached = await getMeta('forecast');
   if (cached && cached.days) {
     setWeather(cached);
+    await generateResprays(ctx, cached).catch(() => {});
     ctx.refresh();
   }
 
@@ -90,6 +91,7 @@ async function warmWeather(ctx) {
   fresh.observed = summariseObserved(fresh.days);
   await setMeta('forecast', fresh);
   setWeather(fresh);
+  await generateResprays(ctx, fresh).catch(() => {});
   ctx.refresh();
 }
 

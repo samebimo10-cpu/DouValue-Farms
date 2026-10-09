@@ -23,6 +23,8 @@
 //     under someone else's name.
 
 import { JUDGED, judgeRecord, judgingLog } from './judge.mjs';
+import { reduce } from '../web/js/store.js';
+import { audit } from '../web/js/domain/integrity.js';
 import { loadRules, peekRules, rulesLoaded, setRules } from '../web/js/rules.js';
 
 // --- Roles ----------------------------------------------------------------
@@ -55,7 +57,7 @@ export const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates', 'viewProfit'],
   },
 };
 
@@ -238,6 +240,10 @@ export const EVENT_POLICY = {
   // FR-COST-05 — the daily rate per position. The Owner's alone, both ways:
   // no other phone is sent it, so no other phone can work out what anyone earns.
   'rate.set':          { write: 'manageRates',   read: 'manageRates' },
+  // FR-VER-01, FR-XCHK-01 — the record checks' findings. Written by the farm
+  // server's nightly run and nobody else (no role holds `serverChecks`), and
+  // read by the Owner alone.
+  'checks.record':     { write: 'serverChecks',  read: 'viewAudit' },
 };
 
 /**
@@ -680,6 +686,9 @@ async function readJson(req) {
  *   POST /api/farms/:id/events      file records, each checked against the author
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
+ *   POST /api/farms/:id/checks      run the record checks now (Owner, FR-XCHK-09)
+ *   GET  /api/farms/:id/spend-cap   this month's spend on the adviser and photo review, and the cap (Owner)
+ *   POST /api/farms/:id/spend-cap   set the monthly cap in US dollars, or clear it (Owner, FR-ADV-07)
  *   GET  /api/farms/:id/notify      whether WhatsApp to the Owner is set up (FR-REP-02)
  *   POST /api/farms/:id/notify      send the Owner the digest or a straight-to-Owner item
  */
@@ -736,6 +745,14 @@ export async function handleRequest(req, store) {
   // FR-DOC-03: photo review. Online only, by design — the app's guided
   // diagnosis is what answers when this cannot be reached.
   if (action === 'photo-review' && req.method === 'POST') return photoReview(farmId, body, me, store);
+  // FR-ADV-07: the Owner's monthly spending cap on the wider adviser and photo review.
+  // FR-XCHK-09: the Owner can run the record checks now, over all history.
+  if (action === 'checks' && req.method === 'POST') {
+    if (!can(me.role, 'viewAudit')) return json({ error: 'Only the Owner runs the record checks' }, 403);
+    return json(await runFarmChecks(farmId, store, { force: true }));
+  }
+  if (action === 'spend-cap' && req.method === 'GET') return spendCapStatus(farmId, me, store);
+  if (action === 'spend-cap' && req.method === 'POST') return setSpendCap(farmId, body, me, store);
   // FR-REP-02: the Owner's WhatsApp. The phones decide what to say; the key
   // to send it lives here and nowhere else.
   if (action === 'notify' && req.method === 'GET') return json(await notifyStatus(farmId, store));
@@ -830,7 +847,7 @@ function guardScout(event, author) {
  */
 export const GENERATED_TASK_KINDS = [
   'scout', 'trap', 'irrigate', 'fertigate', 'prune', 'harvest', 'sanitation',
-  'nursery_trap', 'seedling_check', 'follow_up',
+  'nursery_trap', 'seedling_check', 'follow_up', 'respray',
 ];
 function guardTaskCreate(event, author) {
   if (can(author.role, 'assignTasks')) return { ok: true };
@@ -841,6 +858,9 @@ function guardTaskCreate(event, author) {
   if (p.assignedTo || p.personId) return refuse;
   if (p.kind === 'follow_up') {
     if (!p.sprayId || p.id !== `fd_follow_${p.sprayId}`) return refuse;
+  } else if (p.kind === 'respray') {
+    // SR-04, generated from the hourly rain (web/js/domain/climate.js).
+    if (!p.sprayId || p.id !== `fd_respray_${p.sprayId}`) return refuse;
   } else {
     const day = String(p.due || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !p.zoneId || p.id !== `gen_${day}_${p.zoneId}_${p.kind}`) return refuse;
@@ -1796,10 +1816,21 @@ async function liveWeather() {
 
 /** Strip anything the reader's role is not entitled to, whatever the client sent. */
 function redactBrief(brief, role) {
-  if (can(role, 'manageMoney')) return brief;
-  const { economics, ...rest } = brief || {};
-  if (rest.farm && rest.farm.askedBy) rest.farm.askedBy = { ...rest.farm.askedBy, seesMoney: false };
-  return rest;
+  const out = { ...(brief || {}) };
+  // FR-VER-01: the record checks' findings go to the Owner and nobody else.
+  if (!can(role, 'viewAudit')) delete out.dataTrust;
+  if (!can(role, 'manageMoney')) {
+    delete out.economics;
+    if (out.farm && out.farm.askedBy) out.farm = { ...out.farm, askedBy: { ...out.farm.askedBy, seesMoney: false } };
+    return out;
+  }
+  // FR-SIMP-04, FR-COST-05: the Farm Manager gets sales and input costs, not
+  // labour, cost against revenue or margin.
+  if (!can(role, 'viewProfit') && out.economics && out.economics.last90Days) {
+    const { labourCostNgn, totalCostNgn, costPerKgNgn, marginPerKgNgn, verdict, ...kept } = out.economics.last90Days;
+    out.economics = { ...out.economics, last90Days: kept };
+  }
+  return out;
 }
 
 /** Deno and Node keep environment variables in different places, and neither exists in the other. */
@@ -1960,6 +1991,142 @@ export async function notifyOwner(farmId, body, me, store, {
   return { ok: true, configured, results };
 }
 
+// --- FR-XCHK-01: the record checks, nightly on the farm server ---------------
+//
+// The checks run here, over every record the server holds, and not on a phone:
+// a check that depended on a phone being open at the right moment would not
+// run on the nights that matter. The findings go into the farm's log as one
+// checks.record a night, which only the Owner's phone is sent (FR-VER-01).
+// Running them changes no record and creates no task (FR-XCHK-08).
+
+const CHECKS_HOUR = 2;                     // 02:00 farm time, after the day's last sync
+const CHECKS_KEEP = 60;                    // findings kept per run; ranked worst first
+
+/** Run the checks for one farm, unless tonight's run is already in. */
+export async function runFarmChecks(farmId, store, { now = new Date(), force = false } = {}) {
+  const farm = (await store.getFarm(farmId)) || null;
+  if (!farm) return { ok: false, reason: 'no-farm' };
+  const day = new Date(now.getTime() + 3600 * 1000).toISOString().slice(0, 10);   // WAT
+  if (!force && farm.checksRunFor === day) return { ok: true, skipped: true, day };
+
+  const events = (await storedEvents(farmId, store)).filter((e) => e.type !== 'checks.record');
+  const result = audit(reduce(events), { today: day });
+  const at = now.toISOString();
+  const event = {
+    id: `checks_${day}${force ? `_${now.getTime()}` : ''}`,
+    type: 'checks.record',
+    by: 'farm-server',
+    at,
+    serverAt: at,
+    payload: {
+      date: day,
+      findings: result.findings.slice(0, CHECKS_KEEP).map(({ examples, ...f }) => f),
+      counts: result.counts,
+      rawCount: result.rawCount,
+      records: result.records,
+      people: result.people.map(({ person, ...row }) => ({ personId: person.id, ...row })),
+    },
+  };
+  await store.appendEvents(farmId, [event]);
+  await store.setFarm(farmId, { ...((await store.getFarm(farmId)) || farm), checksRunFor: day });
+  return { ok: true, day, findings: event.payload.findings.length };
+}
+
+/**
+ * Called on a timer by both servers (hourly is fine): runs each farm's checks
+ * once a night, from 02:00 farm time. A server asleep at two runs them when it
+ * wakes, so a missed night is caught up rather than lost.
+ */
+export async function runDueChecks(store, farmIds, { now = new Date() } = {}) {
+  const hour = new Date(now.getTime() + 3600 * 1000).getUTCHours();
+  if (hour < CHECKS_HOUR) return [];
+  const out = [];
+  for (const farmId of farmIds) {
+    try { out.push({ farmId, ...(await runFarmChecks(farmId, store, { now })) }); }
+    catch (err) { out.push({ farmId, ok: false, error: String((err && err.message) || err) }); }
+  }
+  return out;
+}
+
+// --- FR-ADV-07: the Owner's monthly spending cap ---------------------------
+//
+// Alongside the per-person daily limit, not instead of it: the daily limit
+// stops one account running up the bill, the cap bounds the farm's month. The
+// Anthropic bill is in US dollars, so the cap is too. Each answer's cost is
+// worked out from the usage the API returns, at list prices; a model not in
+// the table is charged at the dearest rate, so the cap errs towards stopping.
+
+// US dollars per million tokens: [input, output]. Web search is $10 per 1,000.
+const MODEL_PRICES = {
+  'claude-fable-5-1': [10, 50], 'claude-fable-5': [10, 50],
+  'claude-opus-5-5': [4, 20], 'claude-opus-5': [5, 25],
+  'claude-opus-4-8': [5, 25], 'claude-opus-4-7': [5, 25], 'claude-opus-4-6': [5, 25],
+  'claude-sonnet-5-5': [2, 10], 'claude-sonnet-5': [2, 10], 'claude-sonnet-4-6': [3, 15],
+  'claude-haiku-5-5': [0.1, 0.5], 'claude-haiku-4-5': [1, 5],
+};
+const DEAREST = [10, 50];
+const WEB_SEARCH_USD = 0.01;
+
+/** What one answer cost, in US dollars, from the usage block the API returned. */
+export function usageCostUsd(model, usage = {}) {
+  const [inRate, outRate] = MODEL_PRICES[model] || DEAREST;
+  const n = (v) => Number(v) || 0;
+  const tokens = n(usage.input_tokens) * inRate
+    + n(usage.cache_creation_input_tokens) * inRate * 1.25
+    + n(usage.cache_read_input_tokens) * inRate * 0.1
+    + n(usage.output_tokens) * outRate;
+  const searches = n(usage.server_tool_use && usage.server_tool_use.web_search_requests);
+  return tokens / 1e6 + searches * WEB_SEARCH_USD;
+}
+
+const farmMonth = () => farmDay().slice(0, 7);
+
+/** This month's spend and the cap, from the farm record. */
+function spendState(farm) {
+  const month = farmMonth();
+  const spent = farm && farm.spend && farm.spend.month === month ? Number(farm.spend.usd) || 0 : 0;
+  // A cap of $0 is a real cap: it switches outside advice off for the month.
+  const cap = farm && farm.spendCap && Number(farm.spendCap.monthlyUsd) >= 0 ? Number(farm.spendCap.monthlyUsd) : null;
+  return { month, spentUsd: Math.round(spent * 100) / 100, capUsd: cap, over: cap != null && spent >= cap };
+}
+
+/** Checked before every call. A call already under way may take the month a little past the cap. */
+async function underSpendCap(farmId, store) {
+  return spendState(await store.getFarm(farmId));
+}
+
+async function recordSpend(farmId, store, model, usage) {
+  const cost = usageCostUsd(model, usage);
+  if (!(cost > 0)) return;
+  const farm = (await store.getFarm(farmId)) || {};
+  const { month, spentUsd } = spendState(farm);
+  await store.setFarm(farmId, { ...farm, spend: { month, usd: spentUsd + cost } });
+}
+
+const capRefusal = (s, extra = {}) => json({
+  ok: false, reason: 'monthly-cap', ...extra,
+  message: `This month's limit on outside advice ($${s.capUsd}) has been reached. `
+    + 'The app\'s own adviser, the guided diagnosis and the calculators all still work. The Owner can raise the limit.',
+}, 429);
+
+// The cap is the Owner's: `manageOwners` is held by the CEO and nobody else.
+async function spendCapStatus(farmId, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner sees the spending cap' }, 403);
+  return json({ ok: true, ...(await underSpendCap(farmId, store)) });
+}
+
+async function setSpendCap(farmId, body, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner sets the spending cap' }, 403);
+  const raw = body && body.monthlyUsd;
+  const value = raw === null || raw === '' || raw === undefined ? null : Number(raw);
+  if (value !== null && !(value >= 0 && value <= 100000)) {
+    return json({ error: 'The cap is a number of US dollars a month, or empty for none' }, 400);
+  }
+  const farm = (await store.getFarm(farmId)) || {};
+  await store.setFarm(farmId, { ...farm, spendCap: value === null ? null : { monthlyUsd: value, by: me.id, at: new Date().toISOString() } });
+  return json({ ok: true, ...(await underSpendCap(farmId, store)) });
+}
+
 /** Count one use against this person's day, and refuse once they are over. */
 async function spendAdviceBudget(farmId, me, store) {
   const today = farmDay();
@@ -1986,6 +2153,8 @@ async function advise(farmId, body, me, store) {
     });
   }
 
+  const cap = await underSpendCap(farmId, store);
+  if (cap.over) return capRefusal(cap, { weather });
   const budget = await spendAdviceBudget(farmId, me, store);
   if (!budget.ok) {
     return json({
@@ -1996,6 +2165,7 @@ async function advise(farmId, body, me, store) {
 
   const brief = redactBrief(body.brief, me.role);
   const question = String(body.question || '').slice(0, 2000).trim();
+  const model = envVar('ANTHROPIC_MODEL') || ADVICE_MODEL;
   const alreadySaid = Array.isArray(body.alreadySaid)
     ? body.alreadySaid.slice(0, 20).map((t) => String(t).slice(0, 200))
     : [];
@@ -2028,7 +2198,7 @@ async function advise(farmId, body, me, store) {
       body: JSON.stringify({
         // Overridable, because the farm is the one paying for each question and
         // a cheaper model is a legitimate choice for a farm making many of them.
-        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        model,
         // Thinking is on by default and is billed against this, so the ceiling
         // has to leave room for it or a good answer gets cut off mid-sentence.
         max_tokens: 16000,
@@ -2051,6 +2221,7 @@ async function advise(farmId, body, me, store) {
     }
 
     const answer = await res.json();
+    await recordSpend(farmId, store, model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({
         ok: false, reason: 'declined', weather,
@@ -2141,6 +2312,11 @@ function firstJsonObject(text) {
 }
 
 async function photoReview(farmId, body, me, store) {
+  // FR-DOC-03: photo review is the Field Supervisor's and above. A hand
+  // reports a sick plant (FR-DIAG-07); the people who diagnose it ask for this.
+  if (rankOf(me.role) < rankOf('supervisor')) {
+    return json({ ok: false, reason: 'role', message: 'Photo review is for the Field Supervisor and above. Report the sick plant instead.' }, 403);
+  }
   const key = envVar('ANTHROPIC_API_KEY');
   if (!key) {
     return json({
@@ -2155,6 +2331,8 @@ async function photoReview(farmId, body, me, store) {
     return json({ ok: false, reason: 'no-photos', message: 'No usable photos came through.' }, 400);
   }
 
+  const cap = await underSpendCap(farmId, store);
+  if (cap.over) return capRefusal(cap);
   const budget = await spendAdviceBudget(farmId, me, store);
   if (!budget.ok) {
     return json({
@@ -2162,6 +2340,7 @@ async function photoReview(farmId, body, me, store) {
       message: `That is ${ADVICE_PER_DAY} questions today on this account. It resets at midnight.`,
     }, 429);
   }
+  const model = envVar('ANTHROPIC_MODEL') || ADVICE_MODEL;
 
   const shortlist = Array.isArray(body.shortlist) ? body.shortlist.slice(0, 12) : [];
   const context = [
@@ -2186,7 +2365,7 @@ async function photoReview(farmId, body, me, store) {
       },
       signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
       body: JSON.stringify({
-        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        model,
         max_tokens: 4000,
         system: PHOTO_BRIEF,
         messages: [{
@@ -2206,6 +2385,7 @@ async function photoReview(farmId, body, me, store) {
     }
 
     const answer = await res.json();
+    await recordSpend(farmId, store, model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({ ok: false, reason: 'declined', message: 'Photo review would not answer that one.' });
     }

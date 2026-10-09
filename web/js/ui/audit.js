@@ -10,11 +10,12 @@
 // time would be switched off within a week.
 
 import {
-  badge, bar, button, card, cardHead, empty, esc, note, spark, stat, table,
+  badge, bar, button, card, cardHead, empty, esc, note, spark, stat, table, toast,
 } from './kit.js';
 import { analyse } from '../domain/analysis.js';
 import { audit, timing } from '../domain/integrity.js';
-import { cycleLabel } from '../store.js';
+import { can, cycleLabel } from '../store.js';
+import { isConnected, runChecksNow } from '../sync.js';
 import { photoThumb } from './photo.js';
 import { friendlyDate, isoDate, kg, naira, round } from '../util.js';
 
@@ -24,8 +25,9 @@ const when = (iso) => (iso
   ? `${friendlyDate(iso.slice(0, 10))} at ${new Date(iso).toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })}`
   : 'time not recorded');
 
+// FR-VER-01: the Farm check is the verification spec's Part A, and the Owner's alone.
 export const auditView = {
-  perm: 'viewReports',
+  perm: 'viewAudit',
   render(ctx) {
     const { state } = ctx;
     const today = isoDate();
@@ -47,6 +49,15 @@ export const auditView = {
 
   actions: {
     'audit-tab': (ctx, el) => { tab = el.dataset.tab; ctx.refresh(); },
+    'audit-run-now': async (ctx) => {
+      try {
+        const out = await runChecksNow();
+        toast(out && out.ok ? `Checked: ${out.findings} question${out.findings === 1 ? '' : 's'}` : 'Could not run the checks', !(out && out.ok));
+      } catch (err) {
+        toast(err.message || 'Could not reach the farm server', true);
+      }
+      ctx.refresh();
+    },
   },
 };
 
@@ -55,7 +66,7 @@ export const auditView = {
 function analysisSection(ctx, today) {
   const { state } = ctx;
   const a = analyse(state, { today });
-  const money = ctx.user && ['ceo', 'manager'].includes(ctx.user.role);
+  const money = can(ctx.user, 'viewProfit');
 
   if (!state.harvests.length) {
     return card(empty('📈', 'Nothing to analyse yet',
@@ -145,12 +156,35 @@ function analysisSection(ctx, today) {
 
 // --- Record checks --------------------------------------------------------
 
+/**
+ * FR-XCHK-01: on a connected farm the findings are the farm server's nightly
+ * run, never worked out on this phone. A phone on its own has no server, so it
+ * runs the same checks itself and says so.
+ */
+function checkResult(state, today) {
+  if (!isConnected()) return { ...audit(state, { today }), source: 'phone' };
+  if (!state.checks) return null;
+  const people = (state.checks.people || []).map((r) => ({ ...r, person: state.people[r.personId] || { name: r.personId } }));
+  return { ...state.checks, people, source: 'server' };
+}
+
 function integritySection(ctx, today) {
   const { state } = ctx;
-  const result = audit(state, { today });
+  const result = checkResult(state, today);
+  if (!result) {
+    return card(empty('🌙', 'The first run is tonight',
+      'The farm server checks the records every night from 2 AM and the findings come to this phone.')
+      + button('Run the checks now', 'audit-run-now', { cls: 'btn-ghost', icon: '🔎' }));
+  }
   const q = result.records;
 
   let out = card(
+    `<p><small>${result.source === 'server'
+      ? `Checked on the farm server ${esc(when(result.at))}, over every record it holds.`
+      : 'This phone is not connected to a farm server, so it ran the checks itself.'}</small></p>`
+    + (result.source === 'server' ? button('Run the checks now', 'audit-run-now', { cls: 'btn-ghost btn-sm', icon: '🔎' }) : ''),
+    { tight: true },
+  ) + card(
     cardHead('How solid are the records?',
       q.band ? badge(q.band.label, q.band.tone) : '')
     + (q.total === 0
@@ -179,14 +213,16 @@ function integritySection(ctx, today) {
     const who = f.who ? state.people[f.who] : null;
     out += card(
       `<div class="card-head"><h3>${esc(f.title)}</h3>`
+      + (f.xc ? badge(f.xc, '') : '')
       + (f.grouped ? badge(`${f.grouped} records`, 'warn') : '')
       + badge(f.severity === 'high' ? 'chase this' : f.severity === 'medium' ? 'ask about it' : 'note',
         f.severity === 'high' ? 'danger' : f.severity === 'medium' ? 'warn' : '')
       + '</div>'
       + `<p>${esc(f.detail)}</p>`
-      + `<p><small>${who ? `${esc(who.name)} · ` : ''}`
-      + `${f.cycleId ? `${esc(cycleLabel(state, f.cycleId))} · ` : ''}`
+      + `<p><small>${f.cycleId ? `${esc(cycleLabel(state, f.cycleId))} · ` : ''}`
       + `${f.when ? esc(when(f.when)) : 'no time recorded'}</small></p>`
+      // FR-XCHK-10: who entered the records is on the records, one tap away.
+      + (who ? `<details><summary><small>Who entered it</small></summary><p><small>${esc(who.name)}</small></p></details>` : '')
       + note('info', 'Most likely explanation', `<small>${esc(f.innocent)}</small>`)
       + note(f.severity === 'high' ? 'warn' : 'ok', 'What would settle it', `<small>${esc(f.settle)}</small>`),
     );
@@ -194,7 +230,8 @@ function integritySection(ctx, today) {
 
   if (result.people.length) {
     out += card(
-      cardHead('Record-keeping by person')
+      // One tap away, never the headline (FR-XCHK-10).
+      '<details><summary><b>Record-keeping by person</b></summary>'
       + table(
         [{ label: 'Person' }, { label: 'Records', num: true }, { label: 'Same day', num: true },
           { label: 'With photo', num: true }, { label: 'Questions', num: true }, { label: '' }],
@@ -209,7 +246,8 @@ function integritySection(ctx, today) {
       + note('info', 'Read this fairly',
         '<small>Somebody working the back field with no signal will always look worse than somebody at '
         + 'the office, and that is about the network, not about them. Use it to find who needs a better '
-        + 'phone or a paper form, before you use it for anything else.</small>'),
+        + 'phone or a paper form, before you use it for anything else.</small>')
+      + '</details>',
     );
   }
 

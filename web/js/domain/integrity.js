@@ -16,6 +16,12 @@
 //
 // Nothing here decides that a person is dishonest. It decides that a record
 // deserves a question, and says which question.
+//
+// These are the verification spec's Part A record cross-checks
+// (docs/verification.md): the Owner's alone (FR-VER-01), run nightly on the
+// farm server (FR-XCHK-01), and no headline names a person (FR-XCHK-10) — it
+// names the records and the bed. Who entered them stays on the finding, one
+// tap away. Where a check is one of XC-01 to XC-12 it carries that ID.
 
 import { addDays, daysBetween, isoDate, round, sum } from '../util.js';
 
@@ -48,10 +54,23 @@ export function timing(record) {
   };
 }
 
-const person = (state, id) => state.people[id] || { id, name: id || 'someone' };
+/** The bed a record belongs to, by name, for a headline that names records and zones. */
+function bedOf(state, cycleId) {
+  const cycle = (state.cycles || {})[cycleId];
+  const plot = cycle ? (state.plots || {})[cycle.plotId] : null;
+  return (plot && plot.name) || 'A bed';
+}
+
+// The verification spec's IDs, for the checks that are one of XC-01 to XC-12.
+const XC = {
+  'sold-more-than-picked': 'XC-01',
+  'old-photo': 'XC-04',
+  'late-entry': 'XC-05',
+  'bulk-backfill': 'XC-05',
+};
 
 function finding(f) {
-  return { severity: 'medium', ...f, weight: SEVERITY[f.severity || 'medium'] };
+  return { severity: 'medium', xc: XC[f.kind] || null, ...f, weight: SEVERITY[f.severity || 'medium'] };
 }
 
 // --- The checks -----------------------------------------------------------
@@ -70,7 +89,7 @@ function checkLateEntry(state, opts) {
       who: h.by,
       when: t.recordedAt,
       cycleId: h.cycleId,
-      title: `${person(state, h.by).name} recorded a picking ${t.lagDays} days after the day it claims`,
+      title: `${bedOf(state, h.cycleId)}: a picking recorded ${t.lagDays} days after the day it claims`,
       detail: `${round(h.kg, 1)} kg written down for ${t.claimedFor}, but not entered until ${(t.recordedAt || '').slice(0, 10)}.`,
       innocent: 'The phone had no signal, or the book was written up at the end of the week.',
       settle: 'Ask what the crates actually weighed that day, and whether anyone else saw the pick.',
@@ -93,7 +112,7 @@ function checkFutureDated(state) {
       who: h.by,
       when: t.recordedAt,
       cycleId: h.cycleId,
-      title: `A picking is dated ${Math.abs(t.lagDays)} days in the future`,
+      title: `${bedOf(state, h.cycleId)}: a picking dated ${Math.abs(t.lagDays)} days in the future`,
       detail: `${round(h.kg, 1)} kg dated ${t.claimedFor}, entered on ${(t.recordedAt || '').slice(0, 10)}.`,
       innocent: 'The date was mistyped, or the phone\'s own clock is wrong.',
       settle: 'Check the date on that phone against a known clock, then correct the record.',
@@ -163,41 +182,11 @@ function checkBulkBackfill(state, opts) {
       severity: 'medium',
       who: by,
       when: `${hour}:00:00.000Z`,
-      title: `${person(state, by).name} entered ${rows.length} pickings across ${days.size} different days in one sitting`,
+      title: `${rows.length} pickings across ${days.size} different days entered in one sitting`,
       detail: `All entered within the same hour on ${hour.slice(0, 10)}, covering ${[...days].sort().join(', ')}.`,
       innocent: 'A week with no signal, or a paper book being typed up.',
       settle: 'Compare the total against what the store or the buyer actually received that week.',
       evidence: { records: rows.length, days: [...days].sort(), totalKg: round(sum(rows, (r) => r.h.kg), 1) },
-    }));
-  }
-  return out;
-}
-
-/** Weights that are always round were estimated, not weighed. */
-function checkRoundNumbers(state, opts) {
-  const byPerson = new Map();
-  for (const h of state.harvests) {
-    const rows = byPerson.get(h.by) || [];
-    rows.push(h);
-    byPerson.set(h.by, rows);
-  }
-  const out = [];
-  for (const [by, rows] of byPerson) {
-    if (rows.length < opts.minSample) continue;
-    const round10 = rows.filter((h) => Number(h.kg) > 0 && Number(h.kg) % 10 === 0).length;
-    const share = round10 / rows.length;
-    if (share < opts.roundShare) continue;
-    out.push(finding({
-      id: `round_${by}`,
-      kind: 'estimated-weights',
-      severity: 'low',
-      who: by,
-      when: null,
-      title: `${person(state, by).name}'s weights are almost always round numbers`,
-      detail: `${round10} of ${rows.length} pickings land exactly on a multiple of 10 kg.`,
-      innocent: 'They are counting crates and multiplying, which is what the app does when no weight is typed.',
-      settle: 'Put a scale at the shed and ask for the weighed figure. Crate counts drift as crates get older.',
-      evidence: { roundRecords: round10, total: rows.length, share: round(share * 100, 0) },
     }));
   }
   return out;
@@ -218,9 +207,8 @@ function checkDuplicates(state) {
         who: h.by,
         when: h.at,
         cycleId: h.cycleId,
-        title: `The same picking may have been recorded twice`,
-        detail: `${round(h.kg, 1)} kg on ${h.date} appears twice for this bed, by `
-          + `${person(state, first.by).name} and ${person(state, h.by).name}.`,
+        title: `${bedOf(state, h.cycleId)}: the same picking may have been recorded twice`,
+        detail: `${round(h.kg, 1)} kg on ${h.date} appears twice for this bed.`,
         innocent: 'Two people picked the same bed and each recorded their own crates.',
         settle: 'Check whether the day\'s total matches what reached the store.',
         evidence: { kg: h.kg, date: h.date, firstBy: first.by, secondBy: h.by },
@@ -256,7 +244,7 @@ function checkOutliers(state, opts) {
         who: h.by,
         when: h.at,
         cycleId,
-        title: `A picking ${ratio >= 1 ? round(ratio, 1) + ' times' : round(1 / ratio, 1) + ' times below'} this bed's usual`,
+        title: `${bedOf(state, cycleId)}: a picking ${ratio >= 1 ? round(ratio, 1) + ' times' : round(1 / ratio, 1) + ' times below'} this bed's usual`,
         detail: `${round(h.kg, 1)} kg on ${h.date}, where this bed usually gives about ${round(median, 1)} kg.`,
         innocent: ratio >= 1
           ? 'A first big flush, or two people picking together and one recording the lot.'
@@ -294,8 +282,8 @@ function checkUnattended(state) {
       who: h.by,
       when: h.at,
       cycleId: h.cycleId,
-      title: `${person(state, h.by).name} recorded a picking for a day they never clocked in`,
-      detail: `${round(h.kg, 1)} kg on ${h.date}, with no shift recorded for them that day.`,
+      title: `${bedOf(state, h.cycleId)}: a picking recorded for a day its recorder never clocked in`,
+      detail: `${round(h.kg, 1)} kg on ${h.date}, with no shift recorded that day for whoever entered it.`,
       innocent: 'They forgot to clock in, or came in briefly on a day off.',
       settle: 'Ask whether they worked that day, and fix the attendance either way.',
       evidence: { date: h.date, kg: h.kg },
@@ -361,7 +349,7 @@ function checkSilentBeds(state, opts, today) {
       who: null,
       when: null,
       cycleId: cycle.id,
-      title: `A bed in picking has had nothing recorded for ${quiet} days`,
+      title: `${bedOf(state, cycle.id)}: in picking, nothing recorded for ${quiet} days`,
       detail: last
         ? `Last picking recorded ${last}. A bed at this stage should be picked every week or so.`
         : 'No picking has ever been recorded against this bed, though it is past first harvest.',
@@ -394,7 +382,7 @@ function checkStalePhotos(state) {
       who: record.by,
       when: record.at,
       cycleId: record.cycleId,
-      title: `A ${what} is backed by a photo taken well before it was attached`,
+      title: `${record.cycleId ? `${bedOf(state, record.cycleId)}: a` : 'A'} ${what} backed by a photo taken well before it was attached`,
       detail: `The picture was taken about ${Math.round((photo.ageMinutes || 0) / 60)} hours before it was added to the record.`,
       innocent: 'They photographed it at the bed and attached it once back in signal.',
       settle: 'Fine on its own. Worth noticing if the same person does it every time.',
@@ -410,7 +398,6 @@ export const DEFAULT_RULES = {
   bulkCount: 4,
   bulkDays: 3,
   minSample: 5,
-  roundShare: 0.9,
   outlierHigh: 3,
   outlierLow: 0.25,
   saleTolerance: 0.05,
@@ -470,7 +457,6 @@ export function audit(state, { today = isoDate(), rules = {}, group = true } = {
     ...checkUnattended(state),
     ...checkOutliers(state, opts),
     ...checkClockSkew(state, opts),
-    ...checkRoundNumbers(state, opts),
     ...checkStalePhotos(state),
   ].sort((a, b) => b.weight - a.weight);
 

@@ -2,7 +2,7 @@
 // an optional live fetch when the phone has data, and the derived numbers the
 // rest of the app reasons with (heat units, wetness, disease pressure).
 
-import { clamp, interpolate, isoDate, monthOf, parseDate, daysBetween } from '../util.js';
+import { addDays, clamp, interpolate, isoDate, monthOf, parseDate, daysBetween } from '../util.js';
 
 export const FARM_LOCATION = { name: 'Port Harcourt, Rivers State', lat: 4.82, lon: 7.04, tz: 'Africa/Lagos' };
 
@@ -175,6 +175,7 @@ export function litresPerPlantPerDay(mmPerDay, spacing) {
 export async function fetchForecast(lat = FARM_LOCATION.lat, lon = FARM_LOCATION.lon, signal = null) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
     + '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,relative_humidity_2m_mean'
+    + '&hourly=precipitation'
     + `&past_days=7&forecast_days=7&timezone=${encodeURIComponent(FARM_LOCATION.tz)}`;
   try {
     const res = await fetch(url, { signal });
@@ -191,10 +192,114 @@ export async function fetchForecast(lat = FARM_LOCATION.lat, lon = FARM_LOCATION
         rain: d.precipitation_sum[i],
         rh: d.relative_humidity_2m_mean ? d.relative_humidity_2m_mean[i] : null,
       })),
+      hours: hourlyRain(j),
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Open-Meteo's hourly rain as UTC instants. Its times are farm-local with no
+ * offset, so the response's own offset turns them back into instants; each
+ * value is the rain that fell in the hour ending at that time.
+ */
+export function hourlyRain(j) {
+  const h = j && j.hourly;
+  if (!h || !Array.isArray(h.time) || !Array.isArray(h.precipitation)) return [];
+  const offsetMs = (Number(j.utc_offset_seconds) || 0) * 1000;
+  return h.time.map((t, i) => ({
+    end: new Date(Date.parse(`${t}:00Z`) - offsetMs).toISOString(),
+    rain: Number(h.precipitation[i]) || 0,
+  }));
+}
+
+/**
+ * SR-04 — "Open field: if more than 15 mm of rain falls within 4 h after a
+ * spray, create a re-spray task for the next dry window." The rules file
+ * states it in words, so the two numbers are written here once, with the ID.
+ */
+export const SR04 = { id: 'SR-04', mm: 15, hours: 4 };
+
+/** SR-04 applies to open field only; greenhouses and the nursery are covered. */
+export const sr04Applies = (zone) => !!zone && zone.type === 'field';
+
+/**
+ * Rain in the SR-04 window after an instant: the hours ending after `fromIso`
+ * and no later than four hours on. `covered` is false where the forecast does
+ * not reach the whole window, so a short sum is never read as a dry one.
+ */
+export function rainWithin(hours, fromIso, windowHours = SR04.hours) {
+  const from = Date.parse(fromIso);
+  const to = from + windowHours * 3600 * 1000;
+  const inWindow = (hours || []).filter((x) => {
+    const end = Date.parse(x.end);
+    return end > from && end <= to;
+  });
+  return {
+    mm: Math.round(inWindow.reduce((sum, x) => sum + x.rain, 0) * 10) / 10,
+    covered: inWindow.length >= windowHours,
+  };
+}
+
+/** SR-04 before a spray: the rain forecast for the next four hours in an open-field zone. */
+export function sprayWeather(zone, forecast, now = new Date()) {
+  if (!sr04Applies(zone)) return { applies: false };
+  if (!forecast || !forecast.hours || !forecast.hours.length) return { applies: true, live: false };
+  const r = rainWithin(forecast.hours, now.toISOString());
+  return { applies: true, live: true, ...r, over: r.mm > SR04.mm };
+}
+
+/**
+ * SR-04 after a spray: the open-field sprays more than 15 mm of rain fell on
+ * within four hours, from the hourly record. Each needs a re-spray task.
+ */
+export function respraysDue(state, forecast) {
+  if (!forecast || !forecast.hours || !forecast.hours.length) return [];
+  const out = [];
+  const tasks = state.tasks || {};
+  for (const spray of state.sprays || []) {
+    if (tasks[resprayTaskId(spray.id)]) continue;
+    const cycle = (state.cycles || {})[spray.cycleId];
+    const zone = cycle ? (state.plots || {})[cycle.plotId] : null;
+    if (!sr04Applies(zone) || !spray.at) continue;
+    const r = rainWithin(forecast.hours, spray.at);
+    if (r.covered && r.mm > SR04.mm) out.push({ spray, zone, cycle, mm: r.mm });
+  }
+  return out;
+}
+
+export const resprayTaskId = (sprayId) => `fd_respray_${sprayId}`;
+
+/**
+ * SR-04's re-spray task, for the next dry window: the first day from tomorrow
+ * the forecast gives under 5 mm, at the 4 PM spray window (SR-01). Derived
+ * from the spray alone, so every phone that sees the rain writes the same task.
+ */
+export function resprayTaskFor(due, forecast, { today = isoDate() } = {}) {
+  const { spray, zone, mm } = due;
+  const after = isoDate(addDays(today, 1));
+  const dry = ((forecast && forecast.days) || []).find((d) => d.date >= after && (d.rain || 0) < 5);
+  const day = dry ? dry.date : after;
+  const what = spray.productName || 'the spray';
+  return {
+    id: resprayTaskId(spray.id),
+    kind: 'respray',
+    title: `Re-spray ${what} — ${(zone && zone.name) || 'bed'}`,
+    zoneId: zone ? zone.id : null,
+    cycleId: spray.cycleId || null,
+    sprayId: spray.id,
+    positionId: null,
+    due: `${day}T16:00`,
+    generated: true,
+    priority: 'high',
+    how: [
+      `${mm} mm of rain fell within ${SR04.hours} hours of the last spray, so it was washed off (${SR04.id}).`,
+      'Same product, same rate, in the 4–7 PM window, on dry leaves.',
+    ],
+    why: 'Rain that heavy straight after spraying takes the product off the leaf. Until it goes back on, the bed is unprotected.',
+    createdFor: today,
+  };
 }
 
 /** Turn a forecast (or logged rain readings) into the observed shape the indices take. */

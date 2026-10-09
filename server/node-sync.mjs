@@ -15,7 +15,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { handleRequest } from './core.mjs';
+import { handleRequest, runDueChecks } from './core.mjs';
 
 const args = process.argv.slice(2);
 const arg = (name, fallback) => {
@@ -139,7 +139,22 @@ const store = {
   },
 
   async countEvents(farmId) { return farmState(farmId).events.length; },
+
+  async listFarms() {
+    return existsSync(DATA_DIR)
+      ? readdirSync(DATA_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+      : [];
+  },
 };
+
+// FR-XCHK-01: the record checks, once a night per farm. Checked hourly so a
+// server started after two in the morning still runs that night's.
+const runChecks = async () => {
+  try { await runDueChecks(store, await store.listFarms()); }
+  catch (err) { console.error('Record checks failed:', err); }
+};
+setInterval(runChecks, 3600 * 1000).unref();
+runChecks();
 
 const server = createServer(async (req, res) => {
   const url = `http://${req.headers.host || 'localhost'}${req.url}`;
