@@ -38,7 +38,7 @@ Most of what accumulates in an app is category 4. It is not wrong information; i
 | Owner | Everything else. |
 
 - **FR-SIMP-03 (MUST):** Anything that answers none of a role's questions does not appear on that role's screens.
-- **FR-SIMP-04 (MUST):** Sales prices, revenue, profit, labour rates and labour cost, forecasts and verification findings appear on Owner screens only. The Farm Manager also sees input costs and stock values (S-3). There is no pay in the app (S-1).
+- **FR-SIMP-04 (MUST):** Margin, profit per zone, cost set against revenue, crop value, cashflow forecasts, labour rates and labour cost, and verification findings appear on Owner screens only. The Farm Manager sees and records sales, buyers, quantities and prices, and sees input costs and stock values (S-3). There is no pay in the app (S-1).
 - **FR-SIMP-05 (SHOULD):** Where a role genuinely needs an occasional look at something that isn't theirs day to day, it lives behind a single clearly-named link, not on the screen.
 
 ---
@@ -50,11 +50,11 @@ From the readiness audit of 1 October, these exist in the app and no requirement
 | Feature | Recommendation |
 |---|---|
 | Hours, pay, daily rates, wage redaction | **Decided (S-1): remove pay, per-person daily rates and wage redaction; keep attendance.** The Owner keeps a daily rate per position, visible to nobody else, and labour cost per zone is days worked × position rate (FR-COST-05). Payroll stays out of scope (§2). |
-| Costs, stock values, sales prices, revenue, profit | **Decided (S-3): split.** The Farm Manager sees input costs and stock values. Sales prices, revenue and profit are Owner-only. |
-| Harvest, revenue, labour, stock and cashflow forecasts | **Owner only.** Forecasts change nothing a hand does today. |
-| Planting-window price planner | **Owner only**, or remove if unused this season. |
-| Live weather (Open-Meteo) | **Keep, but only where it changes an action** — the spray screen, where rain within 4 hours triggers a re-spray task (SR-04). Nowhere else. |
-| The eleven "Farm check" record checks | **Fold into the verification spec** (Part A) and make them Owner-only. |
+| Costs, stock values, sales, revenue, profit | **Decided (S-3).** The Farm Manager sees and records sales, buyers, quantities and prices, and sees input costs and stock values. Margin, profit per zone, cost against revenue, crop value and cashflow forecasts are Owner-only. This supersedes the earlier "sales Owner-only" decision. |
+| Harvest, revenue, labour, stock and cashflow forecasts | **Decided in part.** Crop value (revenue) and cashflow forecasts are Owner-only. Harvest, labour and stock forecasts are not yet decided. |
+| Planting-window price planner | **Owner only** (it is a crop-value forecast). Whether to remove it is S-2. |
+| Live weather (Open-Meteo) | **Decided.** On the spray screen with SR-04 as written: open field only, more than 15 mm of rain within 4 hours after a spray adds a re-spray task for the next dry window. Removed from Home. Kept in the adviser. |
+| The "Farm check" record checks | **Decided.** Folded into the verification spec's Part A (docs/verification.md §2.3): Owner-only, run nightly on the farm server, headlines naming records not people. The round-weights check went with XC-08. The Agronomist no longer sees it. |
 | The Agronomist role and sample agronomist | **Remove.** FR-GATE-00 says there is no agronomist; the Farm Doctor replaced it. Leaving the role in invites someone to use it. |
 | The carbofuran "avoid" row in `pests.js` | **Remove.** FR-STOCK-09 says not even flagged as avoid. |
 
@@ -85,7 +85,7 @@ Screen order, most-used first:
 
 - Every element moved by this pass is reachable somewhere, proven by a test naming its new location
 - No record lost a field
-- Sales price, revenue, profit, labour rate and cost, forecast and verification elements are absent from every non-Owner view, in the app and in the server's responses to a non-Owner token; input costs and stock values reach the Farm Manager and no one below
+- Margin, profit, cost against revenue, crop value, cashflow forecast, labour rate and cost, and verification elements are absent from every non-Owner view, in the app and in the server's responses to a non-Owner token; sales, buyers, quantities, prices, input costs and stock values reach the Farm Manager and no one below
 - Every safety element on the spray screen is still present and prominent
 - A field screen's main action is reachable without scrolling at 360 px width
 
@@ -97,4 +97,4 @@ Screen order, most-used first:
 |---|---|---|
 | S-1 | ~~Payroll: remove, or keep and write requirements for it?~~ Settled: pay, daily rates and wage redaction removed; attendance kept; Owner-only rate per position, labour cost per zone = days worked × position rate (FR-COST-05) | Done |
 | S-2 | Is the price planner used? | Owner |
-| S-3 | ~~Does the Farm Manager keep cost visibility, or is it Owner-only?~~ Settled: the Farm Manager sees input costs and stock values; sales prices, revenue and profit are Owner-only | Done |
+| S-3 | ~~Does the Farm Manager keep cost visibility, or is it Owner-only?~~ Settled: the Farm Manager sees and records sales, buyers, quantities and prices, and sees input costs and stock values; margin, profit per zone, cost against revenue, crop value and cashflow forecasts are Owner-only | Done |
