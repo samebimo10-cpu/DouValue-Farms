@@ -582,37 +582,43 @@ function renderHarvestBody(ctx, sheetEl, cycleId) {
     body.querySelector('[data-act="close-sheet-btn"]').onclick = () => closeSheet();
     return;
   }
+  // docs/simplify-pass/04-harvest.md. A blocked bed says so and for how long;
+  // why it matters is one tap away.
   if (!safety.harvest.safe) {
     body.innerHTML = note('danger', t('harvest.blocked'),
       `<p>${esc(safety.harvest.reason)}</p>`
       + `<p><b>${esc(safety.harvest.daysLeft)} more day${safety.harvest.daysLeft === 1 ? '' : 's'}.</b> `
-      + 'Picking it early puts the buyer and whoever eats it at risk, and it can lose the farm its market. '
-      + 'Tell the supervisor if this bed must be picked.</p>')
+      + 'Tell the supervisor if this bed must be picked.</p>'
+      + more('Why it matters', '<p><small>Picking it early puts the buyer and whoever eats it at risk, '
+        + 'and it can lose the farm its market.</small></p>', { id: 'harvest.phi-why' }))
       + button('Close', 'close-sheet-btn', { cls: 'btn-ghost btn-block' });
     body.querySelector('[data-act="close-sheet-btn"]').onclick = () => closeSheet();
     return;
   }
 
   const reentryWarning = safety.reentry.safe ? ''
-    : note('warn', 'Wear your gloves and boots', `<small>${esc(safety.reentry.reason)}</small>`);
+    : note('warn', 'Wear your gloves and boots',
+      more('Why', `<small>${esc(safety.reentry.reason)}</small>`, { id: 'harvest.reentry-why' }));
 
   body.innerHTML = `<form data-act="save-harvest">`
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     + reentryWarning
-    + `<p><small>${esc(crop.emoji)} ${esc(crop.name)} (${esc(crop.localName)}) — `
-    + `${esc(stageAt(cycle.cropId, daysBetween(cycle.transplantDate, isoDate())).name)}</small></p>`
-    + field(t('harvest.crates'), input('crates', { type: 'number', min: 0, step: '0.5', inputmode: 'decimal', placeholder: '0' }),
-      `One crate is counted as ${crateKg} kg. Change that in Settings if your crates differ.`)
-    + field(`${t('harvest.kg')} (if you weighed it)`, input('kg', { type: 'number', min: 0, step: '0.1', inputmode: 'decimal', placeholder: 'optional' }),
-      'Leave this empty and the app works it out from the crates.')
+    + field(t('harvest.crates'), input('crates', { type: 'number', min: 0, step: '0.5', inputmode: 'decimal', placeholder: '0' }))
+    + field(`${t('harvest.kg')} (if you weighed it)`, input('kg', { type: 'number', min: 0, step: '0.1', inputmode: 'decimal',
+      placeholder: 'empty: worked out from the crates' }))
     + field('Grade', select('grade', [
       { value: 'first', label: 'First grade — clean, good size' },
       { value: 'second', label: 'Second grade — small or marked' },
       { value: 'reject', label: 'Reject — rotten or spoiled' },
     ], 'first'))
-    + field(t('common.note'), textarea('note', { placeholder: 'Anything the supervisor should know' }))
-    + photoField('Photo of the crates', 'Not required, but a picture taken at the bed settles any question later.')
-    + '<button class="btn-block btn-lg" type="submit">' + esc(t('common.save')) + '</button>'
+    + field(t('common.note'), textarea('note', { rows: 2, placeholder: 'Anything the supervisor should know' }))
+    + photoField('Photo of the crates (if you can)')
+    + more('About this bed and the crates', `<p><small>${esc(crop.emoji)} ${esc(crop.name)} (${esc(crop.localName)}) — `
+      + `${esc(stageAt(cycle.cropId, daysBetween(cycle.transplantDate, isoDate())).name)}.</small></p>`
+      + `<p><small>One crate is counted as ${esc(crateKg)} kg; change that in Settings if your crates differ. `
+      + 'Leave the kilograms empty and the app works them out from the crates. A photo is not required, '
+      + 'but a picture taken at the bed settles any question later.</small></p>', { id: 'harvest.about' })
+    + sheetSubmit(t('common.save'), 'harvest')
     + '</form>';
   bindPhoto(sheetEl);
 }
