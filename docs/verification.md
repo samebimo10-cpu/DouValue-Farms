@@ -27,7 +27,7 @@ A flag is **a question, not an accusation**. Every check below has innocent expl
 ### Who sees it
 
 - **FR-VER-01 (MUST):** Cross-check findings are visible to the Owner only. They do not appear on the Farm Manager's screens, the team views, or anyone's end-of-shift summary.
-- **FR-VER-02 (MUST):** Nothing in Part A or B changes a person's task list, blocks their work, or is shown to them as a score.
+- **FR-VER-02 (MUST):** Nothing in Part A changes a person's task list, blocks their work, or is shown to them as a score. The daily walk (Part B) is different: it is a task on the list of everyone holding zones, and a missed walk escalates like any other overdue task (FR-WALK-11).
 - **FR-VER-03 (MUST):** The daily walk is required of **every** position that holds zones, including the Field Supervisor and the Farm Manager. It is proof of work, not surveillance of one person.
 
 ---
@@ -41,17 +41,20 @@ Each check compares two records that should agree. Each runs on existing data, e
 | ID | Check | What it compares | What a gap may mean | Innocent explanation |
 |---|---|---|---|---|
 | **XC-01** | Harvest against sales | Crates or kg harvested per zone per cycle, against sold + graded-out + recorded waste | Produce leaving unrecorded | Gate sales, staff take, spoilage nobody logged |
-| **XC-02** | Sprays against stock | Each treatment should draw down its product by the calculated dose × area | Sprays logged that didn't happen, or stock leaving another way | Partial tanks, spillage, dose rounding |
+| **XC-02** | Sprays against stock | Each treatment draws its product down automatically by rate × litres sprayed (FR-STOCK-01); that drawdown is compared against the stock counted in the store, and the litres against the area treated | Sprays logged that didn't happen, or stock leaving another way | Partial tanks, spillage, dose rounding |
 | **XC-03** | Stock against sprays | Stock that falls with no treatment recorded | Unrecorded spraying — the dangerous one, because PHI and rotation are then both wrong | Re-measuring, breakage, use on the nursery |
 | **XC-04** | Task time against photo time | The time a task was marked done, against the capture time of its proof photo | Work ticked off that was done later, or not at all | Poor signal, phone clock, genuine late entry |
 | **XC-05** | Batch entry | Several tasks across different zones all marked done within a few minutes, or a whole day entered in one sitting after dark | Recalled rather than observed | A phone that was offline all day and synced at once |
 | **XC-06** | Walking time | Two tasks in distant zones completed closer together than it takes to walk between them | One person covering for another, or neither done | Two people on one phone |
 | **XC-07** | Flat trap counts | Counts that repeat exactly day after day, or move too smoothly | Numbers written rather than counted | A genuinely quiet house |
-| **XC-08** | Digit patterns | Harvest weights clustering on round numbers, or an unnatural leading-digit spread over a season | Estimated rather than weighed | Crates really do come in standard sizes — weigh this check carefully before trusting it |
 | **XC-09** | Alert to action | Threshold crossed, treatment logged, but the follow-up count doesn't move | The treatment didn't happen, or the wrong product went on | Resistance, re-infestation, a genuinely bad spray |
 | **XC-10** | Scouting coverage | Zones scouted per week against zones assigned | Houses being skipped, likely the furthest ones | Reassignment, absence |
-| **XC-11** | Gate evidence age | Soil, pH and lab results reused across cycles or back-dated | Evidence recycled rather than re-taken | A test genuinely covering two cycles |
-| **XC-12** | Self-confirmation rate | Diagnoses self-confirmed as a share of all diagnoses, per person | Approval being routed around | Working alone, which is normal and expected |
+| **XC-11** | Gate evidence age | Soil, pH and lab results reused across cycles or back-dated | Evidence recycled rather than re-taken | None. Reuse across cycles is a Gate 0 violation (FR-GATE-01), not a question |
+| **XC-12** | Self-confirmation rate | Diagnoses self-confirmed as a share of all diagnoses. The headline is the farm-level rate; the per-person breakdown is one tap away | Approval being routed around | Working alone, which is normal and expected |
+
+XC-08 (digit patterns in harvest weights) was removed: crates come in standard sizes, and the app itself turns a crate count into kilograms when no weight is typed, so round numbers are expected. The number is not reused.
+
+XC-02 and XC-03 apply only to sprays recorded after litres and treated area were added to the spray record (9 October 2026). A spray recorded before then carries no litres and drew no stock, so there is nothing to compare.
 
 ### 2.2 Requirements
 
@@ -66,7 +69,26 @@ Each check compares two records that should agree. Each runs on existing data, e
 - **FR-XCHK-09 (SHOULD):** The checks run retrospectively over all history on demand, so the season to date can be examined at once.
 - **FR-XCHK-10 (MUST):** No check names a person in its headline. It names records and zones. Who entered them is visible on the records themselves, one tap away.
 
-### 2.3 Tests
+### 2.3 Folded in from the Farm check
+
+The app's existing Farm check record checks are part of Part A. Like the rest of it they are the Owner's alone (FR-VER-01), run nightly on the farm server over every record it holds (FR-XCHK-01), and their headlines name the records and the bed, never a person (FR-XCHK-10). Where one is a check above it carries that ID; the others stay as Part A checks without an XC number.
+
+| Farm check | XC ID |
+|---|---|
+| More sold than was ever recorded as picked | XC-01 |
+| A photo taken well before it was attached to its record | XC-04 |
+| A picking written up days after the day it claims | XC-05 |
+| Several days' pickings entered in one sitting | XC-05 |
+| A picking dated in the future | — |
+| A phone whose clock is out against the server's | — |
+| The same picking recorded twice | — |
+| A picking far outside the bed's usual | — |
+| A picking on a day its recorder never clocked in | — |
+| A bed in picking with nothing recorded for days | — |
+
+The Farm check's round-weights check was XC-08 and went with it.
+
+### 2.4 Tests
 
 - Each check fires on a constructed failing case and stays silent on a constructed clean one
 - A finding resolves to real record IDs on both sides
@@ -105,7 +127,7 @@ The prompt varies by row, direction, start point and what to show: the canopy, t
 
 - **FR-WALK-20 (SHOULD):** Weekly, not daily. One model pass per zone per week summarises what the footage shows — canopy condition, weed cover, visible damage, whether traps are present and loaded, anything that looks wrong.
 - **FR-WALK-21 (MUST):** The summary states what it could not tell, and never produces a count, a diagnosis or a treatment recommendation from footage. It feeds the Farm Doctor's existing flow as an observation, nothing more.
-- **FR-WALK-22 (MUST):** Analysis is Owner-triggered or scheduled weekly, never per clip, and respects the API spending cap and the role restriction already set for photo review.
+- **FR-WALK-22 (MUST):** Analysis is Owner-triggered or scheduled weekly, never per clip, and respects the API spending cap and the role restriction already set for photo review: the Owner's monthly cap (FR-ADV-07) and photo review for the Field Supervisor and above (FR-DOC-03).
 - **FR-WALK-23 (SHOULD):** Where a cross-check finding and a walk cover the same zone and week, they are shown together. A gap in the books next to footage of that house is the whole point.
 
 ### 3.4 Tests

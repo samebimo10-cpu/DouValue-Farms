@@ -46,6 +46,7 @@ export function describeRecord(event, state = {}) {
     case 'diagnosis.confirm': return 'Confirming a diagnosis';
     case 'diagnosis.approve': return 'Approving a diagnosis';
     case 'sale.record': return 'A sale';
+    case 'rate.set': return 'A daily rate';
     case 'person.upsert': return `An account${p.name ? ` for ${p.name}` : ''}`;
     default: return String(event.type || 'A record').replace(/\./g, ' ');
   }

@@ -82,7 +82,7 @@ const OPEN = new Set(['pass', 'overridden', 'waiting', 'na', PRE_GATES]);
 export const isBlocking = (condition) => !OPEN.has(condition.state);
 
 /** Ranks, mirroring web/js/store.js. Used to check who signed what. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOfId = (state, id) => {
   const p = ((state && state.people) || {})[id];
   return (p && RANK[p.role]) || 0;

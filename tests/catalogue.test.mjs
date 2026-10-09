@@ -581,7 +581,6 @@ const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
 const OWNER_S = { id: 'u_owner', role: 'ceo' };
 const MANAGER_S = { id: 'u_mgr', role: 'manager' };
-const AGRONOMIST_S = { id: 'u_agro', role: 'agronomist' };
 const SUPERVISOR_S = { id: 'u_sup', role: 'supervisor' };
 const HAND_S = { id: 'u_hand', role: 'hand' };
 
@@ -604,7 +603,7 @@ test('the server refuses a banned active however it is spelled', () => {
 test('the server puts a new active with the Owner and nobody else', () => {
   const event = { id: 'a2', type: 'active.add',
     payload: { id: 'pymetrozine', name: 'Pymetrozine', group: 'IRAC 9B' } };
-  for (const author of [HAND_S, SUPERVISOR_S, AGRONOMIST_S, MANAGER_S]) {
+  for (const author of [HAND_S, SUPERVISOR_S, MANAGER_S]) {
     assert.equal(core.mayWrite(event, author).ok, false, `a ${author.role} added an active`);
   }
   assert.equal(core.mayWrite(event, OWNER_S).ok, true);
@@ -620,7 +619,7 @@ test('the server refuses an active with no resistance group', () => {
 test('the server puts brand labels with the Farm Manager', () => {
   const event = { id: 'l1', type: 'label.add',
     payload: { id: 'lb', brand: 'Punch', activeIds: ['spinosad'], rate: '0.35 ml/L' } };
-  for (const author of [HAND_S, SUPERVISOR_S, AGRONOMIST_S]) {
+  for (const author of [HAND_S, SUPERVISOR_S]) {
     assert.equal(core.mayWrite(event, author).ok, false, `a ${author.role} added a label`);
   }
   assert.equal(core.mayWrite(event, MANAGER_S).ok, true);

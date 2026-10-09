@@ -245,7 +245,7 @@ function trust(state, today) {
  * supervisor's question cannot come back with a naira figure in the answer,
  * whatever the adviser on the other end decides to say.
  */
-function economics(state, today) {
+function economics(state, today, { profit = false } = {}) {
   const e = unitEconomics(state, { today });
   const prices = state.sales
     .filter((s) => daysBetween((s.date || '').slice(0, 10), today) <= 120 && s.kg > 0)
@@ -259,12 +259,15 @@ function economics(state, today) {
       unsoldKg: e.unsoldKg,
       revenueNgn: e.revenue,
       inputCostNgn: e.directCosts,
-      labourCostNgn: e.labourCost,
-      totalCostNgn: e.totalCost,
-      costPerKgNgn: e.costPerKg,
       pricePerKgNgn: e.pricePerKg,
-      marginPerKgNgn: e.marginPerKg,
-      verdict: e.verdict,
+      // FR-SIMP-04, FR-COST-05: labour, cost against revenue and margin are the Owner's.
+      ...(profit ? {
+        labourCostNgn: e.labourCost,
+        totalCostNgn: e.totalCost,
+        costPerKgNgn: e.costPerKg,
+        marginPerKgNgn: e.marginPerKg,
+        verdict: e.verdict,
+      } : {}),
     }),
     ownRecentPrices: top(prices, 10),
     seasonalPriceIndexNow: round(priceIndexOn(today, state.settings.priceSeasonality), 2),
@@ -335,7 +338,7 @@ export function buildBrief(state, user, opts = {}) {
       pickedKg: r.kg,
       kgPerHour: r.kgPerHour,
     })), 8),
-    economics: money ? economics(state, today) : null,
+    economics: money ? economics(state, today, { profit: can(user, 'viewProfit') }) : null,
     // FR-ADV-04. The adviser must never suggest planting into a blocked zone or
     // spraying without a diagnosis, so it is told the gates rather than left to
     // infer them from the records.
@@ -348,7 +351,8 @@ export function buildBrief(state, user, opts = {}) {
         blocked: r.blocking.map((g) => g.name),
         openOnOverride: r.overridden.map((g) => g.name),
       })),
-    dataTrust: trust(state, today),
+    // FR-VER-01: what the record checks found is the Owner's alone.
+    dataTrust: can(user, 'viewAudit') ? trust(state, today) : null,
     forecastTrack: forecastTrack(state),
   });
 }
@@ -408,8 +412,10 @@ export function briefToText(brief) {
 
   if (brief.economics) {
     const e = brief.economics.last90Days;
-    put('Money (90 days)', `₦${e.revenueNgn} in, ₦${e.totalCostNgn} out, `
-      + `${e.costPerKgNgn ?? '?'}/kg to grow against ${e.pricePerKgNgn ?? '?'}/kg sold — ${e.verdict}`);
+    put('Money (90 days)', e.totalCostNgn != null
+      ? `₦${e.revenueNgn} in, ₦${e.totalCostNgn} out, `
+        + `${e.costPerKgNgn ?? '?'}/kg to grow against ${e.pricePerKgNgn ?? '?'}/kg sold — ${e.verdict}`
+      : `₦${e.revenueNgn ?? 0} sold at ${e.pricePerKgNgn ?? '?'}/kg; ₦${e.inputCostNgn ?? 0} on inputs`);
     put('Unsold', e.unsoldKg ? `${e.unsoldKg}kg picked and not sold` : null);
   }
 

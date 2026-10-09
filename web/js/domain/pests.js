@@ -848,7 +848,6 @@ export const PROBLEMS = [
         'Load the bed with organic matter: compost feeds the fungi and mites that eat nematodes.',
       ],
       chemical: [
-        { active: 'Avoid carbofuran (Furadan)', example: '-', how: 'Do not use it', phiDays: 0, note: 'Extremely toxic to people and birds, banned in many markets and a real risk to anyone eating your pepper. Rotation and marigold are safer and work.' },
         { active: 'Fluensulfone or fluopyram', example: 'Nimitz / Velum', how: 'Soil applied before planting where registered and available', phiDays: 14, note: 'Expensive. Only worth it on a proven heavy infestation.' },
       ],
       organic: ['Marigold rotation.', 'Neem cake worked into the bed at 2-3 t/ha.', 'Compost.'],

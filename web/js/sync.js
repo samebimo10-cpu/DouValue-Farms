@@ -8,7 +8,7 @@
 //
 // What this file adds is identity. Each device holds a token that belongs to one
 // person. The server knows their role and decides what they may read and write,
-// so a farm hand's phone is never sent the wage bill in the first place. A PIN
+// so a farm hand's phone is never sent the books in the first place. A PIN
 // on its own gets nobody in from a new handset: enrolling a device takes the
 // sign-in name and password the CEO made for that person (UX-28).
 
@@ -486,6 +486,26 @@ export async function deliverOwnerMessages({ now = new Date().toISOString() } = 
   await setMeta('ownerRetryAt', retryAt);
   ownerLast = { at: now, configured: reply ? reply.configured : null, results: (reply && reply.results) || [] };
   return ownerLast;
+}
+
+/** FR-XCHK-09 — run the record checks on the farm server now, over all history (Owner). */
+export async function runChecksNow() {
+  if (!auth) return null;
+  const out = await api(`/api/farms/${encodeURIComponent(auth.farmId)}/checks`, { method: 'POST', body: {} });
+  await syncNow({ silent: true });
+  return out;
+}
+
+/** FR-ADV-07 — this month's spend on outside advice and photo review, and the Owner's cap. */
+export async function getSpendCap() {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`);
+}
+
+/** FR-ADV-07 — set the monthly cap in US dollars; null clears it. The server takes it from the Owner only. */
+export async function setSpendCap(monthlyUsd) {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`, { method: 'POST', body: { monthlyUsd } });
 }
 
 /** Whether WhatsApp is set up on the farm server, for the Alerts screen. */

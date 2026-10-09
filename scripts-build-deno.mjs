@@ -196,7 +196,18 @@ const kv = await Deno.openKv();
 
 const store = {
   async getFarm(farmId) { return (await kv.get(["farm", farmId, "meta"])).value; },
-  async setFarm(farmId, farm) { await kv.set(["farm", farmId, "meta"], farm); },
+  async setFarm(farmId, farm) {
+    await kv.set(["farm", farmId, "meta"], farm);
+    await kv.set(["farms", farmId], true);
+  },
+  // Every farm this server holds, for the nightly record checks. The index is
+  // written on setFarm and on every push, so farms made before it existed join
+  // it the first time a phone syncs.
+  async listFarms() {
+    const out = [];
+    for await (const e of kv.list({ prefix: ["farms"] })) out.push(e.key[1]);
+    return out;
+  },
 
   async getMember(farmId, memberId) { return (await kv.get(["farm", farmId, "member", memberId])).value; },
   async listMembers(farmId) {
@@ -228,6 +239,7 @@ const store = {
   },
 
   async appendEvents(farmId, events) {
+    if (events.length) await kv.set(["farms", farmId], true);
     const countKey = ["farm", farmId, "count"];
     let accepted = 0, skipped = 0;
     for (const event of events) {
@@ -273,6 +285,15 @@ try { rulesUrl = Deno.env.get("RULES_URL") || null; } catch { /* no env access *
 rulesFrom(rulesUrl, new URL("../rules/douvalue_rules_rev5_1.json", import.meta.url).href, ${JSON.stringify(PUBLISHED_RULES)});
 await serverRules();
 
+// FR-XCHK-01: the record checks, once a night per farm, from 02:00 farm time.
+// Hourly, so a missed run is caught up. Deno Deploy runs Deno.cron; elsewhere
+// it needs the cron unstable flag, which deno.json turns on.
+if (typeof Deno.cron === "function") {
+  Deno.cron("record checks", "5 * * * *", async () => {
+    await runDueChecks(store, await store.listFarms());
+  });
+}
+
 Deno.serve((req) => handleRequest(req, store));
 `;
 
@@ -289,7 +310,7 @@ writeFileSync(join(here, 'server/deploy/main.ts'), built);
 // turns it on by itself; a repository deploy does not, and without this file
 // the server dies at boot with "Deno.openKv is not a function".
 writeFileSync(join(here, 'server/deploy/deno.json'), `{
-  "unstable": ["kv"]
+  "unstable": ["kv", "cron"]
 }
 `);
 writeFileSync(join(here, 'server/deploy/README.md'), `# DouValue farm sync server

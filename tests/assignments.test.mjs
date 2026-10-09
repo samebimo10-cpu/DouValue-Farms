@@ -40,7 +40,6 @@ const PEOPLE = {
   u_owner: { id: 'u_owner', name: 'Ebimo Sam', role: 'ceo' },
   u_mgr: { id: 'u_mgr', name: 'Ada Briggs', role: 'manager' },
   u_sup: { id: 'u_sup', name: 'Tamuno George', role: 'supervisor' },
-  u_agro: { id: 'u_agro', name: 'Chidi Nwosu', role: 'agronomist' },
   u_emeka: { id: 'u_emeka', name: 'Emeka Okoro', role: 'hand' },
   u_blessing: { id: 'u_blessing', name: 'Blessing Amadi', role: 'hand' },
 };
@@ -102,13 +101,12 @@ test('FR-ROLE-05: My work shows nobody else\'s zones', () => {
 
 // --- FR-ROLE-06: who hands out zones ----------------------------------------
 
-test('FR-ROLE-06: the Farm Manager and the Owner may assign; a hand and the agronomist may not', () => {
+test('FR-ROLE-06: the Farm Manager and the Owner may assign; a hand may not', () => {
   const state = farm();
   const opts = { today: TODAY, now: at(10) };
   assert.equal(A.mayAssignZones(state, PEOPLE.u_mgr, opts).ok, true);
   assert.equal(A.mayAssignZones(state, PEOPLE.u_owner, opts).ok, true);
   assert.equal(A.mayAssignZones(state, PEOPLE.u_emeka, opts).ok, false);
-  assert.equal(A.mayAssignZones(state, PEOPLE.u_agro, opts).ok, false);
 });
 
 test('FR-ROLE-06: the Farm Manager can assign a zone to himself, by name', () => {
@@ -175,7 +173,6 @@ test('FR-ROLE-06: the server refuses a zone assignment from anyone who may not m
   assert.equal(core.mayWrite(ev({}), { id: 'u_sup', role: 'supervisor' }).ok, false, 'not covering');
   assert.equal(core.mayWrite(ev({ covering: true }), { id: 'u_sup', role: 'supervisor' }).ok, true);
   assert.equal(core.mayWrite(ev({}), { id: 'u_emeka', role: 'hand' }).ok, false);
-  assert.equal(core.mayWrite(ev({}), { id: 'u_agro', role: 'agronomist' }).ok, false);
   assert.equal(core.mayWrite(ev({ holding: 'sometimes' }), { id: 'u_mgr', role: 'manager' }).ok, false);
 });
 

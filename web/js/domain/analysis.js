@@ -5,6 +5,7 @@
 
 import { addDays, daysBetween, isoDate, round, sum } from '../util.js';
 import { getCrop } from './crops.js';
+import { hasRates, labourByZone } from '../store.js';
 import { harvestForecast, calibrate } from './predict.js';
 
 const weekKey = (date) => {
@@ -123,13 +124,10 @@ export function unitEconomics(state, { days = 90, today = isoDate() } = {}) {
   const revenue = sum(state.sales.filter((s) => s.date >= from), (s) => s.amount);
   const directCosts = sum(state.expenses.filter((e) => e.date >= from), (e) => e.amount);
 
-  const wageDays = state.attendance.filter((a) => (a.in || '').slice(0, 10) >= from && a.out);
-  const labourCost = sum(wageDays, (a) => {
-    const p = state.people[a.personId];
-    const rate = Number(p && p.dailyRate) || Number(state.settings.defaultDailyWage) || 0;
-    return rate / Math.max(1, new Set(wageDays.filter((x) => x.personId === a.personId
-      && (x.in || '').slice(0, 10) === (a.in || '').slice(0, 10)).map((x) => x.id)).size);
-  });
+  // FR-COST-05: days worked × the Owner's rate per position. Only the Owner's
+  // phone holds the rates; anywhere else labour is left out and said to be.
+  const labourPriced = hasRates(state);
+  const labourCost = labourPriced ? labourByZone(state, from, today).total : 0;
 
   const totalCost = directCosts + labourCost;
   const costPerKg = pickedKg > 0 ? totalCost / pickedKg : null;
@@ -140,7 +138,8 @@ export function unitEconomics(state, { days = 90, today = isoDate() } = {}) {
     soldKg: round(soldKg, 1),
     revenue: round(revenue, 0),
     directCosts: round(directCosts, 0),
-    labourCost: round(labourCost, 0),
+    labourCost: labourPriced ? round(labourCost, 0) : null,
+    labourPriced,
     totalCost: round(totalCost, 0),
     costPerKg: costPerKg == null ? null : round(costPerKg, 0),
     pricePerKg: pricePerKg == null ? null : round(pricePerKg, 0),

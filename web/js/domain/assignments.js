@@ -45,7 +45,7 @@ export const OVERDUE_LADDER = [
   { rung: 'ceo', title: 'Owner', rank: 100 },
 ];
 
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person ? RANK[person.role] ?? -1 : -1);
 
 export function hasFarmView(user) {

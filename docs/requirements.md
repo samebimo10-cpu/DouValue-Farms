@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.14 (draft for restructuring) |
+| Version | 1.17 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -216,14 +216,14 @@ Fixes staff who cannot tell one problem from another until it is too late.
 - **FR-LEARN-05 (MUST):** When a hand's report is diagnosed and confirmed (`FR-DIAG-10`), the result links to that problem's Learn card, and any first step shown with it has the treatment detail removed.
 
 ### 6.7 Treatments and sprays
-- **FR-TREAT-01 (MUST):** A treatment records diagnosis link, product, dose, zone, date, time, person, and weather or greenhouse condition.
+- **FR-TREAT-01 (MUST):** A treatment records diagnosis link, product, dose, litres of mix sprayed, area treated, zone, date, time, person, and weather or greenhouse condition.
 - **FR-TREAT-02 (MUST):** The app shows **re-entry interval** and **pre-harvest interval** for each product and blocks harvest tasks in that zone until the interval has passed.
 - **FR-TREAT-03 (MUST):** Dose is shown in ml or g per litre and as a practical measure for the sprayer in use (e.g. "3 caps per 16 L knapsack").
 - **FR-TREAT-04 (MUST):** Protective equipment required for the product is shown as pictures before the task starts, and the person confirms with a tap.
 - **FR-TREAT-05 (SHOULD):** A follow-up check task is created automatically 3 days after each treatment to confirm it worked.
 
 ### 6.8 Inputs and stock
-- **FR-STOCK-01 (MUST):** Stock of chemicals, fertiliser, lime, seed, and sticky traps is tracked; using an input in a task reduces stock.
+- **FR-STOCK-01 (MUST):** Stock of chemicals, fertiliser, lime, seed, and sticky traps is tracked; using an input in a task reduces stock. A spray draws its product down automatically, by rate × litres sprayed.
 - **FR-STOCK-02 (MUST):** Low stock (below a set level) alerts the Farm Manager, before the input is needed.
 - **FR-STOCK-03 (SHOULD):** Each purchase records supplier, quantity, cost, batch, and expiry.
 - **FR-STOCK-04 (SHOULD):** Expired products cannot be selected for treatment.
@@ -242,7 +242,8 @@ Fixes staff who cannot tell one problem from another until it is too late.
 - **FR-COST-01 (MUST):** Every input use, labour day, and sale is tied to a zone.
 - **FR-COST-02 (MUST):** The Owner sees cost, revenue, and profit or loss per zone per cycle.
 - **FR-COST-03 (SHOULD):** Cost per kg and yield per plant compared across zones and seasons.
-- **FR-COST-04 (MUST):** Cost and sales screens are hidden from Greenhouse Hands.
+- **FR-COST-04 (MUST):** Cost and sales screens are hidden from Greenhouse Hands. What the Farm Manager sees of the money is set by FR-SIMP-04.
+- **FR-COST-05 (MUST):** There is no pay in the app: no wages, per-person daily rates or wage redaction. Attendance (days and hours) is kept. The Owner sets a daily rate per position, which no other role receives or can set. Labour cost per zone is days worked × that position's rate; a person's day is split across the zones they recorded work in that day, or else the zones they hold as primary. A day with neither is shown as not tied to a zone, and a day whose position has no rate is shown as unpriced, never priced at zero.
 
 ### 6.11 Owner oversight
 - **FR-REP-01 (MUST):** **Exceptions-only daily digest** for the Owner: missed tasks, open alerts, gate overrides, virus suspicions, low stock. If nothing is wrong, it says so in one line.
@@ -258,12 +259,12 @@ Fixes staff who cannot tell one problem from another until it is too late.
 - **FR-ADV-04 (MUST):** Adviser suggestions never bypass gates. A suggested treatment still needs a confirmed diagnosis.
 - **FR-ADV-05 (MUST):** All external links and text shown by the adviser are sanitised (see `NFR-SEC-04`).
 - **FR-ADV-06 (SHOULD):** Staff can ask the adviser by typing, and optionally by voice.
-- **FR-ADV-07 (SHOULD):** Online use has a monthly spending cap set by the Owner.
+- **FR-ADV-07 (SHOULD):** Online use (the wider adviser and photo review) has a monthly spending cap in US dollars, seen and set by the Owner only, alongside the per-person daily limit.
 
 ### 6.14 Farm Doctor (in place of a site agronomist)
 - **FR-DOC-01 (MUST):** Guided diagnosis from symptom to triage row, card and confirm test. It asks for photos and the confirm step before naming a cause.
 - **FR-DOC-02 (MUST):** Names look-alike causes and the test that tells them apart (e.g. nematode galls vs acid-soil roots).
-- **FR-DOC-03 (MUST):** Online photo review with a stated confidence (high / medium / low). Offline, the rules-based diagnosis, calculators and plan checks still work.
+- **FR-DOC-03 (MUST):** Online photo review with a stated confidence (high / medium / low), for the Field Supervisor and above. Offline, the rules-based diagnosis, calculators and plan checks still work.
 - **FR-DOC-04 (MUST):** Treatment plans already pass Gate 3, rotation, PHI, REI, mixing, timing, the Week 10 organics rule, and stock on hand.
 - **FR-DOC-05 (MUST):** Dose calculator (per 16 L knapsack, 500 L and 1,000 L tank) and lime calculator (pH, texture, bed area → route and kg).
 - **FR-DOC-06 (MUST):** Checks Gate 0, 1 and 4 evidence and lists anything missing.
@@ -284,6 +285,27 @@ The farm starts using the app with cycles already running. This section says how
 - **FR-ONB-06 (MUST):** A zone planted before the app existed has the status **"planted before the gates"**, with the evidence that exists attached. It is not a violation and needs no override. Gate 2 and Gate 3 run as normal; Gate 4 at the end of the cycle clears normally.
 - **FR-ONB-07 (MUST):** Stock on hand is entered as an opening count, marked backfilled, and is not counted as usage.
 - **FR-ONB-08 (MUST):** The Owner sees a setup screen listing which zones are incomplete and what each is missing, and the farm-wide stock count.
+
+### 6.16 Verification
+`docs/verification.md` is authoritative for these IDs; they are not repeated here.
+
+- **FR-VER-01 to FR-VER-03:** who sees verification, and that it never changes anyone's work.
+
+### 6.17 Record cross-checks
+`docs/verification.md` Part A is authoritative.
+
+- **FR-XCHK-01 to FR-XCHK-10:** how the cross-checks run, rank, report and are explained.
+- **XC-01 to XC-12:** the twelve checks themselves.
+
+### 6.18 The daily walk
+`docs/verification.md` Part B is authoritative.
+
+- **FR-WALK-01 to FR-WALK-12** and **FR-WALK-20 to FR-WALK-23:** prompts, capture, upload, missed walks, and the weekly analysis.
+
+### 6.19 Simplification of field screens
+`docs/simplify.md` is authoritative.
+
+- **FR-SIMP-01 to FR-SIMP-08:** what stays on a field screen, what moves, and what each role sees.
 
 ### 6.13 Climate monitoring (optional hardware)
 - **FR-CLIM-01 (COULD):** Import temperature and humidity from low-cost loggers in each greenhouse.
@@ -342,6 +364,7 @@ The farm starts using the app with cycles already running. This section says how
 | Diagnosis | card, answers, photos, confirmed by |
 | Treatment | diagnosis, product, dose, intervals, PPE confirmed |
 | Stock item | product, quantity, batch, expiry, cost |
+| Position rate | position (role), daily rate, set by the Owner; sent to the Owner only (FR-COST-05) |
 | Harvest | zone, weight/crates, grade |
 | Sale | buyer, quantity, price, payment status |
 | Override | gate, reason, Owner, time |
@@ -390,6 +413,9 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.17 | 9 Oct 2026 | The Agronomist role removed from the app (FR-GATE-00); a person still recorded with it works as a Field Supervisor. The carbofuran "avoid" row removed from the problem cards (FR-STOCK-09). FR-SIMP-04: harvest, labour and stock forecasts are the Farm Manager's too. The farm server's adviser and photo review default to Claude Opus 5.5, with refusal fallback (FR-ADV-07 costs it at its own prices) |
+| 1.16 | 9 Oct 2026 | FR-DOC-03: photo review for the Field Supervisor and above. FR-ADV-07: the Owner's monthly cap in US dollars, beside the daily limit. FR-TREAT-01: litres sprayed and area treated. FR-STOCK-01: a spray draws its stock down by itself. FR-COST-04 points to FR-SIMP-04 for the Farm Manager's view of the money. SR-04 re-spray tasks generated from hourly rain. The Farm check runs as verification Part A, nightly on the server, Owner-only |
+| 1.15 | 9 Oct 2026 | FR-COST-05 added: pay, per-person daily rates and wage redaction removed, attendance kept; the Owner's daily rate per position prices labour per zone as days worked × rate. §6.16 to §6.19 point to docs/verification.md (FR-VER, FR-XCHK, XC-01 to XC-12, FR-WALK) and docs/simplify.md (FR-SIMP) as authoritative |
 | 1.14 | 8 Oct 2026 | UX-28 added: the CEO makes each person's sign-in name and password and sends them; a new phone opens on a sign-in page and lands on that person's job. Replaces the single-use invite link and code |
 | 1.13 | 1 Oct 2026 | The farm server enforces FR-GATE-01 to 05, FR-TREAT-02 (PHI/REI from the server's own catalogue), FR-PROOF-01/02, FR-STOCK-04/07/08 and the Week 10 organics rule with the app's own gate code. NFR-OFF-06 added: a refused record tells the person why. FR-GATE-03 as written: a topsoil delivery records the zone it is for and is assigned only once tested clean |
 | 1.12 | 1 Oct 2026 | UX-01: a PIN is 4 to 12 digits, matching what joining and the server already accepted; the pad submits on ✓. FR-TASK-01: the day's tasks are generated on any role's phone, at open and at sign-in. FR-SCOUT-01/03, FR-FARM-04: a Greenhouse Hand records the trap count as a number, and it opens an alert — the nursery's daily count included; FR-PROOF-01 covers the nursery's trap check |

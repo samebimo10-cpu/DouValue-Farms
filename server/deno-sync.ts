@@ -1682,7 +1682,6 @@ const PROBLEMS = [
         'Load the bed with organic matter: compost feeds the fungi and mites that eat nematodes.',
       ],
       chemical: [
-        { active: 'Avoid carbofuran (Furadan)', example: '-', how: 'Do not use it', phiDays: 0, note: 'Extremely toxic to people and birds, banned in many markets and a real risk to anyone eating your pepper. Rotation and marigold are safer and work.' },
         { active: 'Fluensulfone or fluopyram', example: 'Nimitz / Velum', how: 'Soil applied before planting where registered and available', phiDays: 14, note: 'Expensive. Only worth it on a proven heavy infestation.' },
       ],
       organic: ['Marigold rotation.', 'Neem cake worked into the bed at 2-3 t/ha.', 'Compost.'],
@@ -2312,11 +2311,19 @@ Object.defineProperties(__dvExports, {
   "irrigationGapMmPerDay": { enumerable: true, get: () => irrigationGapMmPerDay },
   "litresPerPlantPerDay": { enumerable: true, get: () => litresPerPlantPerDay },
   "fetchForecast": { enumerable: true, get: () => fetchForecast },
+  "hourlyRain": { enumerable: true, get: () => hourlyRain },
+  "SR04": { enumerable: true, get: () => SR04 },
+  "sr04Applies": { enumerable: true, get: () => sr04Applies },
+  "rainWithin": { enumerable: true, get: () => rainWithin },
+  "sprayWeather": { enumerable: true, get: () => sprayWeather },
+  "respraysDue": { enumerable: true, get: () => respraysDue },
+  "resprayTaskId": { enumerable: true, get: () => resprayTaskId },
+  "resprayTaskFor": { enumerable: true, get: () => resprayTaskFor },
   "summariseObserved": { enumerable: true, get: () => summariseObserved },
   "forecastHeadline": { enumerable: true, get: () => forecastHeadline },
 });
-let clamp, interpolate, isoDate, monthOf, parseDate, daysBetween;
-__dvImport("web/js/util.js", (m) => { clamp = m.clamp; }, (m) => { interpolate = m.interpolate; }, (m) => { isoDate = m.isoDate; }, (m) => { monthOf = m.monthOf; }, (m) => { parseDate = m.parseDate; }, (m) => { daysBetween = m.daysBetween; });
+let addDays, clamp, interpolate, isoDate, monthOf, parseDate, daysBetween;
+__dvImport("web/js/util.js", (m) => { addDays = m.addDays; }, (m) => { clamp = m.clamp; }, (m) => { interpolate = m.interpolate; }, (m) => { isoDate = m.isoDate; }, (m) => { monthOf = m.monthOf; }, (m) => { parseDate = m.parseDate; }, (m) => { daysBetween = m.daysBetween; });
 // Weather for Port Harcourt: a built-in climatology that works with no network,
 // an optional live fetch when the phone has data, and the derived numbers the
 // rest of the app reasons with (heat units, wetness, disease pressure).
@@ -2494,6 +2501,7 @@ function litresPerPlantPerDay(mmPerDay, spacing) {
 async function fetchForecast(lat = FARM_LOCATION.lat, lon = FARM_LOCATION.lon, signal = null) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
     + '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,relative_humidity_2m_mean'
+    + '&hourly=precipitation'
     + `&past_days=7&forecast_days=7&timezone=${encodeURIComponent(FARM_LOCATION.tz)}`;
   try {
     const res = await fetch(url, { signal });
@@ -2510,10 +2518,114 @@ async function fetchForecast(lat = FARM_LOCATION.lat, lon = FARM_LOCATION.lon, s
         rain: d.precipitation_sum[i],
         rh: d.relative_humidity_2m_mean ? d.relative_humidity_2m_mean[i] : null,
       })),
+      hours: hourlyRain(j),
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Open-Meteo's hourly rain as UTC instants. Its times are farm-local with no
+ * offset, so the response's own offset turns them back into instants; each
+ * value is the rain that fell in the hour ending at that time.
+ */
+function hourlyRain(j) {
+  const h = j && j.hourly;
+  if (!h || !Array.isArray(h.time) || !Array.isArray(h.precipitation)) return [];
+  const offsetMs = (Number(j.utc_offset_seconds) || 0) * 1000;
+  return h.time.map((t, i) => ({
+    end: new Date(Date.parse(`${t}:00Z`) - offsetMs).toISOString(),
+    rain: Number(h.precipitation[i]) || 0,
+  }));
+}
+
+/**
+ * SR-04 — "Open field: if more than 15 mm of rain falls within 4 h after a
+ * spray, create a re-spray task for the next dry window." The rules file
+ * states it in words, so the two numbers are written here once, with the ID.
+ */
+const SR04 = { id: 'SR-04', mm: 15, hours: 4 };
+
+/** SR-04 applies to open field only; greenhouses and the nursery are covered. */
+const sr04Applies = (zone) => !!zone && zone.type === 'field';
+
+/**
+ * Rain in the SR-04 window after an instant: the hours ending after `fromIso`
+ * and no later than four hours on. `covered` is false where the forecast does
+ * not reach the whole window, so a short sum is never read as a dry one.
+ */
+function rainWithin(hours, fromIso, windowHours = SR04.hours) {
+  const from = Date.parse(fromIso);
+  const to = from + windowHours * 3600 * 1000;
+  const inWindow = (hours || []).filter((x) => {
+    const end = Date.parse(x.end);
+    return end > from && end <= to;
+  });
+  return {
+    mm: Math.round(inWindow.reduce((sum, x) => sum + x.rain, 0) * 10) / 10,
+    covered: inWindow.length >= windowHours,
+  };
+}
+
+/** SR-04 before a spray: the rain forecast for the next four hours in an open-field zone. */
+function sprayWeather(zone, forecast, now = new Date()) {
+  if (!sr04Applies(zone)) return { applies: false };
+  if (!forecast || !forecast.hours || !forecast.hours.length) return { applies: true, live: false };
+  const r = rainWithin(forecast.hours, now.toISOString());
+  return { applies: true, live: true, ...r, over: r.mm > SR04.mm };
+}
+
+/**
+ * SR-04 after a spray: the open-field sprays more than 15 mm of rain fell on
+ * within four hours, from the hourly record. Each needs a re-spray task.
+ */
+function respraysDue(state, forecast) {
+  if (!forecast || !forecast.hours || !forecast.hours.length) return [];
+  const out = [];
+  const tasks = state.tasks || {};
+  for (const spray of state.sprays || []) {
+    if (tasks[resprayTaskId(spray.id)]) continue;
+    const cycle = (state.cycles || {})[spray.cycleId];
+    const zone = cycle ? (state.plots || {})[cycle.plotId] : null;
+    if (!sr04Applies(zone) || !spray.at) continue;
+    const r = rainWithin(forecast.hours, spray.at);
+    if (r.covered && r.mm > SR04.mm) out.push({ spray, zone, cycle, mm: r.mm });
+  }
+  return out;
+}
+
+const resprayTaskId = (sprayId) => `fd_respray_${sprayId}`;
+
+/**
+ * SR-04's re-spray task, for the next dry window: the first day from tomorrow
+ * the forecast gives under 5 mm, at the 4 PM spray window (SR-01). Derived
+ * from the spray alone, so every phone that sees the rain writes the same task.
+ */
+function resprayTaskFor(due, forecast, { today = isoDate() } = {}) {
+  const { spray, zone, mm } = due;
+  const after = isoDate(addDays(today, 1));
+  const dry = ((forecast && forecast.days) || []).find((d) => d.date >= after && (d.rain || 0) < 5);
+  const day = dry ? dry.date : after;
+  const what = spray.productName || 'the spray';
+  return {
+    id: resprayTaskId(spray.id),
+    kind: 'respray',
+    title: `Re-spray ${what} — ${(zone && zone.name) || 'bed'}`,
+    zoneId: zone ? zone.id : null,
+    cycleId: spray.cycleId || null,
+    sprayId: spray.id,
+    positionId: null,
+    due: `${day}T16:00`,
+    generated: true,
+    priority: 'high',
+    how: [
+      `${mm} mm of rain fell within ${SR04.hours} hours of the last spray, so it was washed off (${SR04.id}).`,
+      'Same product, same rate, in the 4–7 PM window, on dry leaves.',
+    ],
+    why: 'Rain that heavy straight after spraying takes the product off the leaf. Until it goes back on, the bed is unprotected.',
+    createdFor: today,
+  };
 }
 
 /** Turn a forecast (or logged rain readings) into the observed shape the indices take. */
@@ -3869,7 +3981,7 @@ const FARM_UTC_OFFSET_HOURS = 1;
 /** A Farm Manager not clocked in by this farm hour counts as away (positions.js uses the same 9). */
 const NO_SHOW_HOUR = 9;
 
-const TITLE = { supervisor: 'Field Supervisor', agronomist: 'Agronomist', manager: 'Farm Manager', ceo: 'Owner' };
+const TITLE = { supervisor: 'Field Supervisor', manager: 'Farm Manager', ceo: 'Owner' };
 const roleTitle = (role) => TITLE[role] || 'Farm Manager';
 
 const HOUR = 3600000;
@@ -3886,7 +3998,7 @@ const active = (p) => !!p && p.active !== false;
 function approverFor(role) {
   if (role === 'ceo') return null;
   if (role === 'manager') return 'ceo';
-  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  if (role === 'supervisor' || role === 'hand') return 'manager';
   return 'ceo';
 }
 
@@ -8353,7 +8465,7 @@ const OPEN = new Set(['pass', 'overridden', 'waiting', 'na', PRE_GATES]);
 const isBlocking = (condition) => !OPEN.has(condition.state);
 
 /** Ranks, mirroring web/js/store.js. Used to check who signed what. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOfId = (state, id) => {
   const p = ((state && state.people) || {})[id];
   return (p && RANK[p.role]) || 0;
@@ -9936,7 +10048,7 @@ function doctorOutput({
 }
 
 /** Who may confirm or approve what. Ranks mirror web/js/store.js. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person && RANK[person.role]) || 0;
 const isDoctor = (person) => !person || person.id === DOCTOR.id || person.role === 'doctor';
 
@@ -11788,7 +11900,7 @@ const OVERDUE_LADDER = [
   { rung: 'ceo', title: 'Owner', rank: 100 },
 ];
 
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person ? RANK[person.role] ?? -1 : -1);
 
 function hasFarmView(user) {
@@ -12223,11 +12335,84 @@ function weekSpread(state, { start = weekStart(), now = new Date(), today = isoD
 })(__dvModule("web/js/domain/assignments.js"));
 __dvBindAll();
 
+// ─── web/js/domain/drawdown.js ─────────────────────────────────────────────
+await (async function (__dvExports) {
+Object.defineProperties(__dvExports, {
+  "ratePerLitre": { enumerable: true, get: () => ratePerLitre },
+  "stockItemFor": { enumerable: true, get: () => stockItemFor },
+  "sprayDrawdown": { enumerable: true, get: () => sprayDrawdown },
+});
+
+
+// FR-STOCK-01 — a spray draws its product out of the store by itself.
+//
+// The spray record says how many litres of mix went on and at what rate, so
+// the amount of product is arithmetic, not a second entry somebody has to
+// remember. A spray recorded before litres were asked for (or one whose rate
+// or stock unit cannot be turned into an amount) draws nothing, and says why,
+// rather than guessing: XC-02 and XC-03 read only sprays that carry litres.
+//
+// Pure, with no store import, so the reducer can call it on replay.
+
+const MASS = { g: 1, gram: 1, grams: 1, kg: 1000 };
+const VOLUME = { ml: 1, millilitre: 1, l: 1000, litre: 1000, liter: 1000, litres: 1000 };
+
+/**
+ * "2.5 g/L (80WP)", "0.3 ml/L, after 4 PM", "150 ml oil + 30 ml soap / 16 L",
+ * "5 g/L GH; 2.5 g/L field" → amount of product per litre of mix, and its
+ * unit ('g' or 'ml'). Null when the text does not state one.
+ */
+function ratePerLitre(text, zoneType = 'greenhouse') {
+  let t = String(text || '');
+  // One rate for greenhouses and another for the field: take this zone's.
+  if (t.includes(';')) {
+    const parts = t.split(';');
+    const want = zoneType === 'field' ? /field/i : /\bGH\b|greenhouse/i;
+    t = parts.find((p) => want.test(p)) || parts[0];
+  }
+  const perLitre = t.match(/(\d+(?:\.\d+)?)\s*(g|ml)\s*\/\s*L\b/i);
+  if (perLitre) return { amount: Number(perLitre[1]), unit: perLitre[2].toLowerCase() };
+  // "150 ml ... / 16 L": the first amount, over the tank it is mixed into.
+  const perTank = t.match(/(\d+(?:\.\d+)?)\s*(g|ml)\b[^/]*\/\s*(\d+(?:\.\d+)?)\s*L\b/i);
+  if (perTank) return { amount: Number(perTank[1]) / Number(perTank[3]), unit: perTank[2].toLowerCase() };
+  return null;
+}
+
+/** The store item a spray draws from: same active, stock on hand first. */
+function stockItemFor(inputs, activeId) {
+  const items = Object.values(inputs || {}).filter((i) => activeId && i.activeId === activeId);
+  return items.find((i) => Number(i.qty) > 0) || items[0] || null;
+}
+
+/**
+ * What one spray takes out of the store: { itemId, qty, unit } in the item's
+ * own unit, or { none: why }.
+ */
+function sprayDrawdown(state, spray) {
+  const litres = Number(spray.litres);
+  if (!(litres > 0)) return { none: 'no litres recorded' };
+  const cycle = ((state && state.cycles) || {})[spray.cycleId];
+  const zone = cycle ? ((state && state.plots) || {})[cycle.plotId] : null;
+  const rate = ratePerLitre(spray.rate, zone ? zone.type : 'greenhouse');
+  if (!rate) return { none: 'the rate does not give an amount per litre' };
+  const item = stockItemFor(state && state.inputs, spray.activeId || spray.productId);
+  if (!item) return { none: 'no store item for this active ingredient' };
+  const unit = String(item.unit || '').toLowerCase();
+  const table = rate.unit === 'g' ? MASS : VOLUME;
+  if (!table[unit]) return { none: `the store counts it in ${item.unit || 'no unit'}, not by weight or volume` };
+  const qty = Math.round(((rate.amount * litres) / table[unit]) * 1000) / 1000;
+  return { itemId: item.id, qty, unit: item.unit };
+}
+})(__dvModule("web/js/domain/drawdown.js"));
+__dvBindAll();
+
 // ─── web/js/store.js ───────────────────────────────────────────────────────
 await (async function (__dvExports) {
 Object.defineProperties(__dvExports, {
   "ROLES": { enumerable: true, get: () => ROLES },
   "ROLE_LIST": { enumerable: true, get: () => ROLE_LIST },
+  "LEGACY_ROLES": { enumerable: true, get: () => LEGACY_ROLES },
+  "currentRole": { enumerable: true, get: () => currentRole },
   "roleRank": { enumerable: true, get: () => roleRank },
   "can": { enumerable: true, get: () => can },
   "assignableRoles": { enumerable: true, get: () => assignableRoles },
@@ -12249,7 +12434,10 @@ Object.defineProperties(__dvExports, {
   "harvestsBetween": { enumerable: true, get: () => harvestsBetween },
   "todayAttendance": { enumerable: true, get: () => todayAttendance },
   "isClockedIn": { enumerable: true, get: () => isClockedIn },
-  "payrollBetween": { enumerable: true, get: () => payrollBetween },
+  "attendanceBetween": { enumerable: true, get: () => attendanceBetween },
+  "dailyRateFor": { enumerable: true, get: () => dailyRateFor },
+  "hasRates": { enumerable: true, get: () => hasRates },
+  "labourByZone": { enumerable: true, get: () => labourByZone },
   "inputsList": { enumerable: true, get: () => inputsList },
   "inputUsage": { enumerable: true, get: () => inputUsage },
   "costsBetween": { enumerable: true, get: () => costsBetween },
@@ -12261,7 +12449,8 @@ let approverFor, awaitingApproval, beforeApprovalCheck, canApprove, otherConfirm
 let CONFIRMS, DOCTOR;
 let releaseCheck;
 let fillCheck;
-let checkAssignment, mayAssignZones;
+let checkAssignment, mayAssignZones, zonesHeldBy;
+let sprayDrawdown;
 let peekRules;
 let isoDate, sortBy, sum, uid;
 __dvImport("web/js/db.js", (m) => { appendEvents = m.appendEvents; }, (m) => { deviceId = m.deviceId; }, (m) => { loadEvents = m.loadEvents; });
@@ -12270,7 +12459,8 @@ __dvImport("web/js/domain/selfcheck.js", (m) => { approverFor = m.approverFor; }
 __dvImport("web/js/domain/doctor.js", (m) => { CONFIRMS = m.CONFIRMS; }, (m) => { DOCTOR = m.DOCTOR; });
 __dvImport("web/js/domain/nursery.js", (m) => { releaseCheck = m.releaseCheck; });
 __dvImport("web/js/domain/gates.js", (m) => { fillCheck = m.fillCheck; });
-__dvImport("web/js/domain/assignments.js", (m) => { checkAssignment = m.checkAssignment; }, (m) => { mayAssignZones = m.mayAssignZones; });
+__dvImport("web/js/domain/assignments.js", (m) => { checkAssignment = m.checkAssignment; }, (m) => { mayAssignZones = m.mayAssignZones; }, (m) => { zonesHeldBy = m.zonesHeldBy; });
+__dvImport("web/js/domain/drawdown.js", (m) => { sprayDrawdown = m.sprayDrawdown; });
 __dvImport("web/js/rules.js", (m) => { peekRules = m.peekRules; });
 __dvImport("web/js/util.js", (m) => { isoDate = m.isoDate; }, (m) => { sortBy = m.sortBy; }, (m) => { sum = m.sum; }, (m) => { uid = m.uid; });
 // State. Events in, farm out.
@@ -12278,6 +12468,7 @@ __dvImport("web/js/util.js", (m) => { isoDate = m.isoDate; }, (m) => { sortBy = 
 // reduce() is a pure function of the event log, exported on its own so it can be
 // tested without a browser. createStore() wraps it with persistence and change
 // notification.
+
 
 
 
@@ -12326,13 +12517,6 @@ const ROLES = {
     home: '#/field',
     blurb: 'Assigns the day\'s work, checks the harvest, records sprays and inputs.',
   },
-  agronomist: {
-    id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
-    home: '#/clinic',
-    blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
-  },
   manager: {
     id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
@@ -12346,7 +12530,7 @@ const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates', 'viewProfit'],
     home: '#/dashboard',
     blurb: 'Owns the farm. Sees everything, appoints the manager and everyone else, '
       + 'and controls the link that keeps every phone in step.',
@@ -12356,15 +12540,25 @@ const ROLES = {
 /** Roles from the top down, for pickers and tables. */
 const ROLE_LIST = Object.values(ROLES).sort((a, b) => b.rank - a.rank);
 
+/**
+ * Jobs that no longer exist, and the job a person who held one now has.
+ * The Agronomist was removed (FR-GATE-00: the Farm Doctor replaced the site
+ * agronomist). Its diagnosing, scouting and spraying are the Field
+ * Supervisor's, so anyone still recorded as one signs in as a Field Supervisor
+ * rather than to an app that shows them nothing. The farm server does the same.
+ */
+const LEGACY_ROLES = { agronomist: 'supervisor' };
+const currentRole = (role) => LEGACY_ROLES[role] || role;
+
 function roleRank(person) {
   if (!person) return -1;
-  const role = ROLES[person.role || person];
+  const role = ROLES[currentRole(person.role || person)];
   return role ? role.rank : -1;
 }
 
 function can(person, permission) {
   if (!person) return false;
-  const role = ROLES[person.role];
+  const role = ROLES[currentRole(person.role)];
   return !!role && role.can.includes(permission);
 }
 
@@ -12430,8 +12624,6 @@ const DEFAULT_SETTINGS = {
   seasonality: null,      // null means use the built-in index
   gradeOutPct: 12,
   kgPerPersonHour: 12,
-  defaultDailyWage: 3500,
-  overtimeRatePerHour: 700,
   soilPh: 5.2,
 };
 
@@ -12482,6 +12674,12 @@ const EMPTY = () => ({
   expenses: [],
   stockMoves: [],
   attendance: [],
+  // FR-COST-05 — the Owner's daily rate per position, keyed by role. Only the
+  // Owner's phone is ever sent these; everywhere else it stays empty.
+  rates: {},
+  // FR-XCHK-01 — the latest run of the record checks, from the farm server.
+  // Only the Owner's phone is sent these.
+  checks: null,
   workLogs: [],
   weather: [],
   reports: [],
@@ -12614,6 +12812,7 @@ function reduce(events) {
 
       case 'person.upsert':
         state.people[p.id] = { ...(state.people[p.id] || {}), ...p, active: p.active !== false };
+        if (state.people[p.id].role) state.people[p.id].role = currentRole(state.people[p.id].role);
         break;
       case 'person.deactivate':
         if (state.people[p.id]) state.people[p.id].active = false;
@@ -12964,6 +13163,12 @@ function reduce(events) {
       case 'sale.record':
         state.sales.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
+      case 'checks.record':
+        if (!state.checks || (e.at || '') >= (state.checks.at || '')) state.checks = { ...p, at: e.at };
+        break;
+      case 'rate.set':
+        if (p.role) state.rates[p.role] = { perDay: Math.max(0, Number(p.perDay) || 0), by: e.by, at: e.at };
+        break;
       // FR-ROLE-13 — a spray resting on a self-confirmed diagnosis that nobody
       // above has approved is judged here, from the records as they stood when
       // it went on. Whether it was treated before approval is computed from
@@ -12981,6 +13186,21 @@ function reduce(events) {
           } else {
             spray.unapproved = verdict.why;
           }
+        }
+        // FR-STOCK-01: the product comes out of the store with the spray,
+        // worked out from the litres and the rate. A spray without litres
+        // (any recorded before they were asked for) draws nothing, and says so.
+        const draw = sprayDrawdown(state, spray);
+        if (draw.itemId) {
+          state.inputs[draw.itemId].qty = (Number(state.inputs[draw.itemId].qty) || 0) - draw.qty;
+          state.stockMoves.push({
+            id: `draw_${spray.id}`, itemId: draw.itemId, qty: draw.qty, cycleId: spray.cycleId || null,
+            sprayId: spray.id, auto: true, date: spray.date || (e.at || '').slice(0, 10),
+            direction: 'out', by: e.by, at: e.at,
+          });
+          spray.drawn = draw;
+        } else {
+          spray.drawn = draw;
         }
         state.sprays.push(spray);
         break;
@@ -13443,8 +13663,8 @@ function isClockedIn(state, personId) {
   return state.attendance.some((a) => a.personId === personId && !a.out);
 }
 
-/** Wages owed over a period, from attendance and the person's rate. */
-function payrollBetween(state, from, to) {
+/** Days and hours each person was clocked in over a period. Attendance only: there is no pay in the app. */
+function attendanceBetween(state, from, to) {
   const rows = [];
   for (const person of Object.values(state.people)) {
     if (person.active === false) continue;
@@ -13452,10 +13672,100 @@ function payrollBetween(state, from, to) {
       && (a.in || '').slice(0, 10) >= from && (a.in || '').slice(0, 10) <= to && a.out);
     const hours = sum(shifts, (s) => s.hours || 0);
     const days = new Set(shifts.map((s) => (s.in || '').slice(0, 10))).size;
-    const rate = Number(person.dailyRate) || state.settings.defaultDailyWage;
-    rows.push({ person, days, hours: Math.round(hours * 10) / 10, rate, pay: days * rate });
+    rows.push({ person, days, hours: Math.round(hours * 10) / 10 });
   }
-  return rows.filter((r) => r.days > 0).sort((a, b) => b.pay - a.pay);
+  return rows.filter((r) => r.days > 0).sort((a, b) => b.days - a.days || b.hours - a.hours);
+}
+
+/** FR-COST-05: the Owner's daily rate for a position, or null where none is set or this phone was not sent the table. */
+function dailyRateFor(state, role) {
+  const r = ((state && state.rates) || {})[role];
+  return r ? r.perDay : null;
+}
+
+/** Whether this phone holds any rate at all. Only the Owner's does. */
+function hasRates(state) {
+  return Object.keys((state && state.rates) || {}).length > 0;
+}
+
+const zoneOfCycle = (state, cycleId) => (cycleId && state.cycles[cycleId] ? state.cycles[cycleId].plotId : null);
+
+/**
+ * The zones each person worked in on each day, read from what they recorded
+ * that day: tasks they finished, work, pickings, counts and sprays. Built once
+ * per call, keyed "person|day", so a season of records is read once rather
+ * than once per day worked.
+ */
+function zonesWorkedIndex(state) {
+  const index = new Map();
+  const add = (personId, at, zone) => {
+    const day = String(at || '').slice(0, 10);
+    if (!personId || !day || !zone) return;
+    const key = `${personId}|${day}`;
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(zone);
+  };
+  for (const t of Object.values(state.tasks)) add(t.doneBy, t.doneAt, t.zoneId || zoneOfCycle(state, t.cycleId));
+  for (const w of state.workLogs) add(w.personId || w.by, w.date || w.at, w.zoneId || zoneOfCycle(state, w.cycleId));
+  for (const list of [state.harvests, state.scouts, state.sprays]) {
+    for (const r of list) add(r.by, r.date || r.at, r.zoneId || zoneOfCycle(state, r.cycleId));
+  }
+  return index;
+}
+
+/**
+ * FR-COST-01, FR-COST-05 — labour cost per zone: days worked × the position's
+ * daily rate. A person's day is split evenly across the zones they worked in
+ * that day, or else the zones they hold as primary. Days whose position has no rate are counted in `unpriced`, never
+ * priced at zero, so a missing rate shows instead of reading as free labour.
+ */
+function labourByZone(state, from, to) {
+  const zones = {};
+  const unallocated = { days: 0, cost: 0 };
+  const unpriced = new Map();
+  const seen = new Set();
+  const worked = zonesWorkedIndex(state);
+  const held = new Map();
+  // A day with nothing tied to a zone falls back to the zones the person holds
+  // as primary; failing that it stays unallocated, shown rather than spread about.
+  const zonesFor = (personId, day) => {
+    const z = worked.get(`${personId}|${day}`);
+    if (z) return [...z];
+    if (!held.has(personId)) {
+      held.set(personId, zonesHeldBy(state, personId).filter((h) => h.holding === 'primary').map((h) => h.zone.id));
+    }
+    return held.get(personId);
+  };
+  for (const a of state.attendance) {
+    const day = (a.in || '').slice(0, 10);
+    if (!a.out || day < from || day > to) continue;
+    const key = `${a.personId}|${day}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const person = state.people[a.personId];
+    if (!person) continue;
+    const rate = dailyRateFor(state, person.role);
+    if (rate == null) {
+      unpriced.set(person.role, (unpriced.get(person.role) || 0) + 1);
+      continue;
+    }
+    const where = zonesFor(person.id, day);
+    if (!where.length) {
+      unallocated.days += 1;
+      unallocated.cost += rate;
+      continue;
+    }
+    for (const z of where) {
+      const row = zones[z] || (zones[z] = { days: 0, cost: 0 });
+      row.days += 1 / where.length;
+      row.cost += rate / where.length;
+    }
+  }
+  const total = sum(Object.values(zones), (r) => r.cost) + unallocated.cost;
+  return {
+    zones, unallocated, total,
+    unpriced: [...unpriced.entries()].map(([role, days]) => ({ role, days })),
+  };
 }
 
 function inputsList(state) {
@@ -13470,9 +13780,9 @@ function inputUsage(state) {
 function costsBetween(state, from, to) {
   const direct = state.expenses.filter((x) => x.date >= from && x.date <= to)
     .map((x) => ({ date: x.date, amount: Number(x.amount) || 0, category: x.category || 'other', note: x.note }));
-  const labour = payrollBetween(state, from, to)
-    .map((r) => ({ date: to, amount: r.pay, category: 'labour', note: `${r.person.name}, ${r.days} days` }));
-  return [...direct, ...labour];
+  // Labour is priced from the Owner's rate table, which no other phone holds.
+  const labour = hasRates(state) ? labourByZone(state, from, to).total : 0;
+  return labour > 0 ? [...direct, { date: to, amount: labour, category: 'labour', note: 'days worked × position rate' }] : direct;
 }
 
 function revenueBetween(state, from, to) {
@@ -13910,10 +14220,589 @@ function judgingLog(events) {
 })(__dvModule("server/judge.mjs"));
 __dvBindAll();
 
+// ─── web/js/domain/integrity.js ────────────────────────────────────────────
+await (async function (__dvExports) {
+Object.defineProperties(__dvExports, {
+  "SEVERITY": { enumerable: true, get: () => SEVERITY },
+  "timing": { enumerable: true, get: () => timing },
+  "DEFAULT_RULES": { enumerable: true, get: () => DEFAULT_RULES },
+  "groupFindings": { enumerable: true, get: () => groupFindings },
+  "audit": { enumerable: true, get: () => audit },
+  "peopleSummary": { enumerable: true, get: () => peopleSummary },
+  "recordQuality": { enumerable: true, get: () => recordQuality },
+});
+let addDays, daysBetween, isoDate, round, sum;
+__dvImport("web/js/util.js", (m) => { addDays = m.addDays; }, (m) => { daysBetween = m.daysBetween; }, (m) => { isoDate = m.isoDate; }, (m) => { round = m.round; }, (m) => { sum = m.sum; });
+// Judging the farm's own records.
+//
+// The CEO's question is not "what do the books say" but "can I believe them".
+// On a farm the honest failure is far more common than the dishonest one: a hand
+// writes Monday's crates up on Thursday from memory, a supervisor rounds
+// everything to the nearest ten, a phone's clock is two hours out. Both kinds
+// leave the same fingerprints, and the point of this file is to surface them
+// without accusing anyone.
+//
+// Every check answers three questions in order, because a finding that cannot
+// answer all three is just noise:
+//
+//   1. What specifically looks wrong, in numbers?
+//   2. What is the innocent explanation?
+//   3. What would settle it?
+//
+// Nothing here decides that a person is dishonest. It decides that a record
+// deserves a question, and says which question.
+//
+// These are the verification spec's Part A record cross-checks
+// (docs/verification.md): the Owner's alone (FR-VER-01), run nightly on the
+// farm server (FR-XCHK-01), and no headline names a person (FR-XCHK-10) — it
+// names the records and the bed. Who entered them stays on the finding, one
+// tap away. Where a check is one of XC-01 to XC-12 it carries that ID.
+
+
+
+const SEVERITY = { high: 3, medium: 2, low: 1 };
+
+/** When a record is timestamped, and how far that is from the work it claims. */
+function timing(record) {
+  // `at` is the phone's clock when the record was made. `serverAt` is the farm
+  // server's clock when it arrived, which is the one that cannot be argued with.
+  const claimedFor = record.date || (record.at || '').slice(0, 10) || null;
+  const recordedAt = record.at || null;
+  const arrivedAt = record.serverAt || null;
+
+  const recordedDay = recordedAt ? recordedAt.slice(0, 10) : null;
+  const lagDays = claimedFor && recordedDay ? daysBetween(claimedFor, recordedDay) : null;
+
+  // A phone whose clock disagrees with the server makes every time on it suspect.
+  const skewMinutes = recordedAt && arrivedAt
+    ? Math.round((new Date(arrivedAt) - new Date(recordedAt)) / 60000)
+    : null;
+
+  return {
+    claimedFor,
+    recordedAt,
+    arrivedAt,
+    lagDays,
+    skewMinutes,
+    backdated: lagDays != null && lagDays >= 1,
+    futureDated: lagDays != null && lagDays <= -1,
+  };
+}
+
+/** The bed a record belongs to, by name, for a headline that names records and zones. */
+function bedOf(state, cycleId) {
+  const cycle = (state.cycles || {})[cycleId];
+  const plot = cycle ? (state.plots || {})[cycle.plotId] : null;
+  return (plot && plot.name) || 'A bed';
+}
+
+// The verification spec's IDs, for the checks that are one of XC-01 to XC-12.
+const XC = {
+  'sold-more-than-picked': 'XC-01',
+  'old-photo': 'XC-04',
+  'late-entry': 'XC-05',
+  'bulk-backfill': 'XC-05',
+};
+
+function finding(f) {
+  return { severity: 'medium', xc: XC[f.kind] || null, ...f, weight: SEVERITY[f.severity || 'medium'] };
+}
+
+// --- The checks -----------------------------------------------------------
+
+/** Work written up days later is remembered, not measured. */
+function checkLateEntry(state, opts) {
+  const out = [];
+  const limit = opts.lateAfterDays;
+  for (const h of state.harvests) {
+    const t = timing(h);
+    if (t.lagDays == null || t.lagDays < limit) continue;
+    out.push(finding({
+      id: `late_${h.id}`,
+      kind: 'late-entry',
+      severity: t.lagDays >= limit * 2 ? 'high' : 'medium',
+      who: h.by,
+      when: t.recordedAt,
+      cycleId: h.cycleId,
+      title: `${bedOf(state, h.cycleId)}: a picking recorded ${t.lagDays} days after the day it claims`,
+      detail: `${round(h.kg, 1)} kg written down for ${t.claimedFor}, but not entered until ${(t.recordedAt || '').slice(0, 10)}.`,
+      innocent: 'The phone had no signal, or the book was written up at the end of the week.',
+      settle: 'Ask what the crates actually weighed that day, and whether anyone else saw the pick.',
+      evidence: { lagDays: t.lagDays, kg: h.kg, date: t.claimedFor },
+    }));
+  }
+  return out;
+}
+
+/** A record dated after the day it was written is either a typo or a guess. */
+function checkFutureDated(state) {
+  const out = [];
+  for (const h of state.harvests) {
+    const t = timing(h);
+    if (!t.futureDated) continue;
+    out.push(finding({
+      id: `future_${h.id}`,
+      kind: 'future-dated',
+      severity: 'high',
+      who: h.by,
+      when: t.recordedAt,
+      cycleId: h.cycleId,
+      title: `${bedOf(state, h.cycleId)}: a picking dated ${Math.abs(t.lagDays)} days in the future`,
+      detail: `${round(h.kg, 1)} kg dated ${t.claimedFor}, entered on ${(t.recordedAt || '').slice(0, 10)}.`,
+      innocent: 'The date was mistyped, or the phone\'s own clock is wrong.',
+      settle: 'Check the date on that phone against a known clock, then correct the record.',
+      evidence: { lagDays: t.lagDays, kg: h.kg },
+    }));
+  }
+  return out;
+}
+
+/** A phone whose clock is adrift makes every time it reports unreliable. */
+function checkClockSkew(state, opts) {
+  const byDevice = new Map();
+  for (const entry of state.log) {
+    if (!entry.at || !entry.serverAt) continue;
+    const skew = Math.round((new Date(entry.serverAt) - new Date(entry.at)) / 60000);
+    const key = entry.device || 'unknown device';
+    const seen = byDevice.get(key) || [];
+    seen.push(skew);
+    byDevice.set(key, seen);
+  }
+  const out = [];
+  for (const [device, skews] of byDevice) {
+    if (skews.length < 3) continue;
+    const sorted = [...skews].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    // Sync delay always makes serverAt later than at. Only a phone running
+    // *ahead* of the server, or hours behind, means the clock itself is wrong.
+    if (median > -opts.clockSkewMinutes && median < opts.clockSkewMinutes) continue;
+    out.push(finding({
+      id: `skew_${device}`,
+      kind: 'clock-skew',
+      severity: 'medium',
+      who: null,
+      when: null,
+      title: `One phone's clock is about ${Math.abs(median)} minutes ${median < 0 ? 'ahead of' : 'behind'} the farm's`,
+      detail: `Across ${skews.length} records from ${device}, times differ from the server by ${median} minutes.`,
+      innocent: 'The phone\'s date and time are set by hand rather than by the network.',
+      settle: 'On that phone, switch date and time to automatic. Times recorded on it until then are approximate.',
+      evidence: { device, medianSkewMinutes: median, records: skews.length },
+    }));
+  }
+  return out;
+}
+
+/**
+ * A whole day's book entered in one burst, covering several different days, is
+ * somebody catching up from memory rather than recording as they went.
+ */
+function checkBulkBackfill(state, opts) {
+  const bySession = new Map();
+  for (const h of state.harvests) {
+    const t = timing(h);
+    if (!t.recordedAt || t.lagDays == null || t.lagDays < 1) continue;
+    const key = `${h.by}|${t.recordedAt.slice(0, 13)}`;    // same person, same hour
+    const rows = bySession.get(key) || [];
+    rows.push({ h, t });
+    bySession.set(key, rows);
+  }
+  const out = [];
+  for (const [key, rows] of bySession) {
+    const days = new Set(rows.map((r) => r.t.claimedFor));
+    if (rows.length < opts.bulkCount || days.size < opts.bulkDays) continue;
+    const [by, hour] = key.split('|');
+    out.push(finding({
+      id: `bulk_${key}`,
+      kind: 'bulk-backfill',
+      severity: 'medium',
+      who: by,
+      when: `${hour}:00:00.000Z`,
+      title: `${rows.length} pickings across ${days.size} different days entered in one sitting`,
+      detail: `All entered within the same hour on ${hour.slice(0, 10)}, covering ${[...days].sort().join(', ')}.`,
+      innocent: 'A week with no signal, or a paper book being typed up.',
+      settle: 'Compare the total against what the store or the buyer actually received that week.',
+      evidence: { records: rows.length, days: [...days].sort(), totalKg: round(sum(rows, (r) => r.h.kg), 1) },
+    }));
+  }
+  return out;
+}
+
+/** The same bed, the same day, the same weight, twice. */
+function checkDuplicates(state) {
+  const seen = new Map();
+  const out = [];
+  for (const h of state.harvests) {
+    const key = `${h.cycleId}|${h.date}|${round(h.kg, 1)}`;
+    if (seen.has(key)) {
+      const first = seen.get(key);
+      out.push(finding({
+        id: `dup_${h.id}`,
+        kind: 'possible-duplicate',
+        severity: 'medium',
+        who: h.by,
+        when: h.at,
+        cycleId: h.cycleId,
+        title: `${bedOf(state, h.cycleId)}: the same picking may have been recorded twice`,
+        detail: `${round(h.kg, 1)} kg on ${h.date} appears twice for this bed.`,
+        innocent: 'Two people picked the same bed and each recorded their own crates.',
+        settle: 'Check whether the day\'s total matches what reached the store.',
+        evidence: { kg: h.kg, date: h.date, firstBy: first.by, secondBy: h.by },
+      }));
+    } else {
+      seen.set(key, h);
+    }
+  }
+  return out;
+}
+
+/** A picking far outside what that bed normally gives. */
+function checkOutliers(state, opts) {
+  const byCycle = new Map();
+  for (const h of state.harvests) {
+    const rows = byCycle.get(h.cycleId) || [];
+    rows.push(h);
+    byCycle.set(h.cycleId, rows);
+  }
+  const out = [];
+  for (const [cycleId, rows] of byCycle) {
+    if (rows.length < opts.minSample) continue;
+    const weights = rows.map((h) => Number(h.kg) || 0).sort((a, b) => a - b);
+    const median = weights[Math.floor(weights.length / 2)];
+    if (median <= 0) continue;
+    for (const h of rows) {
+      const ratio = (Number(h.kg) || 0) / median;
+      if (ratio < opts.outlierHigh && ratio > opts.outlierLow) continue;
+      out.push(finding({
+        id: `outlier_${h.id}`,
+        kind: 'unusual-weight',
+        severity: ratio >= opts.outlierHigh ? 'medium' : 'low',
+        who: h.by,
+        when: h.at,
+        cycleId,
+        title: `${bedOf(state, cycleId)}: a picking ${ratio >= 1 ? round(ratio, 1) + ' times' : round(1 / ratio, 1) + ' times below'} this bed's usual`,
+        detail: `${round(h.kg, 1)} kg on ${h.date}, where this bed usually gives about ${round(median, 1)} kg.`,
+        innocent: ratio >= 1
+          ? 'A first big flush, or two people picking together and one recording the lot.'
+          : 'A short pick at the end of the day, or rain stopping work.',
+        settle: 'Check it against the crates that reached the store that day.',
+        evidence: { kg: h.kg, medianKg: round(median, 1), ratio: round(ratio, 2) },
+      }));
+    }
+  }
+  return out;
+}
+
+/** Work recorded on a day that person never clocked in. */
+function checkUnattended(state) {
+  const shifts = new Map();
+  for (const a of state.attendance) {
+    const day = (a.in || '').slice(0, 10);
+    if (!day) continue;
+    shifts.set(`${a.personId}|${day}`, true);
+  }
+  const anyAttendance = shifts.size > 0;
+  if (!anyAttendance) return [];                      // a farm not using clock-in
+
+  const out = [];
+  for (const h of state.harvests) {
+    if (!h.date || !h.by) continue;
+    if (shifts.has(`${h.by}|${h.date}`)) continue;
+    // Only worth raising for people who do clock in at other times.
+    const everClocked = [...shifts.keys()].some((k) => k.startsWith(`${h.by}|`));
+    if (!everClocked) continue;
+    out.push(finding({
+      id: `noshift_${h.id}`,
+      kind: 'no-matching-shift',
+      severity: 'medium',
+      who: h.by,
+      when: h.at,
+      cycleId: h.cycleId,
+      title: `${bedOf(state, h.cycleId)}: a picking recorded for a day its recorder never clocked in`,
+      detail: `${round(h.kg, 1)} kg on ${h.date}, with no shift recorded that day for whoever entered it.`,
+      innocent: 'They forgot to clock in, or came in briefly on a day off.',
+      settle: 'Ask whether they worked that day, and fix the attendance either way.',
+      evidence: { date: h.date, kg: h.kg },
+    }));
+  }
+  return out;
+}
+
+/** More sold than was ever picked: the one that costs real money. */
+function checkSalesReconcile(state, opts) {
+  const out = [];
+  const byCrop = new Map();
+  for (const h of state.harvests) {
+    const cycle = state.cycles[h.cycleId];
+    const crop = cycle ? cycle.cropId : 'unknown';
+    const row = byCrop.get(crop) || { picked: 0, sold: 0 };
+    row.picked += Number(h.kg) || 0;
+    byCrop.set(crop, row);
+  }
+  for (const s of state.sales) {
+    const crop = s.cropId || 'unknown';
+    const row = byCrop.get(crop) || { picked: 0, sold: 0 };
+    row.sold += Number(s.kg) || 0;
+    byCrop.set(crop, row);
+  }
+  for (const [crop, row] of byCrop) {
+    if (row.sold <= 0) continue;
+    const over = row.sold - row.picked;
+    if (over <= row.picked * opts.saleTolerance) continue;
+    out.push(finding({
+      id: `sold_over_${crop}`,
+      kind: 'sold-more-than-picked',
+      severity: 'high',
+      who: null,
+      when: null,
+      title: `More ${crop} has been sold than was ever recorded as picked`,
+      detail: `${round(row.sold, 1)} kg sold against ${round(row.picked, 1)} kg picked, a gap of ${round(over, 1)} kg.`,
+      innocent: 'Pickings went unrecorded, or a sale covered stock carried over from an earlier cycle.',
+      settle: 'This is the one worth chasing first. Either crates are leaving unrecorded, or the picking book is incomplete.',
+      evidence: { crop, soldKg: round(row.sold, 1), pickedKg: round(row.picked, 1), gapKg: round(over, 1) },
+    }));
+  }
+  return out;
+}
+
+/** A bed in full picking that nobody has touched for a week. */
+function checkSilentBeds(state, opts, today) {
+  const out = [];
+  for (const cycle of Object.values(state.cycles)) {
+    if (cycle.status !== 'active') continue;
+    const dat = daysBetween(cycle.transplantDate, today);
+    if (dat < 70) continue;                            // not in picking yet
+    const picks = state.harvests.filter((h) => h.cycleId === cycle.id);
+    const last = picks.length
+      ? picks.map((h) => h.date).sort().slice(-1)[0]
+      : null;
+    const quiet = last ? daysBetween(last, today) : dat;
+    if (quiet < opts.silentBedDays) continue;
+    out.push(finding({
+      id: `silent_${cycle.id}`,
+      kind: 'silent-bed',
+      severity: quiet >= opts.silentBedDays * 2 ? 'high' : 'medium',
+      who: null,
+      when: null,
+      cycleId: cycle.id,
+      title: `${bedOf(state, cycle.id)}: in picking, nothing recorded for ${quiet} days`,
+      detail: last
+        ? `Last picking recorded ${last}. A bed at this stage should be picked every week or so.`
+        : 'No picking has ever been recorded against this bed, though it is past first harvest.',
+      innocent: 'The bed failed, or picking is happening and nobody is writing it down.',
+      settle: 'Walk it. Either the crop is gone, which is worth knowing, or produce is leaving unrecorded.',
+      evidence: { quietDays: quiet, lastPick: last },
+    }));
+  }
+  return out;
+}
+
+/** Photos that were not taken when they were attached. */
+function checkStalePhotos(state) {
+  const out = [];
+  const withPhotos = [
+    ...state.reports.map((r) => ({ record: r, what: 'problem report' })),
+    ...state.harvests.map((h) => ({ record: h, what: 'picking' })),
+    ...state.scouts.map((s) => ({ record: s, what: 'scouting' })),
+    ...state.sprays.map((s) => ({ record: s, what: 'spray' })),
+  ];
+  for (const { record, what } of withPhotos) {
+    const photo = record.photo;
+    if (!photo || typeof photo === 'string') continue;
+    if (photo.fresh !== false) continue;
+    if ((photo.ageMinutes || 0) < 120) continue;
+    out.push(finding({
+      id: `photo_${record.id}`,
+      kind: 'old-photo',
+      severity: 'low',
+      who: record.by,
+      when: record.at,
+      cycleId: record.cycleId,
+      title: `${record.cycleId ? `${bedOf(state, record.cycleId)}: a` : 'A'} ${what} backed by a photo taken well before it was attached`,
+      detail: `The picture was taken about ${Math.round((photo.ageMinutes || 0) / 60)} hours before it was added to the record.`,
+      innocent: 'They photographed it at the bed and attached it once back in signal.',
+      settle: 'Fine on its own. Worth noticing if the same person does it every time.',
+      evidence: { ageMinutes: photo.ageMinutes },
+    }));
+  }
+  return out;
+}
+
+const DEFAULT_RULES = {
+  lateAfterDays: 2,
+  clockSkewMinutes: 45,
+  bulkCount: 4,
+  bulkDays: 3,
+  minSample: 5,
+  outlierHigh: 3,
+  outlierLow: 0.25,
+  saleTolerance: 0.05,
+  silentBedDays: 10,
+};
+
+/**
+ * Run every check. Returns findings worst-first, plus a per-person summary,
+ * because the same question asked of one record is noise and asked of thirty is
+ * a pattern.
+ */
+/**
+ * Collapse a run of the same question about the same person into one.
+ *
+ * Thirty separate cards saying "this was written up late" is not thirty times
+ * more useful than one; it is a screen nobody reads. The pattern is the finding,
+ * so the summary leads with the count and keeps the worst few as examples.
+ */
+function groupFindings(findings, threshold = 3) {
+  const buckets = new Map();
+  for (const f of findings) {
+    const key = `${f.kind}|${f.who || '-'}`;
+    const rows = buckets.get(key) || [];
+    rows.push(f);
+    buckets.set(key, rows);
+  }
+
+  const out = [];
+  for (const rows of buckets.values()) {
+    if (rows.length < threshold) { out.push(...rows); continue; }
+    const worst = rows.reduce((a, b) => (b.weight > a.weight ? b : a));
+    const examples = [...rows].sort((a, b) => b.weight - a.weight).slice(0, 3);
+    out.push({
+      ...worst,
+      id: `group_${worst.kind}_${worst.who || 'farm'}`,
+      grouped: rows.length,
+      title: `${rows.length} records raise the same question: ${lowerFirst(worst.title)}`,
+      detail: `${rows.length} records in all. For example: `
+        + examples.map((e) => e.detail).join(' '),
+      examples,
+    });
+  }
+  return out.sort((a, b) => b.weight - a.weight || (b.grouped || 1) - (a.grouped || 1));
+}
+
+const lowerFirst = (text) => (text ? text[0].toLowerCase() + text.slice(1) : text);
+
+function audit(state, { today = isoDate(), rules = {}, group = true } = {}) {
+  const opts = { ...DEFAULT_RULES, ...rules };
+  const raw = [
+    ...checkSalesReconcile(state, opts),
+    ...checkSilentBeds(state, opts, today),
+    ...checkFutureDated(state),
+    ...checkLateEntry(state, opts),
+    ...checkBulkBackfill(state, opts),
+    ...checkDuplicates(state),
+    ...checkUnattended(state),
+    ...checkOutliers(state, opts),
+    ...checkClockSkew(state, opts),
+    ...checkStalePhotos(state),
+  ].sort((a, b) => b.weight - a.weight);
+
+  const findings = group ? groupFindings(raw) : raw;
+
+  return {
+    findings,
+    rawCount: raw.length,
+    counts: {
+      high: findings.filter((f) => f.severity === 'high').length,
+      medium: findings.filter((f) => f.severity === 'medium').length,
+      low: findings.filter((f) => f.severity === 'low').length,
+    },
+    people: peopleSummary(state, raw, opts),
+    records: recordQuality(state, opts),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * How each person's record-keeping looks.
+ *
+ * Deliberately framed as record-keeping, not honesty. Someone with no signal in
+ * the back field will always look worse than someone at the office, and a score
+ * that pretended otherwise would get people into trouble unfairly.
+ */
+function peopleSummary(state, findings, opts = DEFAULT_RULES) {
+  const rows = [];
+  for (const p of Object.values(state.people)) {
+    if (p.active === false) continue;
+    const records = [
+      ...state.harvests.filter((h) => h.by === p.id),
+      ...state.workLogs.filter((w) => w.by === p.id || w.personId === p.id),
+      ...state.scouts.filter((s) => s.by === p.id),
+    ];
+    if (!records.length) continue;
+
+    const harvests = state.harvests.filter((h) => h.by === p.id);
+    const lags = harvests.map((h) => timing(h).lagDays).filter((n) => n != null);
+    const sameDay = lags.filter((n) => n <= 0).length;
+    const withPhoto = harvests.filter((h) => h.photo).length;
+    const theirFindings = findings.filter((f) => f.who === p.id);
+
+    const promptness = lags.length ? sameDay / lags.length : null;
+    const evidence = harvests.length ? withPhoto / harvests.length : null;
+
+    rows.push({
+      person: p,
+      records: records.length,
+      harvests: harvests.length,
+      medianLagDays: lags.length ? lags.sort((a, b) => a - b)[Math.floor(lags.length / 2)] : null,
+      sameDayShare: promptness == null ? null : round(promptness * 100, 0),
+      photoShare: evidence == null ? null : round(evidence * 100, 0),
+      questions: theirFindings.length,
+      highQuestions: theirFindings.filter((f) => f.severity === 'high').length,
+      grade: gradeFor(promptness, theirFindings),
+    });
+  }
+  return rows.sort((a, b) => b.questions - a.questions || b.records - a.records);
+}
+
+function gradeFor(promptness, theirFindings) {
+  const high = theirFindings.filter((f) => f.severity === 'high').length;
+  if (high) return { id: 'check', label: 'Needs checking', tone: 'danger' };
+  if (theirFindings.length >= 3) return { id: 'watch', label: 'Worth a word', tone: 'warn' };
+  if (promptness != null && promptness >= 0.8) return { id: 'good', label: 'Records as they go', tone: 'ok' };
+  if (promptness != null && promptness < 0.5) return { id: 'late', label: 'Often writes up late', tone: 'warn' };
+  return { id: 'ok', label: 'No questions', tone: 'ok' };
+}
+
+/** What share of the farm's records carry the marks of being recorded on the spot. */
+function recordQuality(state, opts = DEFAULT_RULES) {
+  const harvests = state.harvests;
+  if (!harvests.length) {
+    return { total: 0, sameDay: null, withPhoto: null, verified: null, score: null };
+  }
+  const lags = harvests.map((h) => timing(h).lagDays);
+  const sameDay = lags.filter((n) => n != null && n <= 0).length;
+  const withPhoto = harvests.filter((h) => h.photo).length;
+  const verified = harvests.filter((h) => h.verified).length;
+
+  // A blunt headline number, weighted towards the thing that matters most:
+  // whether the record was made at the time or remembered later.
+  const score = Math.round(
+    (0.55 * (sameDay / harvests.length)
+      + 0.25 * (withPhoto / harvests.length)
+      + 0.20 * (verified / harvests.length)) * 100,
+  );
+
+  return {
+    total: harvests.length,
+    sameDay: round((sameDay / harvests.length) * 100, 0),
+    withPhoto: round((withPhoto / harvests.length) * 100, 0),
+    verified: round((verified / harvests.length) * 100, 0),
+    score,
+    band: score >= 75 ? { label: 'Records look solid', tone: 'ok' }
+      : score >= 45 ? { label: 'Usable, with gaps', tone: 'warn' }
+        : { label: 'Thin evidence', tone: 'danger' },
+  };
+}
+})(__dvModule("web/js/domain/integrity.js"));
+__dvBindAll();
+
 // ─── server/core.mjs ───────────────────────────────────────────────────────
 let JUDGED, judgeRecord, judgingLog;
+let reduce;
+let audit;
 let loadRules, peekRules, rulesLoaded, setRules;
 __dvImport("server/judge.mjs", (m) => { JUDGED = m.JUDGED; }, (m) => { judgeRecord = m.judgeRecord; }, (m) => { judgingLog = m.judgingLog; });
+__dvImport("web/js/store.js", (m) => { reduce = m.reduce; });
+__dvImport("web/js/domain/integrity.js", (m) => { audit = m.audit; });
 __dvImport("web/js/rules.js", (m) => { loadRules = m.loadRules; }, (m) => { peekRules = m.peekRules; }, (m) => { rulesLoaded = m.rulesLoaded; }, (m) => { setRules = m.setRules; });
 __dvBindAll();
 // The farm server's brain: who may join, who may read what, and who may write it.
@@ -13943,6 +14832,8 @@ __dvBindAll();
 
 
 
+
+
 // --- Roles ----------------------------------------------------------------
 // Mirrors web/js/store.js. The app's copy shapes the screens; this copy decides.
 
@@ -13957,11 +14848,6 @@ const ROLES = {
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'guideDiagnosis', 'viewTreatment'],
   },
-  agronomist: {
-    rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
-  },
   manager: {
     rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
@@ -13973,12 +14859,19 @@ const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates', 'viewProfit'],
   },
 };
 
-const can = (role, permission) => !!ROLES[role] && ROLES[role].can.includes(permission);
-const rankOf = (role) => (ROLES[role] ? ROLES[role].rank : -1);
+/** The Agronomist was removed; anyone still stored as one is a Field Supervisor (web/js/store.js, LEGACY_ROLES). */
+const LEGACY_ROLES = { agronomist: 'supervisor' };
+const currentRole = (role) => LEGACY_ROLES[role] || role;
+
+const can = (role, permission) => {
+  const r = ROLES[currentRole(role)];
+  return !!r && r.can.includes(permission);
+};
+const rankOf = (role) => (ROLES[currentRole(role)] ? ROLES[currentRole(role)].rank : -1);
 
 /** Which roles a person may hand out: the CEO anyone, everyone else below themselves. */
 function assignableRoles(role) {
@@ -14153,37 +15046,44 @@ const EVENT_POLICY = {
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
+  // FR-COST-05 — the daily rate per position. The Owner's alone, both ways:
+  // no other phone is sent it, so no other phone can work out what anyone earns.
+  'rate.set':          { write: 'manageRates',   read: 'manageRates' },
+  // FR-VER-01, FR-XCHK-01 — the record checks' findings. Written by the farm
+  // server's nightly run and nobody else (no role holds `serverChecks`), and
+  // read by the Owner alone.
+  'checks.record':     { write: 'serverChecks',  read: 'viewAudit' },
 };
 
 /**
- * Wages are the sharp edge. Everyone needs the names and roles of their
- * colleagues for tasks and harvest to make sense, so the record still travels,
- * but what someone earns goes only to the books and to that person themselves.
+ * Everyone needs the names and roles of their colleagues for tasks and harvest
+ * to make sense, so the record travels; a phone number goes only to the books
+ * and to that person. There is no pay in the app (FR-COST-05): a daily rate an
+ * older record still carries is dropped for every reader, its owner included.
  */
 function redactPerson(event, reader) {
   const p = event.payload || {};
   const out = { ...p };
   delete out.pinHash;                                  // never leaves the server
+  delete out.dailyRate;
   // Readers arrive either as a stored member record (id) or as a session
-  // (memberId). Accepting both is what stops "show me my own pay" quietly
+  // (memberId). Accepting both is what stops "show me my own details" quietly
   // failing on the one path that matters, the live server.
   const readerId = reader.memberId || reader.id;
   const ownRecord = p.id && p.id === readerId;
-  if (!ownRecord && !can(reader.role, 'manageMoney')) {
-    delete out.dailyRate;
-    delete out.phone;
-  }
+  if (!ownRecord && !can(reader.role, 'manageMoney')) delete out.phone;
   return { ...event, payload: out };
 }
 
-/** Prices and the wage bill are commercial; crate weights and rates are not. */
+/** Prices are commercial; crate weights and rates are not. Wage fields from before FR-COST-05 go to nobody. */
 function redactSettings(event, reader) {
-  if (can(reader.role, 'manageMoney')) return event;
   const p = { ...(event.payload || {}) };
-  delete p.prices;
-  delete p.seasonality;
   delete p.defaultDailyWage;
   delete p.overtimeRatePerHour;
+  if (!can(reader.role, 'manageMoney')) {
+    delete p.prices;
+    delete p.seasonality;
+  }
   return { ...event, payload: p };
 }
 
@@ -14280,7 +15180,7 @@ const DOCTOR_ID = 'farm-doctor';
 function approverFor(role) {
   if (role === 'ceo') return null;
   if (role === 'manager') return 'ceo';
-  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  if (currentRole(role) === 'supervisor' || role === 'hand') return 'manager';
   return 'ceo';
 }
 
@@ -14595,6 +15495,9 @@ async function readJson(req) {
  *   POST /api/farms/:id/events      file records, each checked against the author
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
+ *   POST /api/farms/:id/checks      run the record checks now (Owner, FR-XCHK-09)
+ *   GET  /api/farms/:id/spend-cap   this month's spend on the adviser and photo review, and the cap (Owner)
+ *   POST /api/farms/:id/spend-cap   set the monthly cap in US dollars, or clear it (Owner, FR-ADV-07)
  *   GET  /api/farms/:id/notify      whether WhatsApp to the Owner is set up (FR-REP-02)
  *   POST /api/farms/:id/notify      send the Owner the digest or a straight-to-Owner item
  */
@@ -14651,6 +15554,14 @@ async function handleRequest(req, store) {
   // FR-DOC-03: photo review. Online only, by design — the app's guided
   // diagnosis is what answers when this cannot be reached.
   if (action === 'photo-review' && req.method === 'POST') return photoReview(farmId, body, me, store);
+  // FR-ADV-07: the Owner's monthly spending cap on the wider adviser and photo review.
+  // FR-XCHK-09: the Owner can run the record checks now, over all history.
+  if (action === 'checks' && req.method === 'POST') {
+    if (!can(me.role, 'viewAudit')) return json({ error: 'Only the Owner runs the record checks' }, 403);
+    return json(await runFarmChecks(farmId, store, { force: true }));
+  }
+  if (action === 'spend-cap' && req.method === 'GET') return spendCapStatus(farmId, me, store);
+  if (action === 'spend-cap' && req.method === 'POST') return setSpendCap(farmId, body, me, store);
   // FR-REP-02: the Owner's WhatsApp. The phones decide what to say; the key
   // to send it lives here and nowhere else.
   if (action === 'notify' && req.method === 'GET') return json(await notifyStatus(farmId, store));
@@ -14660,7 +15571,7 @@ async function handleRequest(req, store) {
 }
 
 const publicMember = (m) => ({
-  id: m.id, name: m.name, role: m.role, status: m.status, login: m.login || null,
+  id: m.id, name: m.name, role: currentRole(m.role), status: m.status, login: m.login || null,
   joinedAt: m.joinedAt || null, invitedAt: m.invitedAt || null,
 });
 const publicFarm = (f) => (f ? { id: f.id, name: f.name, created: f.created } : null);
@@ -14678,7 +15589,7 @@ async function authenticate(farmId, req, store) {
     return { ok: false, response: json({ error: 'That account is no longer active' }, 403) };
   }
   await store.touchToken(rec.digest, new Date().toISOString());
-  return { ok: true, member, token: rec };
+  return { ok: true, member: { ...member, role: currentRole(member.role) }, token: rec };
 }
 
 /**
@@ -14745,7 +15656,7 @@ function guardScout(event, author) {
  */
 const GENERATED_TASK_KINDS = [
   'scout', 'trap', 'irrigate', 'fertigate', 'prune', 'harvest', 'sanitation',
-  'nursery_trap', 'seedling_check', 'follow_up',
+  'nursery_trap', 'seedling_check', 'follow_up', 'respray',
 ];
 function guardTaskCreate(event, author) {
   if (can(author.role, 'assignTasks')) return { ok: true };
@@ -14756,6 +15667,9 @@ function guardTaskCreate(event, author) {
   if (p.assignedTo || p.personId) return refuse;
   if (p.kind === 'follow_up') {
     if (!p.sprayId || p.id !== `fd_follow_${p.sprayId}`) return refuse;
+  } else if (p.kind === 'respray') {
+    // SR-04, generated from the hourly rain (web/js/domain/climate.js).
+    if (!p.sprayId || p.id !== `fd_respray_${p.sprayId}`) return refuse;
   } else {
     const day = String(p.due || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !p.zoneId || p.id !== `gen_${day}_${p.zoneId}_${p.kind}`) return refuse;
@@ -14767,7 +15681,7 @@ function guardTaskCreate(event, author) {
  * UX-27 — the field-trial sign-off belongs to the Owner.
  *
  * Settings are the Farm Manager's in general, and that is right for crate
- * weights and wages. This one is different: it is the switch that ends
+ * weights and prices. This one is different: it is the switch that ends
  * supervised use of the spray and gate screens, and the person most tempted to
  * throw it early is the manager who finds the confirmation tedious. So the
  * write permission stays where it is and this one field is lifted to the Owner.
@@ -14844,7 +15758,6 @@ function guardReport(event) {
  * The Farm Manager and the Owner. The Field Supervisor only on a record that
  * says it is covering; whether the Farm Manager really was out that day is a
  * question of attendance, which every phone replays and refuses on its own.
- * The agronomist assigns tasks but not zones.
  */
 function guardZoneAssign(event, author) {
   const p = event.payload || {};
@@ -15653,7 +16566,22 @@ const ADVICE_PER_DAY = 25;
 // Long enough for a few web searches and a considered answer; short enough that
 // a phone on a weak signal gives up rather than hanging with a spinner.
 const ADVICE_TIMEOUT_MS = 90_000;
-const ADVICE_MODEL = 'claude-opus-5';
+// Claude Opus 5.5: the successor to Claude Opus 5 at $4 / $20 per million
+// tokens against $5 / $25, same tokenizer, so a fifth cheaper per answer
+// (Anthropic pricing page, checked 9 October 2026). Its default effort is
+// medium where Opus 5's was high, so each call below sets its effort.
+const ADVICE_MODEL = 'claude-opus-5-5';
+
+/**
+ * A safety classifier can decline a request (`stop_reason: "refusal"`; Opus 5.5
+ * adds a `bio` category, and plant disease is close to it). `fallbacks:
+ * "default"` re-runs a declined request on the model Anthropic recommends for
+ * that category, inside the same call. Only for the models that take it.
+ */
+const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5-5']);
+const fallbackFor = (model) => (FALLBACK_MODELS.has(model)
+  ? { headers: { 'anthropic-beta': 'server-side-fallback-2026-07-01' }, body: { fallbacks: 'default' } }
+  : { headers: {}, body: {} });
 
 const ADVISER_BRIEF = `You are the farm adviser for a commercial pepper farm in Port Harcourt,
 Rivers State, Nigeria. It grows bell pepper (tatashe), chili (shombo) and habanero (ata rodo)
@@ -15711,10 +16639,21 @@ async function liveWeather() {
 
 /** Strip anything the reader's role is not entitled to, whatever the client sent. */
 function redactBrief(brief, role) {
-  if (can(role, 'manageMoney')) return brief;
-  const { economics, ...rest } = brief || {};
-  if (rest.farm && rest.farm.askedBy) rest.farm.askedBy = { ...rest.farm.askedBy, seesMoney: false };
-  return rest;
+  const out = { ...(brief || {}) };
+  // FR-VER-01: the record checks' findings go to the Owner and nobody else.
+  if (!can(role, 'viewAudit')) delete out.dataTrust;
+  if (!can(role, 'manageMoney')) {
+    delete out.economics;
+    if (out.farm && out.farm.askedBy) out.farm = { ...out.farm, askedBy: { ...out.farm.askedBy, seesMoney: false } };
+    return out;
+  }
+  // FR-SIMP-04, FR-COST-05: the Farm Manager gets sales and input costs, not
+  // labour, cost against revenue or margin.
+  if (!can(role, 'viewProfit') && out.economics && out.economics.last90Days) {
+    const { labourCostNgn, totalCostNgn, costPerKgNgn, marginPerKgNgn, verdict, ...kept } = out.economics.last90Days;
+    out.economics = { ...out.economics, last90Days: kept };
+  }
+  return out;
 }
 
 /** Deno and Node keep environment variables in different places, and neither exists in the other. */
@@ -15875,6 +16814,144 @@ async function notifyOwner(farmId, body, me, store, {
   return { ok: true, configured, results };
 }
 
+// --- FR-XCHK-01: the record checks, nightly on the farm server ---------------
+//
+// The checks run here, over every record the server holds, and not on a phone:
+// a check that depended on a phone being open at the right moment would not
+// run on the nights that matter. The findings go into the farm's log as one
+// checks.record a night, which only the Owner's phone is sent (FR-VER-01).
+// Running them changes no record and creates no task (FR-XCHK-08).
+
+const CHECKS_HOUR = 2;                     // 02:00 farm time, after the day's last sync
+const CHECKS_KEEP = 60;                    // findings kept per run; ranked worst first
+
+/** Run the checks for one farm, unless tonight's run is already in. */
+async function runFarmChecks(farmId, store, { now = new Date(), force = false } = {}) {
+  const farm = (await store.getFarm(farmId)) || null;
+  if (!farm) return { ok: false, reason: 'no-farm' };
+  const day = new Date(now.getTime() + 3600 * 1000).toISOString().slice(0, 10);   // WAT
+  if (!force && farm.checksRunFor === day) return { ok: true, skipped: true, day };
+
+  const events = (await storedEvents(farmId, store)).filter((e) => e.type !== 'checks.record');
+  const result = audit(reduce(events), { today: day });
+  const at = now.toISOString();
+  const event = {
+    id: `checks_${day}${force ? `_${now.getTime()}` : ''}`,
+    type: 'checks.record',
+    by: 'farm-server',
+    at,
+    serverAt: at,
+    payload: {
+      date: day,
+      findings: result.findings.slice(0, CHECKS_KEEP).map(({ examples, ...f }) => f),
+      counts: result.counts,
+      rawCount: result.rawCount,
+      records: result.records,
+      people: result.people.map(({ person, ...row }) => ({ personId: person.id, ...row })),
+    },
+  };
+  await store.appendEvents(farmId, [event]);
+  await store.setFarm(farmId, { ...((await store.getFarm(farmId)) || farm), checksRunFor: day });
+  return { ok: true, day, findings: event.payload.findings.length };
+}
+
+/**
+ * Called on a timer by both servers (hourly is fine): runs each farm's checks
+ * once a night, from 02:00 farm time. A server asleep at two runs them when it
+ * wakes, so a missed night is caught up rather than lost.
+ */
+async function runDueChecks(store, farmIds, { now = new Date() } = {}) {
+  const hour = new Date(now.getTime() + 3600 * 1000).getUTCHours();
+  if (hour < CHECKS_HOUR) return [];
+  const out = [];
+  for (const farmId of farmIds) {
+    try { out.push({ farmId, ...(await runFarmChecks(farmId, store, { now })) }); }
+    catch (err) { out.push({ farmId, ok: false, error: String((err && err.message) || err) }); }
+  }
+  return out;
+}
+
+// --- FR-ADV-07: the Owner's monthly spending cap ---------------------------
+//
+// Alongside the per-person daily limit, not instead of it: the daily limit
+// stops one account running up the bill, the cap bounds the farm's month. The
+// Anthropic bill is in US dollars, so the cap is too. Each answer's cost is
+// worked out from the usage the API returns, at list prices; a model not in
+// the table is charged at the dearest rate, so the cap errs towards stopping.
+
+// US dollars per million tokens: [input, output, cache read], from Anthropic's
+// pricing page (checked 9 October 2026). Cache writes are 1.25 x input for the
+// five-minute cache. Web search is $10 per 1,000.
+const MODEL_PRICES = {
+  'claude-fable-5-1': [10, 50, 0.25], 'claude-fable-5': [10, 50, 1],
+  'claude-opus-5-5': [4, 20, 0.2], 'claude-opus-5': [5, 25, 0.5],
+  'claude-opus-4-8': [5, 25, 0.5], 'claude-opus-4-7': [5, 25, 0.5], 'claude-opus-4-6': [5, 25, 0.5],
+  'claude-sonnet-5-5': [2, 10, 0.1], 'claude-sonnet-5': [2, 10, 0.2], 'claude-sonnet-4-6': [3, 15, 0.3],
+  'claude-haiku-5-5': [0.1, 0.5, 0.01], 'claude-haiku-4-5': [1, 5, 0.1],
+};
+const DEAREST = [10, 50, 1];
+const WEB_SEARCH_USD = 0.01;
+
+/** What one answer cost, in US dollars, from the usage block the API returned. */
+function usageCostUsd(model, usage = {}) {
+  const [inRate, outRate, readRate] = MODEL_PRICES[model] || DEAREST;
+  const n = (v) => Number(v) || 0;
+  const tokens = n(usage.input_tokens) * inRate
+    + n(usage.cache_creation_input_tokens) * inRate * 1.25
+    + n(usage.cache_read_input_tokens) * readRate
+    + n(usage.output_tokens) * outRate;
+  const searches = n(usage.server_tool_use && usage.server_tool_use.web_search_requests);
+  return tokens / 1e6 + searches * WEB_SEARCH_USD;
+}
+
+const farmMonth = () => farmDay().slice(0, 7);
+
+/** This month's spend and the cap, from the farm record. */
+function spendState(farm) {
+  const month = farmMonth();
+  const spent = farm && farm.spend && farm.spend.month === month ? Number(farm.spend.usd) || 0 : 0;
+  // A cap of $0 is a real cap: it switches outside advice off for the month.
+  const cap = farm && farm.spendCap && Number(farm.spendCap.monthlyUsd) >= 0 ? Number(farm.spendCap.monthlyUsd) : null;
+  return { month, spentUsd: Math.round(spent * 100) / 100, capUsd: cap, over: cap != null && spent >= cap };
+}
+
+/** Checked before every call. A call already under way may take the month a little past the cap. */
+async function underSpendCap(farmId, store) {
+  return spendState(await store.getFarm(farmId));
+}
+
+async function recordSpend(farmId, store, model, usage) {
+  const cost = usageCostUsd(model, usage);
+  if (!(cost > 0)) return;
+  const farm = (await store.getFarm(farmId)) || {};
+  const { month, spentUsd } = spendState(farm);
+  await store.setFarm(farmId, { ...farm, spend: { month, usd: spentUsd + cost } });
+}
+
+const capRefusal = (s, extra = {}) => json({
+  ok: false, reason: 'monthly-cap', ...extra,
+  message: `This month's limit on outside advice ($${s.capUsd}) has been reached. `
+    + 'The app\'s own adviser, the guided diagnosis and the calculators all still work. The Owner can raise the limit.',
+}, 429);
+
+// The cap is the Owner's: `manageOwners` is held by the CEO and nobody else.
+async function spendCapStatus(farmId, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner sees the spending cap' }, 403);
+  return json({ ok: true, ...(await underSpendCap(farmId, store)) });
+}
+
+async function setSpendCap(farmId, body, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner sets the spending cap' }, 403);
+  const raw = body && body.monthlyUsd;
+  const value = raw === null || raw === '' || raw === undefined ? null : Number(raw);
+  if (value !== null && !(value >= 0 && value <= 100000)) {
+    return json({ error: 'The cap is a number of US dollars a month, or empty for none' }, 400);
+  }
+  const farm = (await store.getFarm(farmId)) || {};
+  await store.setFarm(farmId, { ...farm, spendCap: value === null ? null : { monthlyUsd: value, by: me.id, at: new Date().toISOString() } });
+  return json({ ok: true, ...(await underSpendCap(farmId, store)) });
+}
+
 /** Count one use against this person's day, and refuse once they are over. */
 async function spendAdviceBudget(farmId, me, store) {
   const today = farmDay();
@@ -15901,6 +16978,8 @@ async function advise(farmId, body, me, store) {
     });
   }
 
+  const cap = await underSpendCap(farmId, store);
+  if (cap.over) return capRefusal(cap, { weather });
   const budget = await spendAdviceBudget(farmId, me, store);
   if (!budget.ok) {
     return json({
@@ -15911,6 +16990,7 @@ async function advise(farmId, body, me, store) {
 
   const brief = redactBrief(body.brief, me.role);
   const question = String(body.question || '').slice(0, 2000).trim();
+  const model = envVar('ANTHROPIC_MODEL') || ADVICE_MODEL;
   const alreadySaid = Array.isArray(body.alreadySaid)
     ? body.alreadySaid.slice(0, 20).map((t) => String(t).slice(0, 200))
     : [];
@@ -15938,12 +17018,14 @@ async function advise(farmId, body, me, store) {
         'content-type': 'application/json',
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
+        ...fallbackFor(model).headers,
       },
       signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
       body: JSON.stringify({
         // Overridable, because the farm is the one paying for each question and
         // a cheaper model is a legitimate choice for a farm making many of them.
-        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        model,
+        ...fallbackFor(model).body,
         // Thinking is on by default and is billed against this, so the ceiling
         // has to leave room for it or a good answer gets cut off mid-sentence.
         max_tokens: 16000,
@@ -15966,6 +17048,8 @@ async function advise(farmId, body, me, store) {
     }
 
     const answer = await res.json();
+    // Priced at the model that answered, which after a fallback is not the one asked.
+    await recordSpend(farmId, store, answer.model || model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({
         ok: false, reason: 'declined', weather,
@@ -16056,6 +17140,11 @@ function firstJsonObject(text) {
 }
 
 async function photoReview(farmId, body, me, store) {
+  // FR-DOC-03: photo review is the Field Supervisor's and above. A hand
+  // reports a sick plant (FR-DIAG-07); the people who diagnose it ask for this.
+  if (rankOf(me.role) < rankOf('supervisor')) {
+    return json({ ok: false, reason: 'role', message: 'Photo review is for the Field Supervisor and above. Report the sick plant instead.' }, 403);
+  }
   const key = envVar('ANTHROPIC_API_KEY');
   if (!key) {
     return json({
@@ -16070,6 +17159,8 @@ async function photoReview(farmId, body, me, store) {
     return json({ ok: false, reason: 'no-photos', message: 'No usable photos came through.' }, 400);
   }
 
+  const cap = await underSpendCap(farmId, store);
+  if (cap.over) return capRefusal(cap);
   const budget = await spendAdviceBudget(farmId, me, store);
   if (!budget.ok) {
     return json({
@@ -16077,6 +17168,7 @@ async function photoReview(farmId, body, me, store) {
       message: `That is ${ADVICE_PER_DAY} questions today on this account. It resets at midnight.`,
     }, 429);
   }
+  const model = envVar('ANTHROPIC_MODEL') || ADVICE_MODEL;
 
   const shortlist = Array.isArray(body.shortlist) ? body.shortlist.slice(0, 12) : [];
   const context = [
@@ -16098,11 +17190,15 @@ async function photoReview(farmId, body, me, store) {
         'content-type': 'application/json',
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
+        ...fallbackFor(model).headers,
       },
       signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
       body: JSON.stringify({
-        model: envVar('ANTHROPIC_MODEL') || ADVICE_MODEL,
+        model,
+        ...fallbackFor(model).body,
         max_tokens: 4000,
+        // Opus 5's default, set out loud: Opus 5.5 would otherwise run at medium.
+        output_config: { effort: 'high' },
         system: PHOTO_BRIEF,
         messages: [{
           role: 'user',
@@ -16121,6 +17217,8 @@ async function photoReview(farmId, body, me, store) {
     }
 
     const answer = await res.json();
+    // Priced at the model that answered, which after a fallback is not the one asked.
+    await recordSpend(farmId, store, answer.model || model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({ ok: false, reason: 'declined', message: 'Photo review would not answer that one.' });
     }
@@ -16157,7 +17255,18 @@ const kv = await Deno.openKv();
 
 const store = {
   async getFarm(farmId) { return (await kv.get(["farm", farmId, "meta"])).value; },
-  async setFarm(farmId, farm) { await kv.set(["farm", farmId, "meta"], farm); },
+  async setFarm(farmId, farm) {
+    await kv.set(["farm", farmId, "meta"], farm);
+    await kv.set(["farms", farmId], true);
+  },
+  // Every farm this server holds, for the nightly record checks. The index is
+  // written on setFarm and on every push, so farms made before it existed join
+  // it the first time a phone syncs.
+  async listFarms() {
+    const out = [];
+    for await (const e of kv.list({ prefix: ["farms"] })) out.push(e.key[1]);
+    return out;
+  },
 
   async getMember(farmId, memberId) { return (await kv.get(["farm", farmId, "member", memberId])).value; },
   async listMembers(farmId) {
@@ -16189,6 +17298,7 @@ const store = {
   },
 
   async appendEvents(farmId, events) {
+    if (events.length) await kv.set(["farms", farmId], true);
     const countKey = ["farm", farmId, "count"];
     let accepted = 0, skipped = 0;
     for (const event of events) {
@@ -16233,5 +17343,14 @@ let rulesUrl = null;
 try { rulesUrl = Deno.env.get("RULES_URL") || null; } catch { /* no env access */ }
 rulesFrom(rulesUrl, new URL("../rules/douvalue_rules_rev5_1.json", import.meta.url).href, "https://samebimo10-cpu.github.io/DouValue-Farms/rules/douvalue_rules_rev5_1.json");
 await serverRules();
+
+// FR-XCHK-01: the record checks, once a night per farm, from 02:00 farm time.
+// Hourly, so a missed run is caught up. Deno Deploy runs Deno.cron; elsewhere
+// it needs the cron unstable flag, which deno.json turns on.
+if (typeof Deno.cron === "function") {
+  Deno.cron("record checks", "5 * * * *", async () => {
+    await runDueChecks(store, await store.listFarms());
+  });
+}
 
 Deno.serve((req) => handleRequest(req, store));

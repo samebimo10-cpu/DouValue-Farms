@@ -15,12 +15,11 @@ export async function seedSampleFarm(store) {
   const pin = await hashPin('1234');
 
   const people = [
-    { id: 'sp_owner', name: 'Ebimo Sam', role: 'ceo', phone: '08030000000', dailyRate: 0 },
-    { id: 'sp_ada', name: 'Ada Briggs', role: 'manager', phone: '08030000001', dailyRate: 0 },
-    { id: 'sp_tamuno', name: 'Tamuno George', role: 'supervisor', phone: '08030000002', dailyRate: 5000 },
-    { id: 'sp_chidi', name: 'Chidi Nwosu', role: 'agronomist', phone: '08030000003', dailyRate: 6000 },
-    { id: 'sp_emeka', name: 'Emeka Okoro', role: 'hand', phone: '08030000004', dailyRate: 3500 },
-    { id: 'sp_blessing', name: 'Blessing Amadi', role: 'hand', phone: '08030000005', dailyRate: 3500 },
+    { id: 'sp_owner', name: 'Ebimo Sam', role: 'ceo', phone: '08030000000' },
+    { id: 'sp_ada', name: 'Ada Briggs', role: 'manager', phone: '08030000001' },
+    { id: 'sp_tamuno', name: 'Tamuno George', role: 'supervisor', phone: '08030000002' },
+    { id: 'sp_emeka', name: 'Emeka Okoro', role: 'hand', phone: '08030000004' },
+    { id: 'sp_blessing', name: 'Blessing Amadi', role: 'hand', phone: '08030000005' },
   ];
 
   const plots = [
@@ -44,6 +43,9 @@ export async function seedSampleFarm(store) {
   const events = [
     { type: 'settings.update', payload: { farmName: 'DouValue Farms Limited', location: 'Port Harcourt, Rivers State' } },
     ...people.map((p) => ({ type: 'person.upsert', payload: { ...p, pinHash: pin } })),
+    // FR-COST-05 — the Owner's daily rate per position, so labour cost per zone has something to show.
+    ...[['hand', 3500], ['supervisor', 5000]].map(([role, perDay]) => ({
+      type: 'rate.set', by: 'sp_owner', payload: { role, perDay } })),
     ...plots.map((p) => ({ type: 'plot.upsert', payload: p })),
     ...cycles.map((c) => ({ type: 'cycle.start', payload: c })),
   ];
@@ -208,7 +210,7 @@ export async function seedSampleFarm(store) {
   // can be closed, and the opening stock has to be set before anything is issued
   // out of it. So setup events are dated well before the history they support,
   // and everything else takes the date it actually carries.
-  const SETUP_TYPES = new Set(['settings.update', 'person.upsert', 'plot.upsert', 'input.upsert', 'zone.assign']);
+  const SETUP_TYPES = new Set(['settings.update', 'person.upsert', 'plot.upsert', 'input.upsert', 'zone.assign', 'rate.set']);
   const setupAt = new Date(addDays(today, -365)).toISOString();
 
   const stamped = events.map((e) => {

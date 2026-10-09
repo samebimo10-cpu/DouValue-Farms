@@ -154,6 +154,6 @@ test('…but only the generator\'s shape: a hand still cannot write a task of th
 });
 
 test('the server\'s list of generated kinds is the generator\'s list', () => {
-  const app = [...OPERATIONS, ...NURSERY_OPERATIONS].map((o) => o.kind).concat('follow_up').sort();
+  const app = [...OPERATIONS, ...NURSERY_OPERATIONS].map((o) => o.kind).concat('follow_up', 'respray').sort();
   assert.deepEqual([...core.GENERATED_TASK_KINDS].sort(), app);
 });

@@ -266,7 +266,6 @@ function openPositionSheet(ctx, id) {
     + field('Which role?', select('role', [
       { value: 'hand', label: 'Greenhouse Hand' },
       { value: 'supervisor', label: 'Field Supervisor (2IC)' },
-      { value: 'agronomist', label: 'Agronomist' },
       { value: 'manager', label: 'Farm Manager' },
       { value: 'ceo', label: 'Owner' },
     ], position ? position.role : 'hand'))

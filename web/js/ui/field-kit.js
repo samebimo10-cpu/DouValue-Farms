@@ -247,7 +247,7 @@ export function callSupervisor(state) {
   const supervisor = Object.values(state.people || {})
     .filter((p) => p.active !== false && p.phone)
     .sort((a, b) => {
-      const rank = { supervisor: 0, manager: 1, agronomist: 2 };
+      const rank = { supervisor: 0, manager: 1 };
       return (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
     })[0];
   if (!supervisor) return '';
