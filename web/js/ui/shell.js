@@ -818,6 +818,8 @@ export async function startShell(store) {
     const hit = findAction(e.target);
     if (!hit) return;
     if (hit.el.tagName === 'A') return;
+    // A select acts on the choice, not on the tap that opens it (below).
+    if (hit.el.tagName === 'SELECT') return;
     e.preventDefault();
     const view = routes.get(routeKey());
     const handler = (view && view.actions && view.actions[hit.act]) || shellActions[hit.act];
@@ -842,6 +844,25 @@ export async function startShell(store) {
     } catch (err) {
       console.error(err);
       toast(err.message || 'That did not save', true);
+    }
+  });
+
+  // A <select data-act> runs its action when the choice is made. On a phone
+  // the picker sends no click after the choice, so waiting for a click left
+  // the form showing the first option's bed — and saving under it, past that
+  // bed's own PHI (FR-TREAT-02) — and the spray form's dose and waiting-period
+  // hints for the first product.
+  document.addEventListener('change', async (e) => {
+    const el = e.target.closest('select[data-act]');
+    if (!el) return;
+    const view = routes.get(routeKey());
+    const handler = (view && view.actions && view.actions[el.dataset.act]) || shellActions[el.dataset.act];
+    if (!handler) return;
+    try {
+      await handler(ctx, el, el.dataset);
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'That did not work', true);
     }
   });
 
