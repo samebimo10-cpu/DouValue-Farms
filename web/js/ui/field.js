@@ -2,7 +2,7 @@
 
 import {
   badge, bar, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
-  input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
+  input, more, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
 import { activeCycles, can, closedCycles, cycleLabel } from '../store.js';
 import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, waterDemandMmPerDay } from '../domain/crops.js';
@@ -18,7 +18,7 @@ import { isNursery } from '../domain/farm.js';
 import { batchList } from '../domain/nursery.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
-import { confirmSummary, numberField, phraseChips } from './field-kit.js';
+import { confirmSummary, numberField, phraseChips, sheetSubmit } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -516,9 +516,13 @@ function gateSummary(state, today) {
 }
 
 function openScoutSheet(ctx, cycleId) {
+  // docs/simplify-pass.md, pass 2. Every box the scouting record has is still
+  // here and open; how to walk the bed is one tap away, and the save button
+  // stays at the foot of the sheet.
   const el = openSheet(`<h2>Scout ${esc(cycleLabel(ctx.state, cycleId))}</h2>`
-    + '<p><small>Walk a diagonal across the bed and look at ten plants properly: undersides of the young '
-    + 'leaves, the growing tip, the fruit, and the soil line. Ten looked at well beats fifty glanced at.</small></p>'
+    + more('How to scout a bed', '<p><small>Walk a diagonal across the bed and look at ten plants properly: '
+      + 'undersides of the young leaves, the growing tip, the fruit, and the soil line. Ten looked at well '
+      + 'beats fifty glanced at.</small></p>', { id: 'scout.method' })
     + '<form data-act="save-scout">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     // FR-SCOUT-01. The counted pest and the number are what the thresholds
@@ -529,8 +533,8 @@ function openScoutSheet(ctx, cycleId) {
       'Only the ones with action thresholds are listed. Anything else goes in the notes.')
     + field('Count on the sticky trap', numberField('trapCount'),
       'Since the last check. Leave blank if there is no trap in this zone.')
-    + field('Average per plant, from ten plants', numberField('perPlant'),
-      'Count on ten plants and put the average here.')
+    // "Count on ten plants and put the average here" was the hint; the label says it.
+    + field('Average per plant, counted on ten plants', numberField('perPlant'))
     + field('What did you find?', input('finding', { placeholder: 'e.g. aphids on young leaves, 3 plants' }),
       'Leave empty if the bed looked clean.')
     + field('How many of the ten plants were affected?', select('affected',
@@ -542,9 +546,14 @@ function openScoutSheet(ctx, cycleId) {
       'Borers only. Over ten plants with holes goes straight to the Owner.')
     + field('Anything else', textarea('note', { placeholder: 'optional' }))
     + phraseChips('scout', 'finding')
-    + photoField('Photo of what you found', 'A picture of the leaf or the fruit is worth more than a description.')
-    + '<button class="btn-block btn-lg" type="submit">Save scouting</button></form>'
-    + note('info', 'Not sure what you are looking at?', 'Use the Clinic. It asks what you can see and narrows it down.'));
+    + photoField('Photo of what you found')
+    + more('Why a photo', '<p><small>A picture of the leaf or the fruit is worth more than a description.'
+      + '</small></p>', { id: 'scout.photo-why' })
+    + sheetSubmit('Save scouting', 'scout')
+    + '</form>'
+    // Not sure what it is: the Clinic, one tap, below the form rather than in it.
+    + `<div style="margin-top:12px" data-moved="scout.clinic">${button('Not sure what it is? Open the Clinic', 'go',
+      { cls: 'btn-quiet btn-block', data: { to: '#/clinic' } })}</div>`);
   bindPhoto(el);
 }
 

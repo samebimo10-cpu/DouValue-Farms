@@ -237,6 +237,15 @@ export function bindDraft(container, key) {
 }
 
 /**
+ * FR-SIMP-08 — a form's save button, kept in reach at the foot of its sheet
+ * however long the form is, and marked as the screen's main action.
+ */
+export function sheetSubmit(label, screen) {
+  return `<div class="sticky-actions"><button class="btn-block btn-lg" type="submit" `
+    + `data-main-action="${esc(screen)}">${esc(label)}</button></div>`;
+}
+
+/**
  * UX-22 — the Field Supervisor, one tap away.
  *
  * A hand who finds something they do not understand should be able to ask

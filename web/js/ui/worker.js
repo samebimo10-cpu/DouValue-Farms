@@ -19,7 +19,7 @@ import { myWork } from '../domain/assignments.js';
 import { namesLine, recipientsFor, reportsBy, roleTitle, WHERE_BY_ID } from '../domain/sickplant.js';
 import { workTabs } from './farm.js';
 import {
-  bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, tag, taskStatus,
+  bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, sheetSubmit, tag, taskStatus,
 } from './field-kit.js';
 import {
   overThreshold, readCounts, TRAP_TASKS, trapCountRecords, trapPests, trapZones,
@@ -353,18 +353,20 @@ function startBlock(task) {
 }
 
 function openProofSheet(ctx, task, verdict) {
+  // docs/simplify-pass.md, pass 2: what the photo must show and why stays one
+  // tap away; the photo, the line and Done are the job.
   const el = openSheet(`<h2>${esc(task.title || 'This check')}</h2>`
     + note('info', verdict.why, `<small>${esc(verdict.fix)}</small>`)
     + '<form data-act="save-proof">'
     + `<input type="hidden" name="taskId" value="${esc(task.id)}">`
-    + photoField('Photograph what you checked',
-      'The trap, or the plants you looked at. Taken now, in the app — a picture from the gallery '
-      + 'proves the bed was fine earlier, not that it is fine now.')
+    + photoField('Photograph what you checked')
+    + more('Why a photo taken now', '<p><small>The trap, or the plants you looked at. Taken now, in the '
+      + 'app — a picture from the gallery proves the bed was fine earlier, not that it is fine now.'
+      + '</small></p>', { id: 'scout.photo-why' })
     + field('What did you see?', textarea('note', { rows: 2,
-      placeholder: 'e.g. traps replaced, a few thrips on the GH-01 trap' }),
-      'A line is enough. It goes on the record with the picture.')
+      placeholder: 'A line is enough, e.g. traps replaced, a few thrips on the GH-01 trap' }))
     + phraseChips(task.kind, 'note')
-    + '<button class="btn-block btn-lg" type="submit">Done</button>'
+    + sheetSubmit('Done', 'scout-proof')
     + '</form>'
     // UX-22: somebody to ask, from the screen you are standing on.
     + `<div style="margin-top:12px">${callSupervisor(ctx.state)}</div>`);
@@ -395,6 +397,11 @@ function openTrapSheet(ctx, task) {
       + empty('🪤', 'No traps to count yet', 'Traps are counted in the nursery and wherever a crop is growing.'));
     return;
   }
+  // docs/simplify-pass.md, pass 2. Every pest with a trap threshold stays
+  // open on the form: an aphid count left behind a tap is an alert that never
+  // opens (FR-SCOUT-03). What moved is the reasoning around them.
+  const countField = (p) => field(`${p.name} on the trap${p.required ? '' : ' (if any)'}`,
+    numberField(`count_${p.id}`), p.required ? 'Count them on one card. None? Put 0.' : 'Empty if not counted.');
   const el = openSheet(`<h2>${esc(task ? task.title : t('today.trapCount'))}</h2>`
     + '<form data-act="save-trapcount">'
     + `<input type="hidden" name="taskId" value="${esc(task ? task.id : '')}">`
@@ -403,18 +410,15 @@ function openTrapSheet(ctx, task) {
       ? ''
       : field('Which zone is the trap in?', select('zoneId',
         zones.map((z) => ({ value: z.id, label: z.name || z.id })), zones.length ? zones[0].id : '')))
-    + trapPests(state.settings).map((p) => field(
-      `${p.name} on the trap${p.required ? '' : ' (if any)'}`,
-      numberField(`count_${p.id}`),
-      p.required ? 'Count them on one card. None? Put 0.' : 'Leave empty if you did not count them.',
-    )).join('')
-    + photoField(task ? 'Photograph the trap' : 'Photo of the trap',
-      task
-        ? 'Taken now, in the app, before you touch it. A picture from the gallery proves the trap was fine earlier, not now.'
-        : 'Not required, but a picture of the card settles any question later.')
+    + trapPests(state.settings).map(countField).join('')
+    + photoField(task ? 'Photograph the trap' : 'Photo of the trap (if you can)')
+    + more('Why a photo', `<p><small>${task
+      ? 'Taken now, in the app, before you touch it. A picture from the gallery proves the trap was fine earlier, not now.'
+      : 'Not required, but a picture of the card settles any question later.'}</small></p>`,
+    { id: 'trap.photo-why' })
     + field('What did you see?', textarea('note', { rows: 2, placeholder: 'e.g. trap full, replaced it' }))
     + phraseChips('trap', 'note')
-    + '<button class="btn-block btn-lg" type="submit">Save the count</button>'
+    + sheetSubmit('Save the count', 'trap')
     + '</form>'
     + `<div style="margin-top:12px">${callSupervisor(state)}</div>`);
   bindPhoto(el);
