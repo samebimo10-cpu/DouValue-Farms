@@ -7,4 +7,4 @@
 // It is the address the server gave when it was deployed, such as
 // 'https://douvalue-farm.deno.net'. It is not a secret: every phone on the farm
 // is told it anyway.
-export const FARM_SERVER = '';
+export const FARM_SERVER = 'https://douvalue-sync-2.samebimo10-cpu69.deno.net';
