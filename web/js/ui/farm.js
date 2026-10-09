@@ -26,10 +26,16 @@ import { tag } from './field-kit.js';
  */
 export function workSwitch(user, here) {
   if (!hasFarmView(user)) return '';
+  return `<div class="card tight work-switch">${workTabs(user, here)}</div>`;
+}
+
+/** The two tabs on their own, for a screen that sets them inside another card. */
+export function workTabs(user, here) {
+  if (!hasFarmView(user)) return '';
   const tab = (hash, label) => `<button class="chip ${here === hash ? 'on' : ''}" data-act="go" `
     + `data-to="${hash}" aria-pressed="${here === hash}">${esc(label)}</button>`;
-  return `<div class="card tight work-switch" role="group" aria-label="Which view">`
-    + tab('#/today', 'My work') + ' ' + tab('#/farm', 'The farm') + '</div>';
+  return `<span class="work-switch" role="group" aria-label="Which view">`
+    + tab('#/today', 'My work') + ' ' + tab('#/farm', 'The farm') + '</span>';
 }
 
 const holdersLine = (h) => {

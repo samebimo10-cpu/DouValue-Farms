@@ -12,7 +12,9 @@ import {
   signOutDevice, statusLine, syncNow, verifyPin,
 } from '../sync.js';
 import { refusalsFor } from '../domain/refusals.js';
-import { isoDate } from '../util.js';
+import { friendlyDate, isoDate } from '../util.js';
+import { seasonOn } from '../domain/climate.js';
+import { zonesHeldBy } from '../domain/assignments.js';
 import { applyPhrase, buzz, callSupervisor, stepCount } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
 
@@ -328,6 +330,7 @@ const PARENT_OF = {
   '#/kpis': '#/dashboard',
   '#/shifts': '#/today',
   '#/sick-plant': '#/today',
+  '#/my-reports': '#/today',
   '#/learn': '#/today',
   '#/learn/card': '#/learn',
   '#/farm': '#/today',
@@ -478,11 +481,22 @@ export function render() {
   if (view.mounted) view.mounted(ctx);
 }
 
-function accountSheet() {
-  const user = ctx.store.user;
-  const state = ctx.store.state;
+export function accountSheet(c = ctx) {
+  const user = c.store.user;
+  const state = c.store.state;
   const role = ROLES[user.role];
+  // docs/simplify.md: the date and the season left the top of My work (category
+  // 4 there — the phone already shows the date) and are read here instead.
   return `<h2>${esc(user.name)}</h2><p>${badge(role?.name || user.role)} <small>${esc(role?.blurb || '')}</small></p>`
+    + `<p data-moved="home.date-season"><small>${esc(friendlyDate(isoDate()))} — ${esc(seasonOn(isoDate()).label)}</small></p>`
+    // Moved from My work too: the zones this person holds (FR-ROLE-05/07).
+    + (() => {
+      const zones = zonesHeldBy(state, user.id);
+      return zones.length
+        ? `<p data-moved="home.zones"><small>Your zones: ${zones.map((z) => `<b>${esc(z.zone.name)}</b>`
+          + (z.holding === 'backup' ? ' (backup)' : '')).join(', ')}</small></p>`
+        : '';
+    })()
     + `<p><small>Signed in on this phone. ${esc(state.log.length)} records stored. `
     + `${esc(statusLine().text)}.</small></p>`
     + '<div class="field"><label>Language</label>'

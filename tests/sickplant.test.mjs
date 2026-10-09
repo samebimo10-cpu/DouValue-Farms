@@ -23,7 +23,7 @@ const dx = await load('domain/diagnose.js');
 const { exceptions } = await load('domain/digest.js');
 const { diagnoseView, clinicView } = await load('ui/clinic.js');
 const { sickPlantView } = await load('ui/sickplant.js');
-const { todayView } = await load('ui/worker.js');
+const { todayView, myReportsView } = await load('ui/worker.js');
 const { alertsView } = await load('ui/alerts.js');
 const core = await import(new URL('../server/core.mjs', import.meta.url).href);
 
@@ -152,9 +152,12 @@ test('FR-DIAG-08: the report ends by naming who it went to', () => {
   // A zone nobody supervises goes to every supervisor.
   const other = sp.composeReport(state, 'u_hand', answers({ zoneId: 'gh4' }), { id: 'r2', now: T0 });
   assert.deepEqual(other.payload.sentTo.sort(), ['u_mgr', 'u_sup', 'u_sup2']);
-  // The names stay on the record for the hand to read back.
+  // The names stay on the record for the hand to read back: on "Your
+  // sick-plant reports", one tap from My work (docs/simplify-pass.md, Home).
   const after = store.reduce(farm([reportEvent(state)]));
-  const html = todayView.render(ctxFor(after, after.people.u_hand));
+  const home = todayView.render(ctxFor(after, after.people.u_hand));
+  assert.match(home, /data-to="#\/my-reports"/, 'My work links to the list');
+  const html = myReportsView.render(ctxFor(after, after.people.u_hand));
   assert.match(html, /Sent to Tamuno West \(Field Supervisor\) and Ada Briggs \(Farm Manager\)/);
 });
 
@@ -259,9 +262,11 @@ test('FR-DIAG-10: the reporter sees the confirmed answer with their own photo', 
   // Recorded but not confirmed: a match is not an answer, so the hand sees none.
   const before = store.reduce(log);
   assert.equal(sp.reportsBy(before, 'u_hand')[0].result, null);
-  const waiting = todayView.render(ctxFor(before, before.people.u_hand));
-  assert.ok(!/Acid soil/.test(waiting), 'an unconfirmed diagnosis is not shown to the reporter');
-  assert.match(waiting, /Waiting for the answer/);
+  for (const view of [todayView, myReportsView]) {
+    const waiting = view.render(ctxFor(before, before.people.u_hand));
+    assert.ok(!/Acid soil/.test(waiting), 'an unconfirmed diagnosis is not shown to the reporter');
+  }
+  assert.match(myReportsView.render(ctxFor(before, before.people.u_hand)), /Waiting for the answer/);
 
   // Confirmed by the Farm Manager — not the supervisor who ran it.
   const after = store.reduce([...log, ev('c1', 'diagnosis.confirm', {
