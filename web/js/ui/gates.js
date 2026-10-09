@@ -14,7 +14,7 @@
 
 import {
   badge, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
-  input, note, openSheet, readForm, select, textarea, toast,
+  input, more, note, openSheet, readForm, select, textarea, toast,
 } from './kit.js';
 import { can } from '../store.js';
 import { peekRules } from '../rules.js';
@@ -57,6 +57,7 @@ export const gatesView = {
     const row = board.find((r) => r.zone.id === openZone);
 
     return head(ctx, blocked)
+      + (isNursery(row.zone) ? '' : nextStep(ctx, row))
       + boardCard(board)
       + (isNursery(row.zone) ? nurseryPanel(ctx, row.zone) : zonePanel(ctx, row))
       + evidence(ctx, row.zone.id);
@@ -165,31 +166,70 @@ function head(ctx, blocked) {
     cardHead('Gates', blocked.length
       ? badge(`${blocked.length} blocked`, 'danger')
       : badge('all clear', 'ok'))
-    + '<p><small>Gate 0 to Gate 4 from the rules, zone by zone. Nothing is transplanted into ground '
-    + 'that has not passed Gate 0 and Gate 1, and nothing is sprayed without a confirmed diagnosis '
-    + 'behind it. These are the four things that cost Season 1.</small></p>'
-    + supervisionBanner(ctx.state, 'gate'),
+    + supervisionBanner(ctx.state, 'gate')
+    // docs/simplify-pass/08-gates.md: what the gates are, one tap away.
+    + more('What the gates are', '<p><small>Gate 0 to Gate 4 from the rules, zone by zone. Nothing is '
+      + 'transplanted into ground that has not passed Gate 0 and Gate 1, and nothing is sprayed without a '
+      + 'confirmed diagnosis behind it. These are the four things that cost Season 1.</small></p>',
+    { id: 'gates.about' }),
     { tight: true },
   );
+}
+
+/**
+ * FR-SIMP-08 — what to do next for the open zone, under the heading: its first
+ * condition still blocking, and the first thing that records it. The same
+ * button stays on its gate below; this is the screen's main action. Nothing
+ * about the gate changes: it is read from the same model the gate card is.
+ */
+function nextStep(ctx, row) {
+  const model = row.model || gateModel(ctx.state, row.zone.id, opts());
+  for (const g of model.gates) {
+    const blocking = g.conditions.find(isBlocking);
+    if (!blocking) continue;
+    const first = /<button [\s\S]*?<\/button>/.exec(gateActions(ctx, g, row, model));
+    if (!first) continue;
+    return card(
+      `<p style="margin:0 0 8px"><b>Next for ${esc(row.zone.name)}:</b> `
+      + `<small>${icon(blocking.state)} ${esc(blocking.label || blocking.name)} (${esc(g.id)})</small></p>`
+      + first[0].replace('<button ', '<button data-main-action="gates" '),
+      { tight: true },
+    );
+  }
+  return '';
 }
 
 const icon = (s) => (GATE_STATE[s] || GATE_STATE.unknown).icon;
 const tone = (s) => (GATE_STATE[s] || GATE_STATE.unknown).tone;
 
-/** Every zone, one line each, with a chip per gate. Tap to open it. */
+/**
+ * Every zone, one line each, with a chip per gate. Tap to open it.
+ *
+ * A zone that is blocked, on an override, or open now is on the screen; the
+ * zones with nothing to clear are one tap away under "n zones clear"
+ * (docs/simplify-pass/08-gates.md). Every zone is still listed.
+ */
 function boardCard(board) {
+  const line = (r) => {
+    const chips = r.model
+      ? r.model.gates.map((g) => badge(`${icon(g.state)} ${g.id}`, tone(g.state))).join(' ')
+      : badge('nursery', 'muted');
+    const state = isNursery(r.zone) ? '' : r.model && r.model.preGates ? badge(r.model.preGates.label, 'muted')
+      : r.ok ? badge('clear to plant', 'ok')
+      : badge(`${r.blocking.length} to clear`, 'danger');
+    return `<li data-act="gates-zone" data-id="${esc(r.zone.id)}"${r.zone.id === openZone ? ' class="on"' : ''}>`
+      + `<div class="grow"><b>${esc(r.zone.name)}</b><small>${esc(zoneTypeLabel(r.zone))}`
+      + `${r.planted ? ' · planted' : ' · empty'}</small><div>${chips}</div></div>${state}</li>`;
+  };
+  const needsLook = (r) => r.zone.id === openZone || !r.ok || (r.overridden || []).length;
+  const shown = board.filter(needsLook);
+  const clear = board.filter((r) => !needsLook(r));
   return card(
-    '<ul class="list">' + board.map((r) => {
-      const chips = r.model
-        ? r.model.gates.map((g) => badge(`${icon(g.state)} ${g.id}`, tone(g.state))).join(' ')
-        : badge('nursery', 'muted');
-      const state = isNursery(r.zone) ? '' : r.model && r.model.preGates ? badge(r.model.preGates.label, 'muted')
-        : r.ok ? badge('clear to plant', 'ok')
-        : badge(`${r.blocking.length} to clear`, 'danger');
-      return `<li data-act="gates-zone" data-id="${esc(r.zone.id)}"${r.zone.id === openZone ? ' class="on"' : ''}>`
-        + `<div class="grow"><b>${esc(r.zone.name)}</b><small>${esc(zoneTypeLabel(r.zone))}`
-        + `${r.planted ? ' · planted' : ' · empty'}</small><div>${chips}</div></div>${state}</li>`;
-    }).join('') + '</ul>',
+    '<ul class="list">' + shown.map(line).join('') + '</ul>'
+    + (clear.length
+      ? more(`${clear.length} zone${clear.length === 1 ? '' : 's'} clear`,
+        '<ul class="list">' + clear.map(line).join('') + '</ul>', { id: 'gates.clear-zones' })
+      : ''),
   );
 }
 
@@ -211,12 +251,12 @@ function zonePanel(ctx, row) {
   if (model.preGates) {
     const ev = model.preGates.evidence;
     out += card(note('info', `${model.preGates.label}`,
-      `<small>Transplanted ${esc(model.preGates.transplantDate)}, before the app was in use here, and set up on `
-      + `${esc(model.preGates.setupDate)}. This is not a violation and needs no override: there was no gate to pass `
-      + 'on the day it went in. Each gate below still says what it found. Gate 4 at the end of this cycle is '
-      + 'judged as normal.</small>'
-      + (ev.length ? `<ul>${ev.map((e) => `<li><small>${esc(evidenceLine(e))}</small></li>`).join('')}</ul>`
-        : '<p><small>No gate evidence was entered on setup.</small></p>')), { tight: true });
+      `<small>Transplanted ${esc(model.preGates.transplantDate)}. Not a violation; needs no override.</small>`
+      + more('What this means, and the evidence entered', `<small>Transplanted before the app was in use here, `
+        + `and set up on ${esc(model.preGates.setupDate)}. There was no gate to pass on the day it went in. Each `
+        + 'gate below still says what it found. Gate 4 at the end of this cycle is judged as normal.</small>'
+        + (ev.length ? `<ul>${ev.map((e) => `<li><small>${esc(evidenceLine(e))}</small></li>`).join('')}</ul>`
+          : '<p><small>No gate evidence was entered on setup.</small></p>'), { id: 'gates.pre-gates' })), { tight: true });
   } else if (row.planted && !row.ok) {
     out += card(note('danger', 'Already planted behind a closed gate',
       '<small>This went in without every transplant condition passing. Treat what is in the ground as '
@@ -224,16 +264,28 @@ function zonePanel(ctx, row) {
   }
 
   for (const g of model.gates) {
+    // A condition still to clear is on the screen; one that has passed is
+    // one tap away under "n passed". When, what it stops, its evidence, the
+    // rules source and the gate's note are under "About this gate".
+    const passed = g.conditions.filter((c) => c.state === 'pass');
+    const rest = g.conditions.filter((c) => c.state !== 'pass');
+    const about = [g.when, g.blocksAction ? `Stops ${g.blocksAction}.` : '', g.evidence ? `Evidence: ${g.evidence}.` : '',
+      g.source ? `Source: ${g.source}.` : '', g.note || ''].filter(Boolean);
+    const actions = gateActions(ctx, g, row, model);
     out += card(
-      cardHead(`${g.id} — ${esc(g.name)}`, badge(`${icon(g.state)} ${(GATE_STATE[g.state] || {}).label || g.state}`, tone(g.state)))
-      + `<p><small>${esc(g.when || '')}${g.blocksAction ? ` · stops ${esc(g.blocksAction)}` : ''}`
-      + `${g.evidence ? ` · evidence: ${esc(g.evidence)}` : ''}${g.source ? ` · ${esc(g.source)}` : ''}</small></p>`
+      cardHead(`${g.id} — ${g.name}`, badge(`${icon(g.state)} ${(GATE_STATE[g.state] || {}).label || g.state}`, tone(g.state)))
       + (g.why ? `<p><small>${esc(g.why)}</small></p>` : '')
       + (g.subject && g.id === 'G4' ? `<p><small>About the cycle planted ${esc(g.subject.transplantDate || '?')}`
         + `${g.subject.closedAt ? `, closed ${esc(g.subject.closedAt)}` : ''}.</small></p>` : '')
-      + g.conditions.map((c) => conditionRow(c, row.zone.id, g, owner)).join('')
-      + gateActions(ctx, g, row, model)
-      + (g.note ? `<p><small>${esc(g.note)}</small></p>` : ''),
+      + rest.map((c) => conditionRow(c, row.zone.id, g, owner)).join('')
+      + actions
+      + (passed.length
+        ? more(`${passed.length} passed`, passed.map((c) => conditionRow(c, row.zone.id, g, owner)).join(''),
+          { id: 'gates.passed' })
+        : '')
+      + (about.length
+        ? more('About this gate', `<p><small>${about.map(esc).join(' ')}</small></p>`, { id: 'gates.gate-about' })
+        : ''),
     );
   }
   if (isBagZone(row.zone) || model.media === 'bag') out += mediaCard(ctx, row.zone);
@@ -357,8 +409,11 @@ function evidence(ctx, zoneId) {
 
   return card(
     cardHead('What the gates are reading')
+    // The tests are read when a verdict is questioned: one tap. The topsoil
+    // batches stay, because "Put it into a zone" is something to do.
     + (tests.length
-      ? '<ul class="list">' + tests.map((t) => {
+      ? `<details class="more" data-moved="gates.tests"><summary>Soil and media tests (${tests.length})</summary>`
+        + '<div class="more-body"><ul class="list">' + tests.map((t) => {
         const zone = ctx.state.plots[t.zoneId];
         const where = zone ? zone.name : t.batchId ? `topsoil batch ${t.batchId.slice(-4)}`
           : t.mediaBatchId ? `media batch ${batchName((ctx.state.mediaBatches || {})[t.mediaBatchId])}` : 'unknown';
@@ -369,7 +424,7 @@ function evidence(ctx, zoneId) {
           + `${t.nematode ? ` · nematode: ${esc(t.nematode)}` : ''}${t.lab ? ` · ${esc(t.lab)}` : ''}`
           + `${t.beforeCorrection ? ' · taken before liming' : ''}`
           + ` · ${esc(friendlyDate(t.date))}</small></div></li>`;
-      }).join('') + '</ul>'
+      }).join('') + '</ul></div></details>'
       : '<p><small>No soil tests recorded for this zone yet.</small></p>')
     + (batches.length
       ? '<p style="margin-top:12px"><small><b>Topsoil batches</b></small></p><ul class="list">'
@@ -626,7 +681,9 @@ function mediaCard(ctx, zone) {
   const manager = can(ctx.user, 'settings');
   return card(
     cardHead('Media batches', badge('batch → bags → zone', 'muted'))
-    + `<p><small>${esc((bagRules() || {}).why || '')}</small></p>`
+    + ((bagRules() || {}).why
+      ? more('Why batches are tracked', `<p><small>${esc(bagRules().why)}</small></p>`, { id: 'gates.media-why' })
+      : '')
     + refused.map((f) => note('danger', `Fill refused ${f.date}`, `<small>${esc(f.refused.why)}</small>`)).join('')
     + (batches.length ? '<ul class="list">' + batches.map((b) => {
       const st = batchStatus(ctx, b);
@@ -792,9 +849,10 @@ function nurseryPanel(ctx, zone) {
   return `<h2 class="section">${esc(zone.name)} — nursery</h2>`
     + card(
       cardHead('Hygiene rules', badge('Build Rules §11e', 'muted'))
-      + '<p><small>Not a cropping block: nothing is transplanted here. Seedlings are raised, checked twice a '
-      + 'week, and leave only when a batch passes the release check.</small></p>'
-      + `<ul>${hygieneRules(rules).map((r) => `<li><small>${esc(r)}</small></li>`).join('')}</ul>`,
+      + `<ul>${hygieneRules(rules).map((r) => `<li><small>${esc(r)}</small></li>`).join('')}</ul>`
+      + more('What the nursery is', '<p><small>Not a cropping block: nothing is transplanted here. Seedlings are '
+        + 'raised, checked twice a week, and leave only when a batch passes the release check.</small></p>',
+      { id: 'gates.nursery-about' }),
     )
     + card(
       cardHead('Seedling batches', badge(`${growing.length} growing`, growing.length ? 'ok' : 'muted'))
@@ -802,14 +860,14 @@ function nurseryPanel(ctx, zone) {
       + (growing.length ? '<ul class="list">' + growing.map((b) => batchRow(ctx, b, senior)).join('') + '</ul>'
         : '<p><small>No batches growing.</small></p>'),
     )
-    + (done.length ? card(cardHead('Released and discarded')
-      + '<ul class="list">' + done.map((b) => '<li><div class="grow">'
+    + (done.length ? card(more(`Released and discarded (${done.length})`,
+      '<ul class="list">' + done.map((b) => '<li><div class="grow">'
         + `<b>${esc(b.label || b.id)}</b><small>${esc(b.cropId || '')} ${esc(b.variety || '')} · `
         + (b.status === 'released'
           ? `released ${esc(b.release.date)} to ${esc((ctx.state.plots[b.release.zoneId] || {}).name || b.release.zoneId)}`
             + (b.usedByCycleId ? ' · planted' : '')
           : esc(b.discardReason || 'discarded'))
-        + '</small></div></li>').join('') + '</ul>') : '');
+        + '</small></div></li>').join('') + '</ul>', { id: 'gates.nursery-done' }), { tight: true }) : '');
 }
 
 function batchRow(ctx, b, senior) {
