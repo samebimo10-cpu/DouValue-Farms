@@ -89,6 +89,21 @@ export async function openPhone() {
       return page.evaluate(`[...document.querySelectorAll('.sheet form input, .sheet form select, .sheet form textarea')]
         .map((e) => e.name).filter(Boolean)`);
     },
+    /** Attach a picture to the photo control on screen, as the camera would. */
+    async attachPhoto(scope = 'document') {
+      await page.evaluate(`(async () => {
+        const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+        const g = c.getContext('2d'); g.fillStyle = '#3a7'; g.fillRect(0, 0, 64, 64);
+        const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.8));
+        const file = new File([blob], 'leaf.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+        const input = ${scope}.querySelector('.photo-input');
+        const dt = new DataTransfer(); dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change'));
+        return true;
+      })()`);
+      await page.waitFor(`!!${scope}.querySelector('#photo-preview img')`, { what: 'the photo to attach' });
+    },
     async close() { await browser.close(); await site.stop(); },
   };
 }

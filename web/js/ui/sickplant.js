@@ -6,7 +6,7 @@
 // and the Farm Manager's work, and it opens from the report this sends
 // (clinic.js). The last screen says, by name, who the report went to.
 
-import { badge, button, card, cardHead, empty, esc, note, toast } from './kit.js';
+import { badge, button, card, cardHead, empty, esc, more, note, toast } from './kit.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { zonesHeldBy } from '../domain/assignments.js';
 import {
@@ -54,7 +54,7 @@ function stepDots() {
 function footer(nextLabel) {
   return '<div class="sticky-actions">'
     + (rep.step > 0 ? button('Back', 'sp-back', { cls: 'btn-ghost' }) : '')
-    + button(nextLabel, 'sp-next', { cls: 'btn-block btn-lg' })
+    + button(nextLabel, 'sp-next', { cls: 'btn-block btn-lg', data: { 'main-action': 'sick-plant' } })
     + '</div>';
 }
 
@@ -112,20 +112,25 @@ function stepHowMany() {
   );
 }
 
-/** The last screen: who it went to, by name, and whether it raised an alert. */
+/**
+ * The last screen: who it went to, by name, and whether it raised an alert.
+ * docs/simplify-pass/03-sick-plant.md: how the alert climbs, and where the
+ * answer will appear, are one tap away; the names and the alert are not.
+ */
 function sentScreen() {
   const s = rep.sent;
   return card(
     empty(s.serious ? '🚨' : '✅', 'Report sent', `Sent to ${s.names}.`)
     + (s.serious
-      ? note('danger', 'Alert raised',
-        `<small>Because of ${esc(s.reasons.join(', '))}, this went up as an alert at once. `
-        + 'The Farm Manager has it now. If nobody picks it up in 4 hours it goes to the Field '
-        + 'Supervisor, and if it is not closed in 12 hours, to the Owner.</small>')
-      : '<p><small>They will look at the plant and work out what it is. You will see the answer '
-        + 'here on My work, next to your photo.</small></p>')
+      ? note('danger', 'Alert raised', `<small>Because of ${esc(s.reasons.join(', '))}.</small>`
+        + more('What happens next', '<small>This went up as an alert at once. The Farm Manager has it '
+          + 'now. If nobody picks it up in 4 hours it goes to the Field Supervisor, and if it is not '
+          + 'closed in 12 hours, to the Owner.</small>', { id: 'sick-plant.ladder' }))
+      : more('What happens next', '<p><small>They will look at the plant and work out what it is. '
+        + 'You will see the answer on My work, next to your photo, and every report you sent under '
+        + '"Your sick-plant reports".</small></p>', { id: 'sick-plant.next' }))
     + '<div class="row wrap">'
-    + button('Back to My work', 'go', { cls: 'btn-block btn-lg', data: { to: '#/today' } })
+    + button('Back to My work', 'go', { cls: 'btn-block btn-lg', data: { to: '#/today', 'main-action': 'sick-plant-sent' } })
     + button('Report another', 'sp-restart', { cls: 'btn-ghost btn-block' })
     + '</div>',
   );
