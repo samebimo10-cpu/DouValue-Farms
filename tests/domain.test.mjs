@@ -378,13 +378,56 @@ test('stock is reduced by what was issued', () => {
   assert.equal(s.inputs.i1.qty, 7.5);
 });
 
-test('a shift produces hours and pay', () => {
+test('a shift produces hours and days, and no pay', () => {
   const s = store.reduce(sampleLog);
   assert.equal(s.attendance[0].hours, 8);
-  const pay = store.payrollBetween(s, '2026-09-01', '2026-09-30');
-  assert.equal(pay.length, 1);
-  assert.equal(pay[0].person.name, 'Emeka');
-  assert.equal(pay[0].pay, 3500);
+  const rows = store.attendanceBetween(s, '2026-09-01', '2026-09-30');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].person.name, 'Emeka');
+  assert.equal(rows[0].days, 1);
+  assert.equal(rows[0].pay, undefined);
+});
+
+// FR-COST-01, FR-COST-05 — labour cost per zone is days worked × the position's rate.
+test('labour cost per zone is days worked times the rate for the position', () => {
+  const day = (d, h) => `2026-09-${d}T${h}:00:00Z`;
+  const log = [
+    ...sampleLog,
+    ev('plot.upsert', { id: 'b2', name: 'Bed 2', areaM2: 600 }, '2026-01-02T08:01:00Z'),
+    ev('cycle.start', { id: 'c2', plotId: 'b2', cropId: 'habanero', transplantDate: '2026-05-01', plants: 900 }, '2026-05-01T08:01:00Z'),
+    ev('rate.set', { role: 'hand', perDay: 4000 }, '2026-01-03T08:00:00Z', 'owner'),
+    // 12th: Emeka picks in both beds, so the day is split between them.
+    ev('attendance.in', { personId: 'p2' }, day(12, '07'), 'p2'),
+    ev('harvest.record', { cycleId: 'c1', kg: 10, date: '2026-09-12' }, day(12, '09'), 'p2'),
+    ev('harvest.record', { cycleId: 'c2', kg: 10, date: '2026-09-12' }, day(12, '11'), 'p2'),
+    ev('attendance.out', { personId: 'p2' }, day(12, '15'), 'p2'),
+    // 13th: clocked in, nothing tied to a zone, holds none: unallocated, not spread.
+    ev('attendance.in', { personId: 'p2' }, day(13, '07'), 'p2'),
+    ev('attendance.out', { personId: 'p2' }, day(13, '15'), 'p2'),
+    // The manager worked too, but there is no rate for that position.
+    ev('attendance.in', { personId: 'p1' }, day(12, '07'), 'p1'),
+    ev('attendance.out', { personId: 'p1' }, day(12, '15'), 'p1'),
+  ];
+  const s = store.reduce(log);
+  const l = store.labourByZone(s, '2026-09-01', '2026-09-30');
+  // 10th: one day in b1. 12th: half in b1, half in b2. 13th: unallocated.
+  assert.equal(l.zones.b1.days, 1.5);
+  assert.equal(l.zones.b1.cost, 6000);
+  assert.equal(l.zones.b2.days, 0.5);
+  assert.equal(l.zones.b2.cost, 2000);
+  assert.deepEqual(l.unallocated, { days: 1, cost: 4000 });
+  assert.equal(l.total, 12000);
+  assert.deepEqual(l.unpriced, [{ role: 'manager', days: 1 }], 'a position with no rate is shown, never priced at zero');
+
+  const costs = store.costsBetween(s, '2026-09-01', '2026-09-30');
+  assert.equal(costs.find((c) => c.category === 'labour').amount, 12000);
+});
+
+test('a phone without the rate table prices no labour at all', () => {
+  const s = store.reduce(sampleLog);
+  assert.equal(store.hasRates(s), false);
+  assert.equal(store.labourByZone(s, '2026-09-01', '2026-09-30').total, 0);
+  assert.equal(store.costsBetween(s, '2026-09-01', '2026-09-30').some((c) => c.category === 'labour'), false);
 });
 
 test('closing a cycle files the actual yield', () => {

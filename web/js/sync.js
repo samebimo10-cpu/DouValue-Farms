@@ -8,7 +8,7 @@
 //
 // What this file adds is identity. Each device holds a token that belongs to one
 // person. The server knows their role and decides what they may read and write,
-// so a farm hand's phone is never sent the wage bill in the first place. A PIN
+// so a farm hand's phone is never sent the books in the first place. A PIN
 // on its own gets nobody in from a new handset: enrolling a device takes the
 // sign-in name and password the CEO made for that person (UX-28).
 

@@ -55,7 +55,7 @@ export const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates'],
   },
 };
 
@@ -235,37 +235,40 @@ export const EVENT_POLICY = {
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
+  // FR-COST-05 — the daily rate per position. The Owner's alone, both ways:
+  // no other phone is sent it, so no other phone can work out what anyone earns.
+  'rate.set':          { write: 'manageRates',   read: 'manageRates' },
 };
 
 /**
- * Wages are the sharp edge. Everyone needs the names and roles of their
- * colleagues for tasks and harvest to make sense, so the record still travels,
- * but what someone earns goes only to the books and to that person themselves.
+ * Everyone needs the names and roles of their colleagues for tasks and harvest
+ * to make sense, so the record travels; a phone number goes only to the books
+ * and to that person. There is no pay in the app (FR-COST-05): a daily rate an
+ * older record still carries is dropped for every reader, its owner included.
  */
 function redactPerson(event, reader) {
   const p = event.payload || {};
   const out = { ...p };
   delete out.pinHash;                                  // never leaves the server
+  delete out.dailyRate;
   // Readers arrive either as a stored member record (id) or as a session
-  // (memberId). Accepting both is what stops "show me my own pay" quietly
+  // (memberId). Accepting both is what stops "show me my own details" quietly
   // failing on the one path that matters, the live server.
   const readerId = reader.memberId || reader.id;
   const ownRecord = p.id && p.id === readerId;
-  if (!ownRecord && !can(reader.role, 'manageMoney')) {
-    delete out.dailyRate;
-    delete out.phone;
-  }
+  if (!ownRecord && !can(reader.role, 'manageMoney')) delete out.phone;
   return { ...event, payload: out };
 }
 
-/** Prices and the wage bill are commercial; crate weights and rates are not. */
+/** Prices are commercial; crate weights and rates are not. Wage fields from before FR-COST-05 go to nobody. */
 function redactSettings(event, reader) {
-  if (can(reader.role, 'manageMoney')) return event;
   const p = { ...(event.payload || {}) };
-  delete p.prices;
-  delete p.seasonality;
   delete p.defaultDailyWage;
   delete p.overtimeRatePerHour;
+  if (!can(reader.role, 'manageMoney')) {
+    delete p.prices;
+    delete p.seasonality;
+  }
   return { ...event, payload: p };
 }
 
@@ -849,7 +852,7 @@ function guardTaskCreate(event, author) {
  * UX-27 — the field-trial sign-off belongs to the Owner.
  *
  * Settings are the Farm Manager's in general, and that is right for crate
- * weights and wages. This one is different: it is the switch that ends
+ * weights and prices. This one is different: it is the switch that ends
  * supervised use of the spray and gate screens, and the person most tempted to
  * throw it early is the manager who finds the confirmation tedious. So the
  * write permission stays where it is and this one field is lifted to the Owner.

@@ -79,7 +79,7 @@ function analysisSection(ctx, today) {
         ? note('info', 'Not enough recorded yet',
           '<small>Record some sales and costs and this works out whether the season is paying.</small>')
         : '<div class="grid">'
-          + stat('Cost to grow', `${naira(e.costPerKg)}/kg`, 'inputs and labour')
+          + stat('Cost to grow', `${naira(e.costPerKg)}/kg`, e.labourPriced ? 'inputs and labour' : 'inputs only, labour not priced')
           + stat('Sold for', `${naira(e.pricePerKg)}/kg`, 'actual sales')
           + stat('Margin', `${naira(e.marginPerKg)}/kg`, e.marginPerKg > 0 ? 'per kilo picked' : 'losing money per kilo')
           + stat('Not yet sold', kg(e.unsoldKg, 0), 'picked but unsold')

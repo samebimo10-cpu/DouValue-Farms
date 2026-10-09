@@ -7,7 +7,7 @@ import {
 import {
   activeCycles, assignableRoles, can, canEditPerson, canRemovePerson, closedCycles,
   costsBetween, cycleLabel, inputsList, inputUsage, openReports, openTasks,
-  payrollBetween, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
+  attendanceBetween, dailyRateFor, hasRates, labourByZone, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
 import {
   bootstrapFarm, checkServer, getAuth, getStatus, isConnected, makePassword, newFarmId,
@@ -99,7 +99,7 @@ export const dashboardView = {
         ? stat('Sold this month', naira(soldThisMonth, true), 'recorded sales')
         : stat('Beds working', String(cycles.length), 'crop cycles on the ground'))
       + (showsMoney
-        ? stat('Spent this month', naira(costsThisMonth, true), 'inputs and labour')
+        ? stat('Spent this month', naira(costsThisMonth, true), hasRates(state) ? 'inputs and labour' : 'inputs')
         : stat('Still to pick', kg(sum(forecasts, (f) => f.forecast.remainingKg), 0), 'across all beds'))
       + (showsMoney
         ? stat('Still on the plants', naira(expectedRemaining, true), 'forecast value')
@@ -342,7 +342,7 @@ export const reportsView = {
       ];
     });
 
-    const pay = payrollBetween(state, from, today);
+    const pay = attendanceBetween(state, from, today);
     const costs = costsBetween(state, from, today);
     const costByCategory = new Map();
     for (const c of costs) costByCategory.set(c.category, (costByCategory.get(c.category) || 0) + c.amount);
@@ -360,7 +360,7 @@ export const reportsView = {
       workByType.set(w.activity, (workByType.get(w.activity) || 0) + (Number(w.hours) || 0));
     }
 
-    // An agronomist may read reports but is not sent sales, costs or wages. Their
+    // An agronomist may read reports but is not sent sales or costs. Their
     // totals would come out as zeroes, which reads as "the farm sold nothing"
     // rather than "you were not shown this".
     const showsMoney = can(ctx.user, 'manageMoney');
@@ -371,7 +371,7 @@ export const reportsView = {
         + '<div class="grid">'
         + (showsMoney
           ? stat('Sold', naira(revenue, true), 'recorded sales')
-            + stat('Spent', naira(totalCost, true), 'labour and inputs')
+            + stat('Spent', naira(totalCost, true), hasRates(state) ? 'labour and inputs' : 'inputs')
             + stat('Margin', naira(revenue - totalCost, true),
               revenue > 0 ? `${Math.round(((revenue - totalCost) / revenue) * 100)}% of sales` : '—')
           : stat('Beds', String(cycles.length), 'cycles on record')
@@ -379,7 +379,7 @@ export const reportsView = {
         + stat('Picked', kg(sum(state.harvests.filter((h) => h.date >= from), (h) => h.kg), 0), 'all beds')
         + '</div>'
         + (showsMoney ? '' : note('info', 'The books are not on this phone',
-          '<small>Sales, costs and wages go only to the CEO and the farm manager. Your screens '
+          '<small>Sales and costs go only to the CEO and the farm manager. Your screens '
           + 'show the crop and the work.</small>')),
       )
       + card(cardHead('Yield by bed')
@@ -395,10 +395,8 @@ export const reportsView = {
         : '')
       + card(cardHead('Labour')
         + (pay.length
-          ? table([{ label: 'Person' }, { label: 'Days', num: true }, { label: 'Hours', num: true }]
-              .concat(showsMoney ? [{ label: 'Pay', num: true }] : []),
-            pay.map((r) => [r.person.name, r.days, r.hours]
-              .concat(showsMoney ? [naira(r.pay)] : [])))
+          ? table([{ label: 'Person' }, { label: 'Days', num: true }, { label: 'Hours', num: true }],
+            pay.map((r) => [r.person.name, r.days, r.hours]))
           : '<p><small>No attendance recorded in this period.</small></p>')
         + (workByType.size
           ? '<h3 style="margin-top:14px">Hours by job</h3>' + table([{ label: 'Job' }, { label: 'Hours', num: true }],
@@ -413,6 +411,7 @@ export const reportsView = {
                 `<small>Running balance dips to ${esc(naira(cash.tightest.balance))}. Line up the cash before then, `
                 + 'or move a planting so the picking lands earlier.</small>') : '')
           : '<p><small>Start a cycle to see the forecast.</small></p>')) : '')
+      + (can(ctx.user, 'manageRates') ? labourByZoneCard(state, from, today) : '')
       + card(cardHead('How good is the forecast?')
         + `<p>${esc(accuracy.note)}</p>`
         + (accuracy.rows.length
@@ -459,7 +458,7 @@ export const peopleView = {
         const signIn = !connected || me || p.active === false ? ''
           : p.login ? ` · signs in as ${esc(p.login)}` : ' · <b>no sign-in yet</b>';
         return `<li><div class="grow"><b>${esc(p.name)}</b>`
-          + `<small>${esc(role?.name || p.role)} · ${p.dailyRate ? esc(naira(p.dailyRate)) + ' a day' : 'no rate set'}`
+          + `<small>${esc(role?.name || p.role)}`
           + `${p.active === false ? ' · removed' : ''}${me ? ' · you' : ''}${signIn}</small></div>`
           + (p.role === 'ceo' ? badge('owner', 'ok') : '')
           + (editable
@@ -530,7 +529,7 @@ export const peopleView = {
       const allowed = canRemovePerson(ctx.user, target, ctx.state);
       if (!allowed.ok) { toast(allowed.why, true); return; }
       const ok = await confirmSheet('Remove this person?',
-        `${target.name} will not be able to sign in and will drop off the payroll. `
+        `${target.name} will not be able to sign in. `
         + 'Everything they recorded stays in the farm\'s records.', 'Remove');
       if (!ok) return;
       // On a connected farm the server closes their account too, or their
@@ -579,8 +578,6 @@ function openPersonSheet(ctx, id) {
       'This is what they see when they sign in.')
     + field('Phone', input('phone', { value: p?.phone || '', type: 'tel', placeholder: '080...' }),
       'Used to send them their sign-in on WhatsApp.')
-    + field('Daily rate', input('dailyRate', { type: 'number', min: 0, step: '100',
-      value: p?.dailyRate ?? ctx.state.settings.defaultDailyWage }))
     + (signsIn
       ? (self
         ? '<h3 style="margin-top:16px">Your sign-in, for another phone</h3>'
@@ -692,7 +689,7 @@ async function savePerson(ctx, form) {
       });
       await ctx.store.dispatch('person.upsert', {
         id: result.memberId, name, role: data.role, phone: data.phone || '',
-        dailyRate: Number(data.dailyRate) || 0, active: true, login: result.login,
+        active: true, login: result.login,
       });
       if (self) {
         closeSheet();
@@ -714,7 +711,7 @@ async function savePerson(ctx, form) {
   const payload = {
     id: data.id || uid('person'),
     name, role: data.role, phone: data.phone || '',
-    dailyRate: Number(data.dailyRate) || 0, active: true,
+    active: true,
   };
   if (data.pin) {
     if (!isPin(data.pin)) { toast(`A PIN is ${PIN_MIN} to ${PIN_MAX} digits`, true); return; }
@@ -1063,7 +1060,11 @@ export const moneyView = {
     const expenses = state.expenses.filter((e) => e.date >= from);
     const totalSales = sum(sales, (s) => s.amount);
     const totalExpenses = sum(expenses, (e) => e.amount);
-    const labourCost = sum(payrollBetween(state, from, today), (r) => r.pay);
+    // FR-COST-05: labour is priced from the Owner's rate table, so labour, net
+    // and break-even are the Owner's. Another role's figure would leave labour
+    // out and read as a profit the farm did not make.
+    const ownerBooks = can(ctx.user, 'manageRates');
+    const labourCost = labourByZone(state, from, today).total;
     const cal = calibrationFor(state);
     const expectedKg = sum(activeCycles(state).map((c) => harvestForecast(c, { today, calibration: cal })), (f) => f.totalKg);
     const be = breakEven(totalExpenses + labourCost, Math.round(state.settings.prices.habanero * 0.8), expectedKg);
@@ -1073,8 +1074,10 @@ export const moneyView = {
       + '<div class="grid">'
       + stat('Sales', naira(totalSales, true), `${sales.length} recorded`)
       + stat('Inputs', naira(totalExpenses, true), `${expenses.length} entries`)
-      + stat('Labour', naira(labourCost, true), 'from attendance')
-      + stat('Net', naira(totalSales - totalExpenses - labourCost, true), '')
+      + (ownerBooks
+        ? stat('Labour', naira(labourCost, true), 'days worked × position rate')
+          + stat('Net', naira(totalSales - totalExpenses - labourCost, true), '')
+        : '')
       + '</div>'
       + '<div class="row wrap" style="margin-top:12px">'
       + button('Record a sale', 'open-sale', { icon: '💵' })
@@ -1082,8 +1085,10 @@ export const moneyView = {
       + '</div>',
       { tight: true },
     )
-    + card(cardHead('Break-even') + note(be.verdict === 'comfortable' ? 'ok' : be.verdict === 'loss at this price' ? 'danger' : 'warn',
-      be.verdict, `<small>${esc(be.text)}</small>`))
+    + (ownerBooks
+      ? card(cardHead('Break-even') + note(be.verdict === 'comfortable' ? 'ok' : be.verdict === 'loss at this price' ? 'danger' : 'warn',
+        be.verdict, `<small>${esc(be.text)}</small>`))
+      : '')
     + card(cardHead('Sales')
       + (sales.length
         ? table([{ label: 'Date' }, { label: 'Buyer' }, { label: 'Kg', num: true }, { label: 'Amount', num: true }, { label: 'Per kg', num: true }],
@@ -1156,6 +1161,37 @@ async function saveExpense(ctx, form) {
   toast('Cost recorded');
 }
 
+// --- Labour rates and labour cost (FR-COST-01, FR-COST-05) ---------------
+
+/** The Owner's daily rate per position. Only the Owner's phone renders this, or holds the figures. */
+function ratesCard(ctx) {
+  return card(cardHead('Daily rate by position')
+    + '<p><small>Only you see these. Labour cost per zone is the days each person worked there '
+    + 'times the rate for their position. A position with no rate is shown as unpriced, never as free.</small></p>'
+    + '<form data-act="save-rates">'
+    + ROLE_LIST.map((r) => field(r.name, input(`rate_${r.id}`, {
+      type: 'number', min: 0, step: '100', placeholder: 'not set', value: dailyRateFor(ctx.state, r.id) ?? '',
+    }))).join('')
+    + '<button class="btn-block btn-lg" type="submit">Save rates</button>'
+    + '</form>');
+}
+
+function labourByZoneCard(state, from, to) {
+  const l = labourByZone(state, from, to);
+  const name = (id) => (state.plots[id] ? state.plots[id].name || id : id);
+  const rows = Object.entries(l.zones).sort((a, b) => b[1].cost - a[1].cost)
+    .map(([id, r]) => [name(id), round(r.days, 1), naira(r.cost)]);
+  if (l.unallocated.days) rows.push(['Not tied to a zone', round(l.unallocated.days, 1), naira(l.unallocated.cost)]);
+  return card(cardHead('Labour cost by zone')
+    + (rows.length
+      ? table([{ label: 'Zone' }, { label: 'Days', num: true }, { label: 'Cost', num: true }], rows)
+      : '<p><small>No priced attendance in this period.</small></p>')
+    + (l.unpriced.length
+      ? note('warn', 'Days with no rate', `<small>${esc(l.unpriced.map((u) => `${ROLES[u.role]?.name || u.role}: ${u.days}`).join(' · '))}. `
+        + 'Set a rate for these positions in Settings.</small>')
+      : ''));
+}
+
 // --- Settings -------------------------------------------------------------
 
 export const settingsView = {
@@ -1174,7 +1210,6 @@ export const settingsView = {
       + field('Grade-out allowance (%)', input('gradeOutPct', { type: 'number', min: 0, max: 60, value: s.gradeOutPct }),
         'How much of a picking is lost to rot, rejects and shrinkage before it is sold.')
       + field('Picking rate (kg per person per hour)', input('kgPerPersonHour', { type: 'number', min: 1, value: s.kgPerPersonHour }))
-      + field('Standard daily wage', input('defaultDailyWage', { type: 'number', min: 0, step: '100', value: s.defaultDailyWage }))
       + '<h3>Farm-gate price per kg</h3>'
       + CROP_LIST.map((c) => field(`${c.emoji} ${c.name} (${c.localName})`,
         input(`price_${c.id}`, { type: 'number', min: 0, step: '50', value: s.prices[c.id] }))).join('')
@@ -1192,6 +1227,7 @@ export const settingsView = {
         }))
       + `<p><small>Climate for reference: ${MONTH_NAMES.map((n, i) =>
         `${n} ${climateFor(i + 1).rain}mm`).join(' · ')}</small></p>`)
+    + (can(ctx.user, 'manageRates') ? ratesCard(ctx) : '')
     + syncCard(ctx)
     + trialCard(ctx)
     + card(cardHead('Backup and sharing')
@@ -1259,6 +1295,20 @@ export const settingsView = {
       toast('This phone is signed out');
     },
 
+    'save-rates': async (ctx, form) => {
+      const data = readForm(form);
+      const events = [];
+      for (const r of ROLE_LIST) {
+        const raw = data[`rate_${r.id}`];
+        if (raw === '' || raw == null) continue;
+        const perDay = Math.max(0, Number(raw) || 0);
+        if (perDay !== dailyRateFor(ctx.state, r.id)) events.push({ type: 'rate.set', payload: { role: r.id, perDay } });
+      }
+      if (!events.length) { toast('No rate changed'); return; }
+      await ctx.store.dispatchMany(events);
+      toast('Rates saved');
+    },
+
     'save-settings': async (ctx, form) => {
       const data = readForm(form);
       const prices = {};
@@ -1269,7 +1319,6 @@ export const settingsView = {
         crateKg: Number(data.crateKg) || 12,
         gradeOutPct: Number(data.gradeOutPct) || 0,
         kgPerPersonHour: Number(data.kgPerPersonHour) || 12,
-        defaultDailyWage: Number(data.defaultDailyWage) || 0,
         prices,
       });
       toast('Settings saved');
@@ -1458,7 +1507,7 @@ function openSyncSetup(ctx) {
     + '</form>'
     + note('info', 'What the server protects',
       '<small>Each person gets their own account and the server decides what their role may see. '
-      + 'A farm hand\'s phone is never sent wages or sales at all, so there is nothing on it to '
+      + 'A farm hand\'s phone is never sent costs or sales at all, so there is nothing on it to '
       + 'read. Losing a phone means revoking that one device, not changing everyone\'s password.</small>'));
 }
 

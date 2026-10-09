@@ -39,7 +39,7 @@ function routeKey() {
 // --- PIN handling ---------------------------------------------------------
 // This separates roles on a shared farm phone. It is a workplace control, not
 // protection against someone determined who has the handset: anyone who can
-// open the browser's storage can read the log. Keep payroll on the manager's
+// open the browser's storage can read the log. Keep the books on the owner's
 // own phone and treat the PIN as a way to stop accidental entries under the
 // wrong name.
 
@@ -574,7 +574,7 @@ const shellActions = {
     const rules = peekRules();
     await c.store.dispatchMany(newFarmEvents({
       farmName: data.farmName,
-      owner: { id, name: String(data.name).trim(), pinHash: await hashPin(data.pin), dailyRate: 0 },
+      owner: { id, name: String(data.name).trim(), pinHash: await hashPin(data.pin) },
       rules,
     }));
     c.store.setUser(c.store.state.people[id]);

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.14 (draft for restructuring) |
+| Version | 1.15 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -243,6 +243,7 @@ Fixes staff who cannot tell one problem from another until it is too late.
 - **FR-COST-02 (MUST):** The Owner sees cost, revenue, and profit or loss per zone per cycle.
 - **FR-COST-03 (SHOULD):** Cost per kg and yield per plant compared across zones and seasons.
 - **FR-COST-04 (MUST):** Cost and sales screens are hidden from Greenhouse Hands.
+- **FR-COST-05 (MUST):** There is no pay in the app: no wages, per-person daily rates or wage redaction. Attendance (days and hours) is kept. The Owner sets a daily rate per position, which no other role receives or can set. Labour cost per zone is days worked × that position's rate; a person's day is split across the zones they recorded work in that day, or else the zones they hold as primary. A day with neither is shown as not tied to a zone, and a day whose position has no rate is shown as unpriced, never priced at zero.
 
 ### 6.11 Owner oversight
 - **FR-REP-01 (MUST):** **Exceptions-only daily digest** for the Owner: missed tasks, open alerts, gate overrides, virus suspicions, low stock. If nothing is wrong, it says so in one line.
@@ -284,6 +285,27 @@ The farm starts using the app with cycles already running. This section says how
 - **FR-ONB-06 (MUST):** A zone planted before the app existed has the status **"planted before the gates"**, with the evidence that exists attached. It is not a violation and needs no override. Gate 2 and Gate 3 run as normal; Gate 4 at the end of the cycle clears normally.
 - **FR-ONB-07 (MUST):** Stock on hand is entered as an opening count, marked backfilled, and is not counted as usage.
 - **FR-ONB-08 (MUST):** The Owner sees a setup screen listing which zones are incomplete and what each is missing, and the farm-wide stock count.
+
+### 6.16 Verification
+`docs/verification.md` is authoritative for these IDs; they are not repeated here.
+
+- **FR-VER-01 to FR-VER-03:** who sees verification, and that it never changes anyone's work.
+
+### 6.17 Record cross-checks
+`docs/verification.md` Part A is authoritative.
+
+- **FR-XCHK-01 to FR-XCHK-10:** how the cross-checks run, rank, report and are explained.
+- **XC-01 to XC-12:** the twelve checks themselves.
+
+### 6.18 The daily walk
+`docs/verification.md` Part B is authoritative.
+
+- **FR-WALK-01 to FR-WALK-12** and **FR-WALK-20 to FR-WALK-23:** prompts, capture, upload, missed walks, and the weekly analysis.
+
+### 6.19 Simplification of field screens
+`docs/simplify.md` is authoritative.
+
+- **FR-SIMP-01 to FR-SIMP-08:** what stays on a field screen, what moves, and what each role sees.
 
 ### 6.13 Climate monitoring (optional hardware)
 - **FR-CLIM-01 (COULD):** Import temperature and humidity from low-cost loggers in each greenhouse.
@@ -342,6 +364,7 @@ The farm starts using the app with cycles already running. This section says how
 | Diagnosis | card, answers, photos, confirmed by |
 | Treatment | diagnosis, product, dose, intervals, PPE confirmed |
 | Stock item | product, quantity, batch, expiry, cost |
+| Position rate | position (role), daily rate, set by the Owner; sent to the Owner only (FR-COST-05) |
 | Harvest | zone, weight/crates, grade |
 | Sale | buyer, quantity, price, payment status |
 | Override | gate, reason, Owner, time |
@@ -390,6 +413,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.15 | 9 Oct 2026 | FR-COST-05 added: pay, per-person daily rates and wage redaction removed, attendance kept; the Owner's daily rate per position prices labour per zone as days worked × rate. §6.16 to §6.19 point to docs/verification.md (FR-VER, FR-XCHK, XC-01 to XC-12, FR-WALK) and docs/simplify.md (FR-SIMP) as authoritative |
 | 1.14 | 8 Oct 2026 | UX-28 added: the CEO makes each person's sign-in name and password and sends them; a new phone opens on a sign-in page and lands on that person's job. Replaces the single-use invite link and code |
 | 1.13 | 1 Oct 2026 | The farm server enforces FR-GATE-01 to 05, FR-TREAT-02 (PHI/REI from the server's own catalogue), FR-PROOF-01/02, FR-STOCK-04/07/08 and the Week 10 organics rule with the app's own gate code. NFR-OFF-06 added: a refused record tells the person why. FR-GATE-03 as written: a topsoil delivery records the zone it is for and is assigned only once tested clean |
 | 1.12 | 1 Oct 2026 | UX-01: a PIN is 4 to 12 digits, matching what joining and the server already accepted; the pad submits on ✓. FR-TASK-01: the day's tasks are generated on any role's phone, at open and at sign-in. FR-SCOUT-01/03, FR-FARM-04: a Greenhouse Hand records the trap count as a number, and it opens an alert — the nursery's daily count included; FR-PROOF-01 covers the nursery's trap check |

@@ -12249,7 +12249,10 @@ Object.defineProperties(__dvExports, {
   "harvestsBetween": { enumerable: true, get: () => harvestsBetween },
   "todayAttendance": { enumerable: true, get: () => todayAttendance },
   "isClockedIn": { enumerable: true, get: () => isClockedIn },
-  "payrollBetween": { enumerable: true, get: () => payrollBetween },
+  "attendanceBetween": { enumerable: true, get: () => attendanceBetween },
+  "dailyRateFor": { enumerable: true, get: () => dailyRateFor },
+  "hasRates": { enumerable: true, get: () => hasRates },
+  "labourByZone": { enumerable: true, get: () => labourByZone },
   "inputsList": { enumerable: true, get: () => inputsList },
   "inputUsage": { enumerable: true, get: () => inputUsage },
   "costsBetween": { enumerable: true, get: () => costsBetween },
@@ -12261,7 +12264,7 @@ let approverFor, awaitingApproval, beforeApprovalCheck, canApprove, otherConfirm
 let CONFIRMS, DOCTOR;
 let releaseCheck;
 let fillCheck;
-let checkAssignment, mayAssignZones;
+let checkAssignment, mayAssignZones, zonesHeldBy;
 let peekRules;
 let isoDate, sortBy, sum, uid;
 __dvImport("web/js/db.js", (m) => { appendEvents = m.appendEvents; }, (m) => { deviceId = m.deviceId; }, (m) => { loadEvents = m.loadEvents; });
@@ -12270,7 +12273,7 @@ __dvImport("web/js/domain/selfcheck.js", (m) => { approverFor = m.approverFor; }
 __dvImport("web/js/domain/doctor.js", (m) => { CONFIRMS = m.CONFIRMS; }, (m) => { DOCTOR = m.DOCTOR; });
 __dvImport("web/js/domain/nursery.js", (m) => { releaseCheck = m.releaseCheck; });
 __dvImport("web/js/domain/gates.js", (m) => { fillCheck = m.fillCheck; });
-__dvImport("web/js/domain/assignments.js", (m) => { checkAssignment = m.checkAssignment; }, (m) => { mayAssignZones = m.mayAssignZones; });
+__dvImport("web/js/domain/assignments.js", (m) => { checkAssignment = m.checkAssignment; }, (m) => { mayAssignZones = m.mayAssignZones; }, (m) => { zonesHeldBy = m.zonesHeldBy; });
 __dvImport("web/js/rules.js", (m) => { peekRules = m.peekRules; });
 __dvImport("web/js/util.js", (m) => { isoDate = m.isoDate; }, (m) => { sortBy = m.sortBy; }, (m) => { sum = m.sum; }, (m) => { uid = m.uid; });
 // State. Events in, farm out.
@@ -12346,7 +12349,7 @@ const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates'],
     home: '#/dashboard',
     blurb: 'Owns the farm. Sees everything, appoints the manager and everyone else, '
       + 'and controls the link that keeps every phone in step.',
@@ -12430,8 +12433,6 @@ const DEFAULT_SETTINGS = {
   seasonality: null,      // null means use the built-in index
   gradeOutPct: 12,
   kgPerPersonHour: 12,
-  defaultDailyWage: 3500,
-  overtimeRatePerHour: 700,
   soilPh: 5.2,
 };
 
@@ -12482,6 +12483,9 @@ const EMPTY = () => ({
   expenses: [],
   stockMoves: [],
   attendance: [],
+  // FR-COST-05 — the Owner's daily rate per position, keyed by role. Only the
+  // Owner's phone is ever sent these; everywhere else it stays empty.
+  rates: {},
   workLogs: [],
   weather: [],
   reports: [],
@@ -12964,6 +12968,9 @@ function reduce(events) {
       case 'sale.record':
         state.sales.push({ ...p, id: p.id || e.id, by: e.by, at: e.at });
         break;
+      case 'rate.set':
+        if (p.role) state.rates[p.role] = { perDay: Math.max(0, Number(p.perDay) || 0), by: e.by, at: e.at };
+        break;
       // FR-ROLE-13 — a spray resting on a self-confirmed diagnosis that nobody
       // above has approved is judged here, from the records as they stood when
       // it went on. Whether it was treated before approval is computed from
@@ -13443,8 +13450,8 @@ function isClockedIn(state, personId) {
   return state.attendance.some((a) => a.personId === personId && !a.out);
 }
 
-/** Wages owed over a period, from attendance and the person's rate. */
-function payrollBetween(state, from, to) {
+/** Days and hours each person was clocked in over a period. Attendance only: there is no pay in the app. */
+function attendanceBetween(state, from, to) {
   const rows = [];
   for (const person of Object.values(state.people)) {
     if (person.active === false) continue;
@@ -13452,10 +13459,100 @@ function payrollBetween(state, from, to) {
       && (a.in || '').slice(0, 10) >= from && (a.in || '').slice(0, 10) <= to && a.out);
     const hours = sum(shifts, (s) => s.hours || 0);
     const days = new Set(shifts.map((s) => (s.in || '').slice(0, 10))).size;
-    const rate = Number(person.dailyRate) || state.settings.defaultDailyWage;
-    rows.push({ person, days, hours: Math.round(hours * 10) / 10, rate, pay: days * rate });
+    rows.push({ person, days, hours: Math.round(hours * 10) / 10 });
   }
-  return rows.filter((r) => r.days > 0).sort((a, b) => b.pay - a.pay);
+  return rows.filter((r) => r.days > 0).sort((a, b) => b.days - a.days || b.hours - a.hours);
+}
+
+/** FR-COST-05: the Owner's daily rate for a position, or null where none is set or this phone was not sent the table. */
+function dailyRateFor(state, role) {
+  const r = ((state && state.rates) || {})[role];
+  return r ? r.perDay : null;
+}
+
+/** Whether this phone holds any rate at all. Only the Owner's does. */
+function hasRates(state) {
+  return Object.keys((state && state.rates) || {}).length > 0;
+}
+
+const zoneOfCycle = (state, cycleId) => (cycleId && state.cycles[cycleId] ? state.cycles[cycleId].plotId : null);
+
+/**
+ * The zones each person worked in on each day, read from what they recorded
+ * that day: tasks they finished, work, pickings, counts and sprays. Built once
+ * per call, keyed "person|day", so a season of records is read once rather
+ * than once per day worked.
+ */
+function zonesWorkedIndex(state) {
+  const index = new Map();
+  const add = (personId, at, zone) => {
+    const day = String(at || '').slice(0, 10);
+    if (!personId || !day || !zone) return;
+    const key = `${personId}|${day}`;
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(zone);
+  };
+  for (const t of Object.values(state.tasks)) add(t.doneBy, t.doneAt, t.zoneId || zoneOfCycle(state, t.cycleId));
+  for (const w of state.workLogs) add(w.personId || w.by, w.date || w.at, w.zoneId || zoneOfCycle(state, w.cycleId));
+  for (const list of [state.harvests, state.scouts, state.sprays]) {
+    for (const r of list) add(r.by, r.date || r.at, r.zoneId || zoneOfCycle(state, r.cycleId));
+  }
+  return index;
+}
+
+/**
+ * FR-COST-01, FR-COST-05 — labour cost per zone: days worked × the position's
+ * daily rate. A person's day is split evenly across the zones they worked in
+ * that day, or else the zones they hold as primary. Days whose position has no rate are counted in `unpriced`, never
+ * priced at zero, so a missing rate shows instead of reading as free labour.
+ */
+function labourByZone(state, from, to) {
+  const zones = {};
+  const unallocated = { days: 0, cost: 0 };
+  const unpriced = new Map();
+  const seen = new Set();
+  const worked = zonesWorkedIndex(state);
+  const held = new Map();
+  // A day with nothing tied to a zone falls back to the zones the person holds
+  // as primary; failing that it stays unallocated, shown rather than spread about.
+  const zonesFor = (personId, day) => {
+    const z = worked.get(`${personId}|${day}`);
+    if (z) return [...z];
+    if (!held.has(personId)) {
+      held.set(personId, zonesHeldBy(state, personId).filter((h) => h.holding === 'primary').map((h) => h.zone.id));
+    }
+    return held.get(personId);
+  };
+  for (const a of state.attendance) {
+    const day = (a.in || '').slice(0, 10);
+    if (!a.out || day < from || day > to) continue;
+    const key = `${a.personId}|${day}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const person = state.people[a.personId];
+    if (!person) continue;
+    const rate = dailyRateFor(state, person.role);
+    if (rate == null) {
+      unpriced.set(person.role, (unpriced.get(person.role) || 0) + 1);
+      continue;
+    }
+    const where = zonesFor(person.id, day);
+    if (!where.length) {
+      unallocated.days += 1;
+      unallocated.cost += rate;
+      continue;
+    }
+    for (const z of where) {
+      const row = zones[z] || (zones[z] = { days: 0, cost: 0 });
+      row.days += 1 / where.length;
+      row.cost += rate / where.length;
+    }
+  }
+  const total = sum(Object.values(zones), (r) => r.cost) + unallocated.cost;
+  return {
+    zones, unallocated, total,
+    unpriced: [...unpriced.entries()].map(([role, days]) => ({ role, days })),
+  };
 }
 
 function inputsList(state) {
@@ -13470,9 +13567,9 @@ function inputUsage(state) {
 function costsBetween(state, from, to) {
   const direct = state.expenses.filter((x) => x.date >= from && x.date <= to)
     .map((x) => ({ date: x.date, amount: Number(x.amount) || 0, category: x.category || 'other', note: x.note }));
-  const labour = payrollBetween(state, from, to)
-    .map((r) => ({ date: to, amount: r.pay, category: 'labour', note: `${r.person.name}, ${r.days} days` }));
-  return [...direct, ...labour];
+  // Labour is priced from the Owner's rate table, which no other phone holds.
+  const labour = hasRates(state) ? labourByZone(state, from, to).total : 0;
+  return labour > 0 ? [...direct, { date: to, amount: labour, category: 'labour', note: 'days worked × position rate' }] : direct;
 }
 
 function revenueBetween(state, from, to) {
@@ -13973,7 +14070,7 @@ const ROLES = {
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'prescribe', 'viewReports', 'manageMoney', 'managePeople', 'settings',
-      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment'],
+      'manageOwners', 'manageSync', 'viewAudit', 'wipeFarm', 'viewTreatment', 'manageRates'],
   },
 };
 
@@ -14153,37 +14250,40 @@ const EVENT_POLICY = {
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
+  // FR-COST-05 — the daily rate per position. The Owner's alone, both ways:
+  // no other phone is sent it, so no other phone can work out what anyone earns.
+  'rate.set':          { write: 'manageRates',   read: 'manageRates' },
 };
 
 /**
- * Wages are the sharp edge. Everyone needs the names and roles of their
- * colleagues for tasks and harvest to make sense, so the record still travels,
- * but what someone earns goes only to the books and to that person themselves.
+ * Everyone needs the names and roles of their colleagues for tasks and harvest
+ * to make sense, so the record travels; a phone number goes only to the books
+ * and to that person. There is no pay in the app (FR-COST-05): a daily rate an
+ * older record still carries is dropped for every reader, its owner included.
  */
 function redactPerson(event, reader) {
   const p = event.payload || {};
   const out = { ...p };
   delete out.pinHash;                                  // never leaves the server
+  delete out.dailyRate;
   // Readers arrive either as a stored member record (id) or as a session
-  // (memberId). Accepting both is what stops "show me my own pay" quietly
+  // (memberId). Accepting both is what stops "show me my own details" quietly
   // failing on the one path that matters, the live server.
   const readerId = reader.memberId || reader.id;
   const ownRecord = p.id && p.id === readerId;
-  if (!ownRecord && !can(reader.role, 'manageMoney')) {
-    delete out.dailyRate;
-    delete out.phone;
-  }
+  if (!ownRecord && !can(reader.role, 'manageMoney')) delete out.phone;
   return { ...event, payload: out };
 }
 
-/** Prices and the wage bill are commercial; crate weights and rates are not. */
+/** Prices are commercial; crate weights and rates are not. Wage fields from before FR-COST-05 go to nobody. */
 function redactSettings(event, reader) {
-  if (can(reader.role, 'manageMoney')) return event;
   const p = { ...(event.payload || {}) };
-  delete p.prices;
-  delete p.seasonality;
   delete p.defaultDailyWage;
   delete p.overtimeRatePerHour;
+  if (!can(reader.role, 'manageMoney')) {
+    delete p.prices;
+    delete p.seasonality;
+  }
   return { ...event, payload: p };
 }
 
@@ -14767,7 +14867,7 @@ function guardTaskCreate(event, author) {
  * UX-27 — the field-trial sign-off belongs to the Owner.
  *
  * Settings are the Farm Manager's in general, and that is right for crate
- * weights and wages. This one is different: it is the switch that ends
+ * weights and prices. This one is different: it is the switch that ends
  * supervised use of the spray and gate screens, and the person most tempted to
  * throw it early is the manager who finds the confirmation tedious. So the
  * write permission stays where it is and this one field is lifted to the Owner.
