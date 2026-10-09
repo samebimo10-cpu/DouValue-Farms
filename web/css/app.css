@@ -468,10 +468,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .wizard-steps i { flex: 1; height: 6px; border-radius: 99px; background: var(--line); }
 .wizard-steps i.on { background: var(--accent); }
 
+/* docs/simplify.md — category 3: one tap away. A plain disclosure, big enough
+   to hit with a gloved thumb (UX-03), quiet until it is opened. */
+details.more { margin: 8px 0 0; }
+details.more > summary {
+  cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px;
+  color: var(--ink-2); font-size: .92rem; font-weight: 600; list-style: none;
+}
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before { content: '\25B8'; font-size: .8rem; }
+details.more[open] > summary::before { content: '\25BE'; }
+details.more > .more-body { padding: 2px 0 6px; }
+.note details.more { margin: 0; }
+.note details.more > summary { min-height: 36px; }
+
 .sticky-actions {
   position: sticky; bottom: 78px; background: var(--bg); padding: 10px 0 0;
   margin-top: 10px; display: flex; gap: 10px;
 }
+/* FR-SIMP-08: in a sheet the save button stays in reach however long the form. */
+.sheet .sticky-actions { bottom: 0; background: var(--surface); padding-bottom: 4px; z-index: 1; }
 
 @media (min-width: 720px) {
   .tabbar { position: sticky; top: 92px; bottom: auto; border-top: 0; border-bottom: 2px solid var(--line); max-width: 900px; margin: 0 auto; }

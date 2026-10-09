@@ -7,7 +7,7 @@
 // The Clinic holds what is wrong. This holds what happened.
 
 import {
-  badge, button, card, cardHead, closeSheet, empty, esc, field, note, openSheet,
+  badge, button, card, cardHead, closeSheet, empty, esc, field, more, note, openSheet,
   readForm, select, textarea, toast,
 } from './kit.js';
 import { can } from '../store.js';
@@ -15,7 +15,7 @@ import {
   judgeObservation, MIN_OBSERVATION_WORDS, OBSERVATION_PROMPT, shiftBoard, shiftFiled,
   shiftHistory, shiftReports,
 } from '../domain/shift.js';
-import { bindDraft, phraseChips } from './field-kit.js';
+import { bindDraft, phraseChips, sheetSubmit } from './field-kit.js';
 import { friendlyDate, isoDate, timeOfDay, uid } from '../util.js';
 
 export const shiftView = {
@@ -47,9 +47,12 @@ function head(ctx, board, manages) {
       ? badge(`${board.counts.filed} of ${board.counts.worked} in`,
         board.counts.missing ? 'warn' : 'ok')
       : badge(friendlyDate(board.date), 'muted'))
-    + '<p><small>A line at the end of the day: what you saw, what you did. It is not a problem '
-    + 'report — anything wrong still goes in as a problem so it gets chased. This is the day '
-    + 'itself, and the farm manager reads and answers it.</small></p>',
+    // docs/simplify-pass/06-shift.md: what the report is for, one tap away.
+    + more('What this report is for', '<p><small>A line at the end of the day: what you saw, what '
+      + 'you did. It is not a problem report — anything wrong still goes in as a problem so it gets '
+      + 'chased. This is the day itself, and the farm manager reads and answers it. A few words is '
+      + 'enough. It is the only record of the day that is in your own words, and it is what the '
+      + 'manager reads first tomorrow morning.</small></p>', { id: 'shift.purpose' }),
     { tight: true },
   );
 }
@@ -60,10 +63,9 @@ function mine(ctx, today) {
   if (!filed) {
     return card(
       cardHead('Your report for today')
-      + note('info', OBSERVATION_PROMPT,
-        '<small>A few words is enough. It is the only record of the day that is in your own '
-        + 'words, and it is what the manager reads first tomorrow morning.</small>')
-      + button('Write today\'s report', 'open-shift', { cls: 'btn-block btn-lg', icon: '📝' }),
+      + note('info', OBSERVATION_PROMPT, '')
+      + button('Write today\'s report', 'open-shift',
+        { cls: 'btn-block btn-lg', icon: '📝', data: { 'main-action': 'shift' } }),
     );
   }
 
@@ -71,12 +73,13 @@ function mine(ctx, today) {
   return card(
     cardHead('Your report for today', badge('filed', 'ok'))
     + reportBody(ctx, filed, { own: true })
+    // Earlier days are read back when wanted, not every evening: one tap.
     + (past.length
-      ? '<p style="margin-top:12px"><small><b>Earlier</b></small></p><ul class="list">'
+      ? more(`Your earlier reports (${Math.min(past.length, 5)})`, '<ul class="list">'
         + past.slice(0, 5).map((s) => `<li><div class="grow"><b>${esc(friendlyDate(s.date))}</b>`
           + `<small>${esc(s.observation)}</small></div>`
           + badge(s.commented ? 'answered' : 'read', s.commented ? 'ok' : 'muted') + '</li>').join('')
-        + '</ul>'
+        + '</ul>', { id: 'shift.earlier' })
       : ''),
   );
 }
@@ -110,8 +113,8 @@ function managerBoard(ctx, board) {
       + '<ul class="list">' + board.missing.map((p) => '<li><div class="grow">'
         + `<b>${esc(p.name)}</b><small>Worked today, no report yet</small></div>`
         + badge('waiting', 'warn') + '</li>').join('') + '</ul>'
-      + '<p><small>Only people who clocked in are listed. Somebody who was not here today does '
-      + 'not owe a report.</small></p>',
+      + more('Who is listed', '<p><small>Only people who clocked in are listed. Somebody who was not '
+        + 'here today does not owe a report.</small></p>', { id: 'shift.missing-who' }),
     ));
   }
 
@@ -139,15 +142,17 @@ function openShiftSheet(ctx) {
   const el = openSheet('<h2>End-of-shift report</h2>'
     + `<p><small>${esc(OBSERVATION_PROMPT)}</small></p>`
     + '<form data-act="save-shift">'
+    // "This is the record of your day in your own words" is said under "What
+    // this report is for" at the top of the screen (docs/simplify-pass/06-shift.md).
     + field('Your day', textarea('observation', { rows: 4,
       placeholder: 'e.g. Scouted GH-02 and GH-03, traps replaced in both. Drip line on bench 3 '
         + 'still blocked, flushed it twice.' }),
-      `At least ${MIN_OBSERVATION_WORDS} words. This is the record of your day in your own words.`)
+      `At least ${MIN_OBSERVATION_WORDS} words.`)
     + phraseChips('scout', 'observation')
     + field('Which zone were you mostly on?', select('zoneId',
       zones.map((z) => ({ value: z.id, label: z.name })), '', { placeholder: 'More than one' }))
     + field('Anything else', textarea('note', { rows: 2, placeholder: 'optional' }))
-    + '<button class="btn-block btn-lg" type="submit">Send it to the farm manager</button>'
+    + sheetSubmit('Send it to the farm manager', 'shift-send')
     + '</form>'
     + note('warn', 'Something actually wrong?',
       '<small>Send a problem report as well. This one is read in the morning; a problem report '

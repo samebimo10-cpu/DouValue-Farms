@@ -85,6 +85,17 @@ export function button(text, act, opts = {}) {
     + `${opts.disabled ? ' disabled' : ''}>${opts.icon ? `<span>${opts.icon}</span>` : ''}${esc(text)}</button>`;
 }
 
+/**
+ * docs/simplify.md §1, category 3 — "would I go looking for it?" One tap away,
+ * behind a named summary, and not on the screen until that tap. `id` names the
+ * element in the simplification pass (docs/simplify-pass.md), so a test can
+ * prove where it went (FR-SIMP-07).
+ */
+export function more(summary, body, opts = {}) {
+  return `<details class="more"${opts.id ? ` data-moved="${esc(opts.id)}"` : ''}>`
+    + `<summary>${esc(summary)}</summary><div class="more-body">${body}</div></details>`;
+}
+
 export function link(text, href, opts = {}) {
   // Anything leaving the app opens in its own tab, so a half-finished entry on
   // the screen behind it is not lost.

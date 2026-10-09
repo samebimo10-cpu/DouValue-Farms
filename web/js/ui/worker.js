@@ -2,7 +2,7 @@
 // Everything here assumes one hand, bright sun, and no time for typing.
 
 import {
-  badge, button, card, cardHead, closeSheet, empty, esc, field, input, note, openSheet,
+  badge, button, card, cardHead, closeSheet, empty, esc, field, input, more, note, openSheet,
   readForm, select, stat, textarea, toast, tick,
 } from './kit.js';
 import { t, local, getLang } from '../i18n.js';
@@ -10,17 +10,16 @@ import { activeCycles, cycleLabel, isClockedIn } from '../store.js';
 import { getCrop, stageAt } from '../domain/crops.js';
 import { SPRAY_RULES } from '../domain/safety.js';
 import { harvestCheck, reentryCheck } from '../domain/onboarding.js';
-import { seasonOn } from '../domain/climate.js';
 import { daysBetween, friendlyDate, isoDate, kg, naira, round, sum, timeOfDay, uid } from '../util.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
 import { canComplete, judgeZoneStart, stampFor, zoneStamp } from '../domain/proof.js';
-import { scanSupported, scanZone, zoneListSheet, zonePicker } from './scan.js';
+import { scanZone, zoneListSheet, zonePicker } from './scan.js';
 import { howTo } from '../domain/schedule.js';
 import { myWork } from '../domain/assignments.js';
 import { namesLine, recipientsFor, reportsBy, roleTitle, WHERE_BY_ID } from '../domain/sickplant.js';
-import { workSwitch } from './farm.js';
+import { workTabs } from './farm.js';
 import {
-  bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, tag, taskStatus,
+  bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, sheetSubmit, tag, taskStatus,
 } from './field-kit.js';
 import {
   overThreshold, readCounts, TRAP_TASKS, trapCountRecords, trapPests, trapZones,
@@ -60,48 +59,57 @@ function cycleSafety(state, cycleId, at = new Date()) {
 
 export const todayView = {
   perm: 'viewOwnTasks',
+  // docs/simplify.md, pass 1 (Home). What is on this screen answers "what do I
+  // do next, in which house, and did it save?" Everything else moved, and
+  // docs/simplify-pass.md says where; data-moved names each one for the tests.
   render(ctx) {
     const { state, user } = ctx;
-    const lang = getLang();
     const today = isoDate();
     const clockedIn = isClockedIn(state, user.id);
-    const season = seasonOn(today);
 
     const blocked = activeCycles(state)
       .map((c) => ({ cycle: c, safety: cycleSafety(state, c.id) }))
       .filter((x) => !x.safety.harvest.safe || !x.safety.reentry.safe);
 
-    // FR-ROLE-08: My work and The farm, one tap apart, for supervising roles.
-    let out = workSwitch(user, '#/today');
+    // Clocking in is the first thing done in the morning (category 1). After
+    // that it is one quiet line. The name, the date and the season moved to
+    // the account sheet (the initials, top right): the phone already shows the
+    // date. FR-ROLE-08: My work and The farm, one tap apart, for supervising
+    // roles, share the line.
+    const tabs = workTabs(user, '#/today');
+    let out = card(clockedIn
+      ? `<div class="row between wrap">${tabs}<small><b>✓ ${esc(t('today.clockedIn'))}</b> since `
+        + `${esc(clockInTime(state, user.id))}</small>`
+        + button(t('today.clockOut'), 'clock-out', { cls: 'btn-quiet btn-sm' }) + '</div>'
+      : (tabs
+        ? `<div class="row between">${tabs}${button(t('today.clockIn'), 'clock-in', {})}</div>`
+        : button(t('today.clockIn'), 'clock-in', { cls: 'btn-block' })),
+    { tight: true });
 
-    out += card(
-      `<div class="row between"><div><b>${esc(user.name)}</b><br><small>${esc(friendlyDate(today))} — `
-      + `${esc(season.label)}</small></div>`
-      + (clockedIn
-        ? button(t('today.clockOut'), 'clock-out', { cls: 'btn-ghost' })
-        : button(t('today.clockIn'), 'clock-in', {}))
-      + '</div>'
-      + (clockedIn ? note('ok', t('today.clockedIn'), `<small>Since ${esc(clockInTime(state, user.id))}</small>`) : ''),
-      { tight: true },
-    );
-
+    // Category 1: a bed nobody may pick or enter, and until when. The bed's
+    // variety, the product and the date it went on are one tap away, behind
+    // the card's old heading, "Safety first".
     if (blocked.length) {
       out += card(
-        cardHead('Safety first')
-        + blocked.map(({ cycle, safety }) => {
+        blocked.map(({ cycle, safety }) => {
+          const zone = state.plots[cycle.plotId];
+          const where = zone ? zone.name : cycleLabel(state, cycle.id);
+          const why = (reason) => more('Safety first: why',
+            `<small><b>${esc(cycleLabel(state, cycle.id))}</b><br>${esc(reason)}</small>`,
+            { id: 'home.safety-reason' });
           const parts = [];
           if (!safety.harvest.safe) {
             parts.push(note('danger', safety.harvest.historyMissing
-              ? `${cycleLabel(state, cycle.id)}: do not pick — spray history missing`
-              : `${cycleLabel(state, cycle.id)}: do not pick until ${safety.harvest.clearOn}`,
-              `<small>${esc(safety.harvest.reason)}</small>`));
+              ? `✕ Do not pick ${where}: spray history missing`
+              : `✕ Do not pick ${where} until ${safety.harvest.clearOn}`, why(safety.harvest.reason)));
           }
           if (!safety.reentry.safe) {
-            parts.push(note('warn', `${cycleLabel(state, cycle.id)}: keep out for ${safety.reentry.hoursLeft} more hours`,
-              `<small>${esc(safety.reentry.reason)}</small>`));
+            parts.push(note('warn', `! Keep out of ${where} for ${safety.reentry.hoursLeft} more hours`,
+              why(safety.reentry.reason)));
           }
           return parts.join('');
         }).join(''),
+        { tight: true },
       );
     }
 
@@ -118,23 +126,24 @@ export const todayView = {
 
     out += card(
       cardHead(t('today.tasks'))
-      + (work.zones.length
-        ? `<p><small>Your zones: ${work.zones.map((z) => `<b>${esc(z.zone.name)}</b>`
-          + (z.holding === 'backup' ? ' (backup)' : '')).join(', ')}</small></p>`
-        : '')
+      // Each task card names its own zone. The list of the zones this person
+      // holds moved to the account sheet (their initials, top right).
       + (work.tasks.length ? dayProgressBar(progress) : ''),
       { tight: true },
     );
 
+    // The first job still open carries the screen's main action (FR-SIMP-08).
+    const firstOpen = work.tasks.find(({ task }) => task.status !== 'done');
     out += work.tasks.length
-      ? work.tasks.map(({ task, covering, why }) => taskCard(state, task, covering ? why : null)).join('')
+      ? work.tasks.map(({ task, covering, why }) => taskCard(state, task, covering ? why : null,
+        { main: firstOpen && firstOpen.task.id === task.id })).join('')
       : card(empty('✅', t('today.noTasks'), 'Anything you do can still be recorded below.'));
 
     // FR-TASK-03 with FR-ROLE-10: late work that has climbed to this person.
     if (work.moved.length) {
       out += card(cardHead('Late — moved up to you', badge(`${work.moved.length}`, 'danger'))
-        + '<p><small>These were not done on time by whoever holds the zone. See that they are '
-        + 'done today.</small></p>', { tight: true })
+        + '<p><small>Not done on time by whoever holds the zone. See that they are done today.'
+        + '</small></p>', { tight: true })
         + work.moved.map(({ task, escalation }) => taskCard(state, task, escalation.why)).join('');
     }
     if (work.unheld.length) {
@@ -159,46 +168,29 @@ export const todayView = {
       + '</div>',
     );
 
-    out += myPlantReports(state, user);
+    // FR-DIAG-10: an answer to the person's own sick-plant report tells them
+    // what happens now, so it stays here. Reports still waiting moved to the
+    // sick-plant screen, under "Your reports".
+    out += answeredReports(state, user);
 
-    // FR-LEARN-01: Learn opens from here, the home screen, in its own card —
-    // never from inside a task, where it would only get in the way of the job.
-    out += card(
-      cardHead(t('today.learn'))
-      + '<p><small>What the common problems look like, how to catch them early, and what to do '
-      + 'first. Works with no signal.</small></p>'
-      + button(t('today.learn'), 'go', { cls: 'btn-block btn-ghost', icon: '📖', data: { to: '#/learn' } }),
-    );
-
-    // FR-TASK-05 / UX-09 — the end of the day, in their own words. Its own
-    // card at the bottom of the screen, where the shift ends.
+    // FR-TASK-05 / UX-09 — the end of the day. Whether it is in is category 1
+    // at the end of a shift; what the report is for is said on its own screen.
     const filedToday = (state.shifts || [])
       .some((sh) => (sh.personId || sh.by) === user.id && sh.date === today);
     out += card(
       cardHead('End of shift', filedToday ? badge('sent', 'ok') : badge('not yet', 'warn'))
-      + (filedToday
-        ? '<p><small>Today\'s report is in. The farm manager reads it and can comment on '
-          + 'it.</small></p>'
-        : '<p><small>Before you go: what did you see, and what did you do about it? A line is '
-          + 'enough, and it is the only record of the day in your own words.</small></p>')
       + button(filedToday ? 'Read what you wrote' : 'Write today\'s report', 'go',
         { cls: filedToday ? 'btn-ghost btn-block' : 'btn-block btn-lg', icon: '📝',
           data: { to: '#/shifts' } }),
+      { tight: true },
     );
 
-    const myHarvest = state.harvests.filter((h) => h.by === user.id && h.date === today);
-    if (myHarvest.length) {
-      out += card(
-        cardHead('What you picked today')
-        + '<ul class="list">' + myHarvest.map((h) => `<li><div class="grow">`
-          + `<b>${esc(kg(h.kg))}</b><small>${esc(cycleLabel(state, h.cycleId))}</small>`
-          + `<small>Recorded ${esc(timeOfDay(h.at))}${h.date !== isoDate() ? ` for ${esc(h.date)}` : ''}</small>`
-          + photoThumb(h.photo, { small: true, alt: 'Photo of this picking' })
-          + `</div>${h.verified ? badge('checked', 'ok') : badge('waiting', 'warn')}</li>`).join('') + '</ul>'
-        // UX-04: the figure a hand actually came to this screen to read.
-        + `<div style="margin-top:12px">${bigNumber(kg(sum(myHarvest, (h) => h.kg)), 'picked today')}</div>`,
-      );
-    }
+    // FR-LEARN-01: Learn opens from here, the home screen, and never from
+    // inside a task. One button; what Learn is for is said on Learn itself.
+    out += card(
+      button(t('today.learn'), 'go', { cls: 'btn-block btn-ghost', icon: '📖', data: { to: '#/learn' } }),
+      { tight: true },
+    );
     return out;
   },
 
@@ -297,7 +289,7 @@ function clockInTime(state, personId) {
  * repeated as a stripe and as an icon (UX-07), so it survives sunlight and
  * colour blindness alike.
  */
-function taskCard(state, task, why = null) {
+function taskCard(state, task, why = null, { main = false } = {}) {
   const state_ = taskStatus(task);
   const zone = task.zoneId ? (state.plots || {})[task.zoneId] : null;
   const where = zone ? zone.name : (task.cycleId ? cycleLabel(state, task.cycleId) : 'General');
@@ -311,20 +303,25 @@ function taskCard(state, task, why = null) {
     + tag(state_, label) + '</div>'
     // FR-ROLE-02/10: why a task is on somebody else's list today, in words.
     + (why ? `<p class="why"><small>${esc(why)}</small></p>` : '')
-    + (steps
-      // UX-19: the steps, numbered, matching the laminated role cards.
-      ? `<ol class="steps">${steps.how.map((line) => `<li>${esc(line)}</li>`).join('')}</ol>`
-        + `<p><small>${esc(steps.why)}</small></p>`
-      : '')
     + (task.status === 'done'
-      ? `<p class="gate-row ok"><b>✓ Done</b> <small>${esc(task.doneNote || 'Recorded')}</small></p>`
-        + countedLine(state, task)
-        + (task.zoneCheck
-          ? `<p><small>${esc(task.zoneCheck.label)}: ${esc(task.zoneCheck.zoneName)}</small></p>`
-          : '')
+      // A finished job is a tick. What was recorded with it is one tap away.
+      ? `<p class="gate-row ok"><b>✓ Done</b></p>`
+        + more('What was recorded', `<p><small>${esc(task.doneNote || 'Recorded')}</small></p>`
+          + countedLine(state, task)
+          + (task.zoneCheck
+            ? `<p><small>${esc(task.zoneCheck.label)}: ${esc(task.zoneCheck.zoneName)}</small></p>`
+            : ''), { id: 'home.task-recorded' })
+      // The job's action sits with its name: the zone first (FR-PROOF-03,
+      // at the start of the job), then Done. UX-19: the steps follow, numbered
+      // to match the laminated role cards. Why the job matters is training,
+      // not the job: one tap away.
       : startBlock(task)
         + `<div style="margin-top:10px">${button(t('today.done'), 'task-done',
-          { cls: 'btn-block btn-lg', data: { id: task.id } })}</div>`),
+          { cls: 'btn-block btn-lg', data: main ? { id: task.id, 'main-action': 'home' } : { id: task.id } })}</div>`
+        + (steps
+          ? `<ol class="steps">${steps.how.map((line) => `<li>${esc(line)}</li>`).join('')}</ol>`
+            + more('Why this matters', `<p><small>${esc(steps.why)}</small></p>`, { id: 'home.task-why' })
+          : '')),
     { cls: `task-card is-${state_}` },
   );
 }
@@ -351,23 +348,25 @@ function startBlock(task) {
       ? button(picker.fallback.label, picker.fallback.act,
         { cls: 'btn-quiet btn-sm', icon: picker.fallback.icon, data: { id: task.id } })
       : '')
-    + '</div>'
-    + `<p><small>${esc(picker.why)}</small></p>`;
+    + '</div>';
+  // Why scanning, or why the list: said on the zone list itself (openZonePicker).
 }
 
 function openProofSheet(ctx, task, verdict) {
+  // docs/simplify-pass.md, pass 2: what the photo must show and why stays one
+  // tap away; the photo, the line and Done are the job.
   const el = openSheet(`<h2>${esc(task.title || 'This check')}</h2>`
     + note('info', verdict.why, `<small>${esc(verdict.fix)}</small>`)
     + '<form data-act="save-proof">'
     + `<input type="hidden" name="taskId" value="${esc(task.id)}">`
-    + photoField('Photograph what you checked',
-      'The trap, or the plants you looked at. Taken now, in the app — a picture from the gallery '
-      + 'proves the bed was fine earlier, not that it is fine now.')
+    + photoField('Photograph what you checked')
+    + more('Why a photo taken now', '<p><small>The trap, or the plants you looked at. Taken now, in the '
+      + 'app — a picture from the gallery proves the bed was fine earlier, not that it is fine now.'
+      + '</small></p>', { id: 'scout.photo-why' })
     + field('What did you see?', textarea('note', { rows: 2,
-      placeholder: 'e.g. traps replaced, a few thrips on the GH-01 trap' }),
-      'A line is enough. It goes on the record with the picture.')
+      placeholder: 'A line is enough, e.g. traps replaced, a few thrips on the GH-01 trap' }))
     + phraseChips(task.kind, 'note')
-    + '<button class="btn-block btn-lg" type="submit">Done</button>'
+    + sheetSubmit('Done', 'scout-proof')
     + '</form>'
     // UX-22: somebody to ask, from the screen you are standing on.
     + `<div style="margin-top:12px">${callSupervisor(ctx.state)}</div>`);
@@ -398,6 +397,11 @@ function openTrapSheet(ctx, task) {
       + empty('🪤', 'No traps to count yet', 'Traps are counted in the nursery and wherever a crop is growing.'));
     return;
   }
+  // docs/simplify-pass.md, pass 2. Every pest with a trap threshold stays
+  // open on the form: an aphid count left behind a tap is an alert that never
+  // opens (FR-SCOUT-03). What moved is the reasoning around them.
+  const countField = (p) => field(`${p.name} on the trap${p.required ? '' : ' (if any)'}`,
+    numberField(`count_${p.id}`), p.required ? 'Count them on one card. None? Put 0.' : 'Empty if not counted.');
   const el = openSheet(`<h2>${esc(task ? task.title : t('today.trapCount'))}</h2>`
     + '<form data-act="save-trapcount">'
     + `<input type="hidden" name="taskId" value="${esc(task ? task.id : '')}">`
@@ -406,18 +410,15 @@ function openTrapSheet(ctx, task) {
       ? ''
       : field('Which zone is the trap in?', select('zoneId',
         zones.map((z) => ({ value: z.id, label: z.name || z.id })), zones.length ? zones[0].id : '')))
-    + trapPests(state.settings).map((p) => field(
-      `${p.name} on the trap${p.required ? '' : ' (if any)'}`,
-      numberField(`count_${p.id}`),
-      p.required ? 'Count them on one card. None? Put 0.' : 'Leave empty if you did not count them.',
-    )).join('')
-    + photoField(task ? 'Photograph the trap' : 'Photo of the trap',
-      task
-        ? 'Taken now, in the app, before you touch it. A picture from the gallery proves the trap was fine earlier, not now.'
-        : 'Not required, but a picture of the card settles any question later.')
+    + trapPests(state.settings).map(countField).join('')
+    + photoField(task ? 'Photograph the trap' : 'Photo of the trap (if you can)')
+    + more('Why a photo', `<p><small>${task
+      ? 'Taken now, in the app, before you touch it. A picture from the gallery proves the trap was fine earlier, not now.'
+      : 'Not required, but a picture of the card settles any question later.'}</small></p>`,
+    { id: 'trap.photo-why' })
     + field('What did you see?', textarea('note', { rows: 2, placeholder: 'e.g. trap full, replaced it' }))
     + phraseChips('trap', 'note')
-    + '<button class="btn-block btn-lg" type="submit">Save the count</button>'
+    + sheetSubmit('Save the count', 'trap')
     + '</form>'
     + `<div style="margin-top:12px">${callSupervisor(state)}</div>`);
   bindPhoto(el);
@@ -485,7 +486,8 @@ function openZonePicker(ctx, task, afterScan) {
     title: 'Which zone are you in?',
     why: afterScan
       ? 'No code read. Choose the house you are standing in.'
-      : (scanSupported() ? null : 'This phone cannot scan codes, so choose from the list.'),
+      // Moved here from every task card on My work (docs/simplify-pass.md).
+      : zonePicker().why,
   }));
 }
 
@@ -538,9 +540,30 @@ function openHarvestSheet(ctx) {
     + field(t('harvest.which'),
       `<select name="cycleId" data-act="harvest-bed-change">${beds.map((b) =>
         `<option value="${esc(b.value)}">${esc(b.label)}</option>`).join('')}</select>`)
-    + '<div id="harvest-body"></div>',
+    + '<div id="harvest-body"></div>'
+    + pickedToday(ctx.store.state, ctx.user),
   );
   renderHarvestBody(ctx, el, beds[0].value);
+}
+
+/**
+ * What this person has picked today, and whether it has been checked. Moved
+ * from the bottom of My work to the harvest sheet, beside the next entry
+ * (docs/simplify-pass.md, Home): it is read when recording a picking.
+ */
+export function pickedToday(state, user, today = isoDate()) {
+  const mine = (state.harvests || []).filter((h) => h.by === user.id && h.date === today);
+  if (!mine.length) return '';
+  return `<div data-moved="home.picked-today">`
+    + more(`What you picked today: ${kg(sum(mine, (h) => h.kg))}`,
+      '<ul class="list">' + mine.map((h) => `<li><div class="grow">`
+        + `<b>${esc(kg(h.kg))}</b><small>${esc(cycleLabel(state, h.cycleId))}</small>`
+        + `<small>Recorded ${esc(timeOfDay(h.at))}</small>`
+        + photoThumb(h.photo, { small: true, alt: 'Photo of this picking' })
+        + `</div>${h.verified ? badge('checked', 'ok') : badge('waiting', 'warn')}</li>`).join('') + '</ul>'
+        // UX-04: the figure a hand came to read.
+        + `<div style="margin-top:12px">${bigNumber(kg(sum(mine, (h) => h.kg)), 'picked today')}</div>`)
+    + '</div>';
 }
 
 function renderHarvestBody(ctx, sheetEl, cycleId) {
@@ -559,37 +582,43 @@ function renderHarvestBody(ctx, sheetEl, cycleId) {
     body.querySelector('[data-act="close-sheet-btn"]').onclick = () => closeSheet();
     return;
   }
+  // docs/simplify-pass/04-harvest.md. A blocked bed says so and for how long;
+  // why it matters is one tap away.
   if (!safety.harvest.safe) {
     body.innerHTML = note('danger', t('harvest.blocked'),
       `<p>${esc(safety.harvest.reason)}</p>`
       + `<p><b>${esc(safety.harvest.daysLeft)} more day${safety.harvest.daysLeft === 1 ? '' : 's'}.</b> `
-      + 'Picking it early puts the buyer and whoever eats it at risk, and it can lose the farm its market. '
-      + 'Tell the supervisor if this bed must be picked.</p>')
+      + 'Tell the supervisor if this bed must be picked.</p>'
+      + more('Why it matters', '<p><small>Picking it early puts the buyer and whoever eats it at risk, '
+        + 'and it can lose the farm its market.</small></p>', { id: 'harvest.phi-why' }))
       + button('Close', 'close-sheet-btn', { cls: 'btn-ghost btn-block' });
     body.querySelector('[data-act="close-sheet-btn"]').onclick = () => closeSheet();
     return;
   }
 
   const reentryWarning = safety.reentry.safe ? ''
-    : note('warn', 'Wear your gloves and boots', `<small>${esc(safety.reentry.reason)}</small>`);
+    : note('warn', 'Wear your gloves and boots',
+      more('Why', `<small>${esc(safety.reentry.reason)}</small>`, { id: 'harvest.reentry-why' }));
 
   body.innerHTML = `<form data-act="save-harvest">`
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     + reentryWarning
-    + `<p><small>${esc(crop.emoji)} ${esc(crop.name)} (${esc(crop.localName)}) — `
-    + `${esc(stageAt(cycle.cropId, daysBetween(cycle.transplantDate, isoDate())).name)}</small></p>`
-    + field(t('harvest.crates'), input('crates', { type: 'number', min: 0, step: '0.5', inputmode: 'decimal', placeholder: '0' }),
-      `One crate is counted as ${crateKg} kg. Change that in Settings if your crates differ.`)
-    + field(`${t('harvest.kg')} (if you weighed it)`, input('kg', { type: 'number', min: 0, step: '0.1', inputmode: 'decimal', placeholder: 'optional' }),
-      'Leave this empty and the app works it out from the crates.')
+    + field(t('harvest.crates'), input('crates', { type: 'number', min: 0, step: '0.5', inputmode: 'decimal', placeholder: '0' }))
+    + field(`${t('harvest.kg')} (if you weighed it)`, input('kg', { type: 'number', min: 0, step: '0.1', inputmode: 'decimal',
+      placeholder: 'empty: worked out from the crates' }))
     + field('Grade', select('grade', [
       { value: 'first', label: 'First grade — clean, good size' },
       { value: 'second', label: 'Second grade — small or marked' },
       { value: 'reject', label: 'Reject — rotten or spoiled' },
     ], 'first'))
-    + field(t('common.note'), textarea('note', { placeholder: 'Anything the supervisor should know' }))
-    + photoField('Photo of the crates', 'Not required, but a picture taken at the bed settles any question later.')
-    + '<button class="btn-block btn-lg" type="submit">' + esc(t('common.save')) + '</button>'
+    + field(t('common.note'), textarea('note', { rows: 2, placeholder: 'Anything the supervisor should know' }))
+    + photoField('Photo of the crates (if you can)')
+    + more('About this bed and the crates', `<p><small>${esc(crop.emoji)} ${esc(crop.name)} (${esc(crop.localName)}) — `
+      + `${esc(stageAt(cycle.cropId, daysBetween(cycle.transplantDate, isoDate())).name)}.</small></p>`
+      + `<p><small>One crate is counted as ${esc(crateKg)} kg; change that in Settings if your crates differ. `
+      + 'Leave the kilograms empty and the app works them out from the crates. A photo is not required, '
+      + 'but a picture taken at the bed settles any question later.</small></p>', { id: 'harvest.about' })
+    + sheetSubmit(t('common.save'), 'harvest')
     + '</form>';
   bindPhoto(sheetEl);
 }
@@ -633,37 +662,70 @@ async function saveHarvest(ctx, form) {
  * to, and once a Field Supervisor or Farm Manager has confirmed a diagnosis,
  * the answer beside the reporter's own photo. An unconfirmed diagnosis is not
  * shown here: a match is not an answer yet.
+ *
+ * The whole list is on the sick-plant screen, under "Your reports". My work
+ * keeps only the two newest answers, because an answer says what happens now
+ * (docs/simplify-pass.md, Home).
  */
-function myPlantReports(state, user) {
-  const mine = reportsBy(state, user.id).slice(0, 5);
-  if (!mine.length) return '';
+export function plantReportList(state, rows) {
   const nameOf = (id) => (state.people[id] ? state.people[id].name : 'a supervisor');
+  return '<ul class="list">' + rows.map(({ report: r, photo, serious, result }) => {
+    const zone = state.plots[r.zoneId];
+    const sentTo = (r.sentTo || []).map((id) => state.people[id]).filter(Boolean);
+    const where = (r.where || []).map((id) => (WHERE_BY_ID[id] || {}).label).filter(Boolean);
+    return '<li><div class="grow">'
+      + `<b>${esc(zone ? zone.name : 'A zone')} — ${esc(friendlyDate(r.date))}</b>`
+      + (result
+        ? `<small><b>Confirmed: ${esc(result.label)}</b>, by ${esc(nameOf(result.confirmedBy))}</small>`
+          + (result.doNow ? `<small>What happens now: ${esc(result.doNow)}</small>` : '')
+          // FR-LEARN-05: the answer links to the hand's card for it in Learn.
+          + (result.cardId
+            ? `<small><a href="#/learn/card?id=${esc(result.cardId)}">Learn about ${esc(result.label)}</a></small>`
+            : '')
+        : `<small>${esc(where.join(', '))}. Sent to ${esc(sentTo.length
+          ? namesLine(sentTo.map((p) => ({ person: p, title: roleTitle(p) })))
+          : namesLine(recipientsFor(state, r.zoneId, { reporterId: r.by })))}.`
+          + (r.status === 'resolved' ? ' Closed.' : ' Waiting for the answer.') + '</small>')
+      + photoThumb(photo, { small: true, alt: 'Your photo of this plant' })
+      + '</div>'
+      + (result ? badge('answered', 'ok') : serious ? badge('alert', 'danger') : badge('sent', 'warn'))
+      + '</li>';
+  }).join('') + '</ul>';
+}
+
+function answeredReports(state, user) {
+  const mine = reportsBy(state, user.id);
+  const answered = mine.filter((x) => x.result).slice(0, 2);
+  if (!mine.length) return '';
+  if (!answered.length) {
+    return card(button(`Your sick-plant reports (${mine.length})`, 'go',
+      { cls: 'btn-quiet btn-block', icon: '🌿', data: { to: '#/my-reports' } }), { tight: true });
+  }
   return card(
-    cardHead('Your sick-plant reports')
-    + '<ul class="list">' + mine.map(({ report: r, photo, serious, result }) => {
-      const zone = state.plots[r.zoneId];
-      const sentTo = (r.sentTo || []).map((id) => state.people[id]).filter(Boolean);
-      const where = (r.where || []).map((id) => (WHERE_BY_ID[id] || {}).label).filter(Boolean);
-      return '<li><div class="grow">'
-        + `<b>${esc(zone ? zone.name : 'A zone')} — ${esc(friendlyDate(r.date))}</b>`
-        + (result
-          ? `<small><b>Confirmed: ${esc(result.label)}</b>, by ${esc(nameOf(result.confirmedBy))}</small>`
-            + (result.doNow ? `<small>What happens now: ${esc(result.doNow)}</small>` : '')
-            // FR-LEARN-05: the answer links to the hand's card for it in Learn.
-            + (result.cardId
-              ? `<small><a href="#/learn/card?id=${esc(result.cardId)}">Learn about ${esc(result.label)}</a></small>`
-              : '')
-          : `<small>${esc(where.join(', '))}. Sent to ${esc(sentTo.length
-            ? namesLine(sentTo.map((p) => ({ person: p, title: roleTitle(p) })))
-            : namesLine(recipientsFor(state, r.zoneId, { reporterId: r.by })))}.`
-            + (r.status === 'resolved' ? ' Closed.' : ' Waiting for the answer.') + '</small>')
-        + photoThumb(photo, { small: true, alt: 'Your photo of this plant' })
-        + '</div>'
-        + (result ? badge('answered', 'ok') : serious ? badge('alert', 'danger') : badge('sent', 'warn'))
-        + '</li>';
-    }).join('') + '</ul>',
+    cardHead('Answers to your sick-plant reports')
+    + plantReportList(state, answered)
+    + button('All your sick-plant reports', 'go', { cls: 'btn-quiet btn-sm', data: { to: '#/my-reports' } }),
+    { tight: true },
   );
 }
+
+/**
+ * Every sick-plant report this person sent, answered or waiting (FR-DIAG-08,
+ * FR-DIAG-10). Its own screen, opened from My work — not part of the report
+ * flow, which never links to Learn (FR-LEARN-01).
+ */
+export const myReportsView = {
+  perm: 'viewOwnTasks',
+  render(ctx) {
+    const mine = reportsBy(ctx.state, ctx.user.id);
+    return `<div data-moved="home.plant-reports">` + card(
+      cardHead('Your sick-plant reports', badge(`${mine.length}`))
+      + (mine.length
+        ? plantReportList(ctx.state, mine)
+        : empty('🌿', 'No reports yet', 'Report a sick plant from My work.')),
+    ) + '</div>';
+  },
+};
 
 // --- Problem report -------------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 import {
   badge, bar, button, card, cardHead, closeSheet, confirmSheet, empty, esc, field,
-  input, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
+  input, more, note, openSheet, readForm, select, spark, stat, table, textarea, toast,
 } from './kit.js';
 import { activeCycles, can, closedCycles, cycleLabel } from '../store.js';
 import { CROP_LIST, fertiliserPlan, getCrop, plantsForArea, stagesFor, stageAt, waterDemandMmPerDay } from '../domain/crops.js';
@@ -18,7 +18,7 @@ import { isNursery } from '../domain/farm.js';
 import { batchList } from '../domain/nursery.js';
 import { DEFAULT_THRESHOLDS } from '../domain/alerts.js';
 import { PROBLEM_BY_ID } from '../domain/pests.js';
-import { confirmSummary, numberField, phraseChips } from './field-kit.js';
+import { confirmSummary, numberField, phraseChips, sheetSubmit } from './field-kit.js';
 import { addDays, daysBetween, esc as _esc, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { navigate, params } from './shell.js';
 import { bindPhoto, photoField, photoPayload, photoThumb, resetPhoto } from './photo.js';
@@ -516,9 +516,13 @@ function gateSummary(state, today) {
 }
 
 function openScoutSheet(ctx, cycleId) {
+  // docs/simplify-pass.md, pass 2. Every box the scouting record has is still
+  // here and open; how to walk the bed is one tap away, and the save button
+  // stays at the foot of the sheet.
   const el = openSheet(`<h2>Scout ${esc(cycleLabel(ctx.state, cycleId))}</h2>`
-    + '<p><small>Walk a diagonal across the bed and look at ten plants properly: undersides of the young '
-    + 'leaves, the growing tip, the fruit, and the soil line. Ten looked at well beats fifty glanced at.</small></p>'
+    + more('How to scout a bed', '<p><small>Walk a diagonal across the bed and look at ten plants properly: '
+      + 'undersides of the young leaves, the growing tip, the fruit, and the soil line. Ten looked at well '
+      + 'beats fifty glanced at.</small></p>', { id: 'scout.method' })
     + '<form data-act="save-scout">'
     + `<input type="hidden" name="cycleId" value="${esc(cycleId)}">`
     // FR-SCOUT-01. The counted pest and the number are what the thresholds
@@ -529,8 +533,8 @@ function openScoutSheet(ctx, cycleId) {
       'Only the ones with action thresholds are listed. Anything else goes in the notes.')
     + field('Count on the sticky trap', numberField('trapCount'),
       'Since the last check. Leave blank if there is no trap in this zone.')
-    + field('Average per plant, from ten plants', numberField('perPlant'),
-      'Count on ten plants and put the average here.')
+    // "Count on ten plants and put the average here" was the hint; the label says it.
+    + field('Average per plant, counted on ten plants', numberField('perPlant'))
     + field('What did you find?', input('finding', { placeholder: 'e.g. aphids on young leaves, 3 plants' }),
       'Leave empty if the bed looked clean.')
     + field('How many of the ten plants were affected?', select('affected',
@@ -542,9 +546,14 @@ function openScoutSheet(ctx, cycleId) {
       'Borers only. Over ten plants with holes goes straight to the Owner.')
     + field('Anything else', textarea('note', { placeholder: 'optional' }))
     + phraseChips('scout', 'finding')
-    + photoField('Photo of what you found', 'A picture of the leaf or the fruit is worth more than a description.')
-    + '<button class="btn-block btn-lg" type="submit">Save scouting</button></form>'
-    + note('info', 'Not sure what you are looking at?', 'Use the Clinic. It asks what you can see and narrows it down.'));
+    + photoField('Photo of what you found')
+    + more('Why a photo', '<p><small>A picture of the leaf or the fruit is worth more than a description.'
+      + '</small></p>', { id: 'scout.photo-why' })
+    + sheetSubmit('Save scouting', 'scout')
+    + '</form>'
+    // Not sure what it is: the Clinic, one tap, below the form rather than in it.
+    + `<div style="margin-top:12px" data-moved="scout.clinic">${button('Not sure what it is? Open the Clinic', 'go',
+      { cls: 'btn-quiet btn-block', data: { to: '#/clinic' } })}</div>`);
   bindPhoto(el);
 }
 
@@ -611,6 +620,11 @@ function openSprayForm(ctx, cycleId) {
   // and the person choosing should see the same thing the gate will.
   const groupsOf = (a) => `${a.name} — ${a.group}`;
 
+  // docs/simplify-pass/05-spray.md. The safety of the spray — the waiting
+  // period, the re-entry, the dose and how to mix it, the rotation and Week 10
+  // refusals — is category 1. It now sits straight under the product it
+  // belongs to, before anything else is typed, rather than under the operator.
+  // Only what surrounds it moved, each piece one tap away on this sheet.
   const el = openSheet(`<h2>Log a spray</h2>`
     + `<p><small>${esc(cycleLabel(ctx.state, cycleId))}</small></p>`
     + (sprayWatch && sprayWatch.how === 'confirmed'
@@ -626,6 +640,8 @@ function openSprayForm(ctx, cycleId) {
         + usable.filter((p) => bucket(p) === kind)
           .map((p) => `<option value="${esc(p.id)}">${esc(groupsOf(p))}</option>`).join('')
         + '</optgroup>').join('') + '</select>')
+    // FR-TREAT-02/03: PHI, re-entry, rate and mixing for the active chosen.
+    + '<div id="spray-hint" data-safety="spray"></div>'
     + field('Brand used, if any', `<select name="labelId"><option value="">Not recorded</option>`
       + catalogue.labels.map((l) => `<option value="${esc(l.id)}">${esc(l.brand)}${l.formulation ? ` ${esc(l.formulation)}` : ''}</option>`).join('')
       + '</select>')
@@ -641,15 +657,17 @@ function openSprayForm(ctx, cycleId) {
       'The whole bed unless you only sprayed part of it.')
     + field('What were you treating?', input('targetProblem', { placeholder: 'e.g. thrips' }))
     + field('Who sprayed?', input('operator', { value: ctx.user.name }))
-    + '<div id="spray-hint"></div>'
-    + field('Note', textarea('note', { placeholder: 'Rate used, weather, anything unusual' }))
-    + photoField('Photo of the container',
-      'The label carries the real waiting period and the real rate. A picture of it is the record '
-      + 'that settles any question about what actually went on the crop.')
-    + '<button class="btn-block btn-lg" type="submit">Save spray</button></form>'
+    + field('Note', textarea('note', { rows: 2, placeholder: 'Rate used, weather, anything unusual' }))
+    + photoField('Photo of the container')
+    + more('Why a photo of the container', '<p><small>The label carries the real waiting period and the '
+      + 'real rate. A picture of it is the record that settles any question about what actually went '
+      + 'on the crop.</small></p>', { id: 'spray.photo-why' })
+    + sheetSubmit('Save spray', 'spray')
+    + '</form>'
     + (waiting.length
-      ? `<p><small>Not offered, because no rate has been entered yet: ${esc(waiting.map((a) => a.name).join(', '))}. `
-        + 'The Farm Manager adds a brand label with the rate off the container to bring one back.</small></p>'
+      ? more('Not in the list', `<p><small>Not offered, because no rate has been entered yet: `
+        + `${esc(waiting.map((a) => a.name).join(', '))}. The Farm Manager adds a brand label with the `
+        + 'rate off the container to bring one back.</small></p>', { id: 'spray.not-offered' })
       : ''));
   bindPhoto(el);
   const sel = document.querySelector('.sheet select[name=activeId]');
@@ -666,8 +684,11 @@ function sprayWeatherNote(state, cycleId) {
   const zone = cycle ? state.plots[cycle.plotId] : null;
   const w = sprayWeather(zone, getWeather());
   if (!w.applies) return '';
-  const rule = `<small>${SR04.id}: in open field, more than ${SR04.mm} mm of rain within ${SR04.hours} hours `
-    + 'after spraying washes it off, and a re-spray task is added for the next dry day.</small>';
+  // The rule behind the forecast is one tap away; the forecast and "hold the
+  // spray" are not (docs/simplify-pass/05-spray.md).
+  const rule = more(`About rain and spraying (${SR04.id})`, `<small>${SR04.id}: in open field, more than `
+    + `${SR04.mm} mm of rain within ${SR04.hours} hours after spraying washes it off, and a re-spray task `
+    + 'is added for the next dry day.</small>', { id: 'spray.sr04-rule' });
   if (!w.live) return note('info', 'No hourly rain forecast on this phone', rule);
   if (w.over) {
     return note('danger', `${w.mm} mm of rain forecast in the next ${SR04.hours} hours`,
@@ -703,15 +724,18 @@ function updateSprayHints(ctx, el) {
       + `Nobody goes back in without protective gear for ${active.reiHours} hours. `
       + `Resistance group ${esc(active.group)}.</small>`)
     + note('info', `Rate: ${esc(rate.rate)}`,
-      `<small>${rate.from === 'schedule' ? 'From the operations schedule for this active.'
-        : `From the label entered for ${esc((rate.label && rate.label.brand) || 'this product')}.`}</small>`)
+      more('Where this rate comes from', `<small>${rate.from === 'schedule' ? 'From the operations schedule for this active.'
+        : `From the label entered for ${esc((rate.label && rate.label.brand) || 'this product')}.`}</small>`,
+      { id: 'spray.rate-source' }))
     + (week != null && week >= WEEK_10
       ? note('warn', `The crop is in Week ${week}`,
         `<small>From Week 10 the rules allow organics only: `
         + `${esc(week10Actives(catalogue).actives.map((a) => a.name).join(', '))}. Anything else is refused.</small>`)
       : '')
     + (rotation.ok ? '' : note('danger', rotation.why,
-      `<small>${esc(rotation.fix || '')} Read from ${esc((rotation.sources || []).join(', '))}.</small>`))
+      `<small>${esc(rotation.fix || '')}</small>`
+      + more('Which rule', `<small>Read from ${esc((rotation.sources || []).join(', '))}.</small>`,
+        { id: 'spray.refusal-source' })))
     + (expired ? note('danger', expired.why, `<small>${esc(expired.fix)}</small>`) : '')
     + (area ? note('info', 'Mixing', `<small>${esc(plan.text)} Check the label: it beats this estimate.</small>`) : '')
     + '<details><summary><small>Spray safety rules</small></summary><ul>'
@@ -761,11 +785,13 @@ async function saveSpray(ctx, form) {
     openSheet(`<h2>${refusedOnProduct ? 'Not this product' : 'Diagnose it first'}</h2>`
       + note('danger', allowed.why, `<small>${esc(allowed.fix || '')}</small>`)
       + (allowed.reason === 'rotation'
-        ? '<p><small>Resistance does not wear off. A group used past its limit stops working on this '
-          + 'farm for good, usually in the season that needs it most.</small></p>'
+        ? more('Why rotation matters', '<p><small>Resistance does not wear off. A group used past its limit '
+          + 'stops working on this farm for good, usually in the season that needs it most.</small></p>',
+        { id: 'spray.rotation-why' })
         : '')
       + (refusedOnProduct
-        ? `<p><small>Read from ${esc((allowed.sources || []).join(', ') || 'the rules file')}.</small></p>`
+        ? more('Which rule', `<p><small>Read from ${esc((allowed.sources || []).join(', ') || 'the rules file')}.</small></p>`,
+          { id: 'spray.refusal-source' })
         // FR-DIAG-07: only the Field Supervisor and the Farm Manager run the
         // guided diagnosis; anyone else reports the plant to them.
         : `<div style="margin-top:12px">${can(ctx.user, 'guideDiagnosis')

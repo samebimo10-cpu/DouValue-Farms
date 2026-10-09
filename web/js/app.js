@@ -3,7 +3,7 @@
 
 import { can, createStore, setPractice } from './store.js';
 import { registerRoute, startShell } from './ui/shell.js';
-import { todayView, setWeather } from './ui/worker.js';
+import { myReportsView, todayView, setWeather } from './ui/worker.js';
 import { fieldView, cycleView } from './ui/field.js';
 import { clinicView, diagnoseView, guideView, guideItemView, photoDeskView } from './ui/clinic.js';
 import { doctorView } from './ui/doctor.js';
@@ -41,6 +41,8 @@ registerRoute('#/diagnose', diagnoseView);
 // FR-DIAG-07: the short report every role can send. The guided diagnosis
 // above is the Field Supervisor's and the Farm Manager's, and opens from it.
 registerRoute('#/sick-plant', sickPlantView);
+// docs/simplify-pass.md (Home): the reporter's own reports, answered or waiting.
+registerRoute('#/my-reports', myReportsView);
 // FR-LEARN-01: the problem cards as a hand reads them, from My work only.
 registerRoute('#/learn', learnView);
 registerRoute('#/learn/card', learnCardView);

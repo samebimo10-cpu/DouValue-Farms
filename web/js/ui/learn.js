@@ -9,7 +9,7 @@
 // plan are on the supervising view of the same card (#/guide/item), which this
 // screen links to only for a role that may open it.
 
-import { badge, button, card, cardHead, empty, esc, note } from './kit.js';
+import { badge, button, card, cardHead, empty, esc, more, note } from './kit.js';
 import { can } from '../store.js';
 import { learnCard, LEARN_KINDS, learnSearch } from '../domain/learn.js';
 import { cardPhoto, rowsForCard } from '../domain/diagnose.js';
@@ -34,7 +34,8 @@ export const learnView = {
       cardHead('Learn', badge(`${list.length}`))
       + '<p><small>The problems that hit pepper on this farm: what they look like, how to catch '
       + 'them early, and what to do first. Works with no signal.</small></p>'
-      + `<div class="field"><input name="learn-q" type="search" placeholder="Search: yellow leaves, wilt, holes in fruit..." value="${esc(filter.query)}" autocomplete="off"></div>`
+      // FR-LEARN-03: the search is the way in — the screen's main action.
+      + `<div class="field"><input name="learn-q" type="search" data-main-action="learn" placeholder="Search: yellow leaves, wilt, holes in fruit..." value="${esc(filter.query)}" autocomplete="off"></div>`
       + '<div class="row wrap">'
       + `<button class="chip ${!filter.kind ? 'on' : ''}" data-act="learn-kind" data-kind="">All</button> `
       + LEARN_KINDS.map((k) => `<button class="chip ${filter.kind === k.id ? 'on' : ''}" `
@@ -81,12 +82,20 @@ export const learnCardView = {
     }
     const kind = kindOf(c.category);
 
+    // docs/simplify-pass/07-learn.md: the one thing a hand does from a card —
+    // report the plant in front of them — is at the top, not under the last
+    // section. Learn links to the report; the report never links here
+    // (FR-LEARN-01).
     let out = card(
       `<div class="card-head"><h2>${esc(c.name)}</h2>${badge(`${kind.pic} ${esc(kind.label)}`)}</div>`
+      // Above the reference photo, so a tall picture never pushes it off the screen.
+      + button('Seen this? Report a sick plant', 'go',
+        { cls: 'btn-block', icon: '🌿', data: { to: '#/sick-plant', 'main-action': 'learn-card' } })
       + (c.photo
         ? `<div class="ref-shot"><img src="${c.photo.photo.dataUrl}" alt="${esc(c.name)}" loading="lazy"></div>`
         : '')
-      + (c.drafted ? note('warn', 'Not yet reviewed', `<small>${esc(c.drafted)}</small>`) : ''),
+      + (c.drafted ? note('warn', 'Not yet reviewed',
+        more('Why', `<small>${esc(c.drafted)}</small>`, { id: 'learn.drafted' })) : ''),
       { tight: true },
     );
 
@@ -120,15 +129,19 @@ export const learnCardView = {
     out += card(
       cardHead('What to do first')
       + '<ol>' + c.firstSteps.map((s) => `<li>${esc(s)}</li>`).join('') + '</ol>'
-      + button('Report a sick plant', 'go', { cls: 'btn-block btn-lg', icon: '🌿', data: { to: '#/sick-plant' } }),
+      + button('Report a sick plant', 'go', { cls: 'btn-block btn-ghost', icon: '🌿', data: { to: '#/sick-plant' } }),
     );
 
     // FR-LEARN-02: the supervising view of the same card, for those who hold it.
     if (can(ctx.user, 'viewTreatment')) {
-      out += card(note('info', 'Doses, rotation groups and the treatment plan',
-        '<small>Kept off this view, which is what a Greenhouse Hand sees. The full card has them.</small>')
-        + button('Open the full card', 'go', { cls: 'btn-block btn-ghost', data: { to: `#/guide/item?id=${c.id}` } }),
-      { tight: true });
+      out += card(
+        button('Open the full card: doses, groups, treatment plan', 'go',
+          { cls: 'btn-block btn-ghost', data: { to: `#/guide/item?id=${c.id}` } })
+        + more('Why they are not here', '<small>Doses, rotation groups and the treatment plan are kept '
+          + 'off this view, which is what a Greenhouse Hand sees. The full card has them.</small>',
+        { id: 'learn.full-card-why' }),
+        { tight: true },
+      );
     }
 
     return out;

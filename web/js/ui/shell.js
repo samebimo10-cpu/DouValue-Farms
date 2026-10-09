@@ -12,7 +12,9 @@ import {
   signOutDevice, statusLine, syncNow, verifyPin,
 } from '../sync.js';
 import { refusalsFor } from '../domain/refusals.js';
-import { isoDate } from '../util.js';
+import { friendlyDate, isoDate } from '../util.js';
+import { seasonOn } from '../domain/climate.js';
+import { zonesHeldBy } from '../domain/assignments.js';
 import { applyPhrase, buzz, callSupervisor, stepCount } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
 
@@ -328,6 +330,7 @@ const PARENT_OF = {
   '#/kpis': '#/dashboard',
   '#/shifts': '#/today',
   '#/sick-plant': '#/today',
+  '#/my-reports': '#/today',
   '#/learn': '#/today',
   '#/learn/card': '#/learn',
   '#/farm': '#/today',
@@ -478,11 +481,22 @@ export function render() {
   if (view.mounted) view.mounted(ctx);
 }
 
-function accountSheet() {
-  const user = ctx.store.user;
-  const state = ctx.store.state;
+export function accountSheet(c = ctx) {
+  const user = c.store.user;
+  const state = c.store.state;
   const role = ROLES[user.role];
+  // docs/simplify.md: the date and the season left the top of My work (category
+  // 4 there — the phone already shows the date) and are read here instead.
   return `<h2>${esc(user.name)}</h2><p>${badge(role?.name || user.role)} <small>${esc(role?.blurb || '')}</small></p>`
+    + `<p data-moved="home.date-season"><small>${esc(friendlyDate(isoDate()))} — ${esc(seasonOn(isoDate()).label)}</small></p>`
+    // Moved from My work too: the zones this person holds (FR-ROLE-05/07).
+    + (() => {
+      const zones = zonesHeldBy(state, user.id);
+      return zones.length
+        ? `<p data-moved="home.zones"><small>Your zones: ${zones.map((z) => `<b>${esc(z.zone.name)}</b>`
+          + (z.holding === 'backup' ? ' (backup)' : '')).join(', ')}</small></p>`
+        : '';
+    })()
     + `<p><small>Signed in on this phone. ${esc(state.log.length)} records stored. `
     + `${esc(statusLine().text)}.</small></p>`
     + '<div class="field"><label>Language</label>'
@@ -804,6 +818,8 @@ export async function startShell(store) {
     const hit = findAction(e.target);
     if (!hit) return;
     if (hit.el.tagName === 'A') return;
+    // A select acts on the choice, not on the tap that opens it (below).
+    if (hit.el.tagName === 'SELECT') return;
     e.preventDefault();
     const view = routes.get(routeKey());
     const handler = (view && view.actions && view.actions[hit.act]) || shellActions[hit.act];
@@ -828,6 +844,25 @@ export async function startShell(store) {
     } catch (err) {
       console.error(err);
       toast(err.message || 'That did not save', true);
+    }
+  });
+
+  // A <select data-act> runs its action when the choice is made. On a phone
+  // the picker sends no click after the choice, so waiting for a click left
+  // the form showing the first option's bed — and saving under it, past that
+  // bed's own PHI (FR-TREAT-02) — and the spray form's dose and waiting-period
+  // hints for the first product.
+  document.addEventListener('change', async (e) => {
+    const el = e.target.closest('select[data-act]');
+    if (!el) return;
+    const view = routes.get(routeKey());
+    const handler = (view && view.actions && view.actions[el.dataset.act]) || shellActions[el.dataset.act];
+    if (!handler) return;
+    try {
+      await handler(ctx, el, el.dataset);
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'That did not work', true);
     }
   });
 
