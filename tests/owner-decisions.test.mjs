@@ -60,7 +60,7 @@ test('FR-SIMP-04: the adviser brief keeps sales and prices for the Farm Manager,
 test('FR-SIMP-04: profit, crop value, cashflow and the record checks are the Owner\'s permissions alone', () => {
   for (const perm of ['viewProfit', 'viewAudit', 'manageRates']) {
     assert.equal(store.can({ role: 'ceo' }, perm), true, perm);
-    for (const role of ['manager', 'agronomist', 'supervisor', 'hand']) {
+    for (const role of ['manager', 'supervisor', 'hand']) {
       assert.equal(store.can({ role }, perm), false, `${role} must not hold ${perm}`);
     }
   }
@@ -183,6 +183,10 @@ test('FR-ADV-07: an answer is costed from its usage at list prices, an unknown m
   // Opus 5: $5 in, $25 out per million; searches $10 per thousand.
   assert.equal(Math.round(core.usageCostUsd('claude-opus-5', usage) * 1e6), Math.round((0.05 + 0.05 + 0.03) * 1e6));
   assert.ok(core.usageCostUsd('some-new-model', usage) > core.usageCostUsd('claude-opus-5', usage));
+  // Opus 5.5, the server's default: $4 / $20, a fifth cheaper than Opus 5 on the same tokens.
+  const tokensOnly = { input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 10000 };
+  assert.equal(Math.round(core.usageCostUsd('claude-opus-5-5', tokensOnly) * 1e6), Math.round((0.04 + 0.04 + 0.002) * 1e6));
+  assert.ok(core.usageCostUsd('claude-opus-5-5', tokensOnly) < core.usageCostUsd('claude-opus-5', tokensOnly));
 });
 
 // --- FR-XCHK-01: the record checks run on the server, once a night -------------
@@ -227,7 +231,7 @@ test('FR-XCHK-01: the checks run from 02:00 farm time, once a night, and only th
   assert.doesNotMatch(late.title, /Emeka/, 'the headline names the bed, not the person (FR-XCHK-10)');
   assert.equal(late.who, 'u_hand', 'who entered it stays on the finding');
 
-  for (const role of ['manager', 'agronomist', 'supervisor', 'hand']) {
+  for (const role of ['manager', 'supervisor', 'hand']) {
     assert.equal(core.visibleTo(record, { memberId: 'x', role }), null, `${role} is not sent the findings`);
   }
   assert.ok(core.visibleTo(record, { memberId: 'c', role: 'ceo' }));

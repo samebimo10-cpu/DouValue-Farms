@@ -1682,7 +1682,6 @@ const PROBLEMS = [
         'Load the bed with organic matter: compost feeds the fungi and mites that eat nematodes.',
       ],
       chemical: [
-        { active: 'Avoid carbofuran (Furadan)', example: '-', how: 'Do not use it', phiDays: 0, note: 'Extremely toxic to people and birds, banned in many markets and a real risk to anyone eating your pepper. Rotation and marigold are safer and work.' },
         { active: 'Fluensulfone or fluopyram', example: 'Nimitz / Velum', how: 'Soil applied before planting where registered and available', phiDays: 14, note: 'Expensive. Only worth it on a proven heavy infestation.' },
       ],
       organic: ['Marigold rotation.', 'Neem cake worked into the bed at 2-3 t/ha.', 'Compost.'],
@@ -3982,7 +3981,7 @@ const FARM_UTC_OFFSET_HOURS = 1;
 /** A Farm Manager not clocked in by this farm hour counts as away (positions.js uses the same 9). */
 const NO_SHOW_HOUR = 9;
 
-const TITLE = { supervisor: 'Field Supervisor', agronomist: 'Agronomist', manager: 'Farm Manager', ceo: 'Owner' };
+const TITLE = { supervisor: 'Field Supervisor', manager: 'Farm Manager', ceo: 'Owner' };
 const roleTitle = (role) => TITLE[role] || 'Farm Manager';
 
 const HOUR = 3600000;
@@ -3999,7 +3998,7 @@ const active = (p) => !!p && p.active !== false;
 function approverFor(role) {
   if (role === 'ceo') return null;
   if (role === 'manager') return 'ceo';
-  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  if (role === 'supervisor' || role === 'hand') return 'manager';
   return 'ceo';
 }
 
@@ -8466,7 +8465,7 @@ const OPEN = new Set(['pass', 'overridden', 'waiting', 'na', PRE_GATES]);
 const isBlocking = (condition) => !OPEN.has(condition.state);
 
 /** Ranks, mirroring web/js/store.js. Used to check who signed what. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOfId = (state, id) => {
   const p = ((state && state.people) || {})[id];
   return (p && RANK[p.role]) || 0;
@@ -10049,7 +10048,7 @@ function doctorOutput({
 }
 
 /** Who may confirm or approve what. Ranks mirror web/js/store.js. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person && RANK[person.role]) || 0;
 const isDoctor = (person) => !person || person.id === DOCTOR.id || person.role === 'doctor';
 
@@ -11901,7 +11900,7 @@ const OVERDUE_LADDER = [
   { rung: 'ceo', title: 'Owner', rank: 100 },
 ];
 
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person ? RANK[person.role] ?? -1 : -1);
 
 function hasFarmView(user) {
@@ -12412,6 +12411,8 @@ await (async function (__dvExports) {
 Object.defineProperties(__dvExports, {
   "ROLES": { enumerable: true, get: () => ROLES },
   "ROLE_LIST": { enumerable: true, get: () => ROLE_LIST },
+  "LEGACY_ROLES": { enumerable: true, get: () => LEGACY_ROLES },
+  "currentRole": { enumerable: true, get: () => currentRole },
   "roleRank": { enumerable: true, get: () => roleRank },
   "can": { enumerable: true, get: () => can },
   "assignableRoles": { enumerable: true, get: () => assignableRoles },
@@ -12516,13 +12517,6 @@ const ROLES = {
     home: '#/field',
     blurb: 'Assigns the day\'s work, checks the harvest, records sprays and inputs.',
   },
-  agronomist: {
-    id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
-    home: '#/clinic',
-    blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
-  },
   manager: {
     id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
@@ -12546,15 +12540,25 @@ const ROLES = {
 /** Roles from the top down, for pickers and tables. */
 const ROLE_LIST = Object.values(ROLES).sort((a, b) => b.rank - a.rank);
 
+/**
+ * Jobs that no longer exist, and the job a person who held one now has.
+ * The Agronomist was removed (FR-GATE-00: the Farm Doctor replaced the site
+ * agronomist). Its diagnosing, scouting and spraying are the Field
+ * Supervisor's, so anyone still recorded as one signs in as a Field Supervisor
+ * rather than to an app that shows them nothing. The farm server does the same.
+ */
+const LEGACY_ROLES = { agronomist: 'supervisor' };
+const currentRole = (role) => LEGACY_ROLES[role] || role;
+
 function roleRank(person) {
   if (!person) return -1;
-  const role = ROLES[person.role || person];
+  const role = ROLES[currentRole(person.role || person)];
   return role ? role.rank : -1;
 }
 
 function can(person, permission) {
   if (!person) return false;
-  const role = ROLES[person.role];
+  const role = ROLES[currentRole(person.role)];
   return !!role && role.can.includes(permission);
 }
 
@@ -12808,6 +12812,7 @@ function reduce(events) {
 
       case 'person.upsert':
         state.people[p.id] = { ...(state.people[p.id] || {}), ...p, active: p.active !== false };
+        if (state.people[p.id].role) state.people[p.id].role = currentRole(state.people[p.id].role);
         break;
       case 'person.deactivate':
         if (state.people[p.id]) state.people[p.id].active = false;
@@ -14843,11 +14848,6 @@ const ROLES = {
       'assignTasks', 'verifyHarvest', 'logSpray', 'logInputs', 'viewTeam', 'manageCycles', 'scout',
       'guideDiagnosis', 'viewTreatment'],
   },
-  agronomist: {
-    rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
-  },
   manager: {
     rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
@@ -14863,8 +14863,15 @@ const ROLES = {
   },
 };
 
-const can = (role, permission) => !!ROLES[role] && ROLES[role].can.includes(permission);
-const rankOf = (role) => (ROLES[role] ? ROLES[role].rank : -1);
+/** The Agronomist was removed; anyone still stored as one is a Field Supervisor (web/js/store.js, LEGACY_ROLES). */
+const LEGACY_ROLES = { agronomist: 'supervisor' };
+const currentRole = (role) => LEGACY_ROLES[role] || role;
+
+const can = (role, permission) => {
+  const r = ROLES[currentRole(role)];
+  return !!r && r.can.includes(permission);
+};
+const rankOf = (role) => (ROLES[currentRole(role)] ? ROLES[currentRole(role)].rank : -1);
 
 /** Which roles a person may hand out: the CEO anyone, everyone else below themselves. */
 function assignableRoles(role) {
@@ -15173,7 +15180,7 @@ const DOCTOR_ID = 'farm-doctor';
 function approverFor(role) {
   if (role === 'ceo') return null;
   if (role === 'manager') return 'ceo';
-  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  if (currentRole(role) === 'supervisor' || role === 'hand') return 'manager';
   return 'ceo';
 }
 
@@ -15564,7 +15571,7 @@ async function handleRequest(req, store) {
 }
 
 const publicMember = (m) => ({
-  id: m.id, name: m.name, role: m.role, status: m.status, login: m.login || null,
+  id: m.id, name: m.name, role: currentRole(m.role), status: m.status, login: m.login || null,
   joinedAt: m.joinedAt || null, invitedAt: m.invitedAt || null,
 });
 const publicFarm = (f) => (f ? { id: f.id, name: f.name, created: f.created } : null);
@@ -15582,7 +15589,7 @@ async function authenticate(farmId, req, store) {
     return { ok: false, response: json({ error: 'That account is no longer active' }, 403) };
   }
   await store.touchToken(rec.digest, new Date().toISOString());
-  return { ok: true, member, token: rec };
+  return { ok: true, member: { ...member, role: currentRole(member.role) }, token: rec };
 }
 
 /**
@@ -15751,7 +15758,6 @@ function guardReport(event) {
  * The Farm Manager and the Owner. The Field Supervisor only on a record that
  * says it is covering; whether the Farm Manager really was out that day is a
  * question of attendance, which every phone replays and refuses on its own.
- * The agronomist assigns tasks but not zones.
  */
 function guardZoneAssign(event, author) {
   const p = event.payload || {};
@@ -16560,7 +16566,22 @@ const ADVICE_PER_DAY = 25;
 // Long enough for a few web searches and a considered answer; short enough that
 // a phone on a weak signal gives up rather than hanging with a spinner.
 const ADVICE_TIMEOUT_MS = 90_000;
-const ADVICE_MODEL = 'claude-opus-5';
+// Claude Opus 5.5: the successor to Claude Opus 5 at $4 / $20 per million
+// tokens against $5 / $25, same tokenizer, so a fifth cheaper per answer
+// (Anthropic pricing page, checked 9 October 2026). Its default effort is
+// medium where Opus 5's was high, so each call below sets its effort.
+const ADVICE_MODEL = 'claude-opus-5-5';
+
+/**
+ * A safety classifier can decline a request (`stop_reason: "refusal"`; Opus 5.5
+ * adds a `bio` category, and plant disease is close to it). `fallbacks:
+ * "default"` re-runs a declined request on the model Anthropic recommends for
+ * that category, inside the same call. Only for the models that take it.
+ */
+const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5-5']);
+const fallbackFor = (model) => (FALLBACK_MODELS.has(model)
+  ? { headers: { 'anthropic-beta': 'server-side-fallback-2026-07-01' }, body: { fallbacks: 'default' } }
+  : { headers: {}, body: {} });
 
 const ADVISER_BRIEF = `You are the farm adviser for a commercial pepper farm in Port Harcourt,
 Rivers State, Nigeria. It grows bell pepper (tatashe), chili (shombo) and habanero (ata rodo)
@@ -16858,24 +16879,26 @@ async function runDueChecks(store, farmIds, { now = new Date() } = {}) {
 // worked out from the usage the API returns, at list prices; a model not in
 // the table is charged at the dearest rate, so the cap errs towards stopping.
 
-// US dollars per million tokens: [input, output]. Web search is $10 per 1,000.
+// US dollars per million tokens: [input, output, cache read], from Anthropic's
+// pricing page (checked 9 October 2026). Cache writes are 1.25 x input for the
+// five-minute cache. Web search is $10 per 1,000.
 const MODEL_PRICES = {
-  'claude-fable-5-1': [10, 50], 'claude-fable-5': [10, 50],
-  'claude-opus-5-5': [4, 20], 'claude-opus-5': [5, 25],
-  'claude-opus-4-8': [5, 25], 'claude-opus-4-7': [5, 25], 'claude-opus-4-6': [5, 25],
-  'claude-sonnet-5-5': [2, 10], 'claude-sonnet-5': [2, 10], 'claude-sonnet-4-6': [3, 15],
-  'claude-haiku-5-5': [0.1, 0.5], 'claude-haiku-4-5': [1, 5],
+  'claude-fable-5-1': [10, 50, 0.25], 'claude-fable-5': [10, 50, 1],
+  'claude-opus-5-5': [4, 20, 0.2], 'claude-opus-5': [5, 25, 0.5],
+  'claude-opus-4-8': [5, 25, 0.5], 'claude-opus-4-7': [5, 25, 0.5], 'claude-opus-4-6': [5, 25, 0.5],
+  'claude-sonnet-5-5': [2, 10, 0.1], 'claude-sonnet-5': [2, 10, 0.2], 'claude-sonnet-4-6': [3, 15, 0.3],
+  'claude-haiku-5-5': [0.1, 0.5, 0.01], 'claude-haiku-4-5': [1, 5, 0.1],
 };
-const DEAREST = [10, 50];
+const DEAREST = [10, 50, 1];
 const WEB_SEARCH_USD = 0.01;
 
 /** What one answer cost, in US dollars, from the usage block the API returned. */
 function usageCostUsd(model, usage = {}) {
-  const [inRate, outRate] = MODEL_PRICES[model] || DEAREST;
+  const [inRate, outRate, readRate] = MODEL_PRICES[model] || DEAREST;
   const n = (v) => Number(v) || 0;
   const tokens = n(usage.input_tokens) * inRate
     + n(usage.cache_creation_input_tokens) * inRate * 1.25
-    + n(usage.cache_read_input_tokens) * inRate * 0.1
+    + n(usage.cache_read_input_tokens) * readRate
     + n(usage.output_tokens) * outRate;
   const searches = n(usage.server_tool_use && usage.server_tool_use.web_search_requests);
   return tokens / 1e6 + searches * WEB_SEARCH_USD;
@@ -16995,12 +17018,14 @@ async function advise(farmId, body, me, store) {
         'content-type': 'application/json',
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
+        ...fallbackFor(model).headers,
       },
       signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
       body: JSON.stringify({
         // Overridable, because the farm is the one paying for each question and
         // a cheaper model is a legitimate choice for a farm making many of them.
         model,
+        ...fallbackFor(model).body,
         // Thinking is on by default and is billed against this, so the ceiling
         // has to leave room for it or a good answer gets cut off mid-sentence.
         max_tokens: 16000,
@@ -17023,7 +17048,8 @@ async function advise(farmId, body, me, store) {
     }
 
     const answer = await res.json();
-    await recordSpend(farmId, store, model, answer.usage);
+    // Priced at the model that answered, which after a fallback is not the one asked.
+    await recordSpend(farmId, store, answer.model || model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({
         ok: false, reason: 'declined', weather,
@@ -17164,11 +17190,15 @@ async function photoReview(farmId, body, me, store) {
         'content-type': 'application/json',
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
+        ...fallbackFor(model).headers,
       },
       signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
       body: JSON.stringify({
         model,
+        ...fallbackFor(model).body,
         max_tokens: 4000,
+        // Opus 5's default, set out loud: Opus 5.5 would otherwise run at medium.
+        output_config: { effort: 'high' },
         system: PHOTO_BRIEF,
         messages: [{
           role: 'user',
@@ -17187,7 +17217,8 @@ async function photoReview(farmId, body, me, store) {
     }
 
     const answer = await res.json();
-    await recordSpend(farmId, store, model, answer.usage);
+    // Priced at the model that answered, which after a fallback is not the one asked.
+    await recordSpend(farmId, store, answer.model || model, answer.usage);
     if (answer.stop_reason === 'refusal') {
       return json({ ok: false, reason: 'declined', message: 'Photo review would not answer that one.' });
     }

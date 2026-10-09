@@ -18,7 +18,6 @@ export async function seedSampleFarm(store) {
     { id: 'sp_owner', name: 'Ebimo Sam', role: 'ceo', phone: '08030000000' },
     { id: 'sp_ada', name: 'Ada Briggs', role: 'manager', phone: '08030000001' },
     { id: 'sp_tamuno', name: 'Tamuno George', role: 'supervisor', phone: '08030000002' },
-    { id: 'sp_chidi', name: 'Chidi Nwosu', role: 'agronomist', phone: '08030000003' },
     { id: 'sp_emeka', name: 'Emeka Okoro', role: 'hand', phone: '08030000004' },
     { id: 'sp_blessing', name: 'Blessing Amadi', role: 'hand', phone: '08030000005' },
   ];
@@ -45,7 +44,7 @@ export async function seedSampleFarm(store) {
     { type: 'settings.update', payload: { farmName: 'DouValue Farms Limited', location: 'Port Harcourt, Rivers State' } },
     ...people.map((p) => ({ type: 'person.upsert', payload: { ...p, pinHash: pin } })),
     // FR-COST-05 — the Owner's daily rate per position, so labour cost per zone has something to show.
-    ...[['hand', 3500], ['supervisor', 5000], ['agronomist', 6000]].map(([role, perDay]) => ({
+    ...[['hand', 3500], ['supervisor', 5000]].map(([role, perDay]) => ({
       type: 'rate.set', by: 'sp_owner', payload: { role, perDay } })),
     ...plots.map((p) => ({ type: 'plot.upsert', payload: p })),
     ...cycles.map((c) => ({ type: 'cycle.start', payload: c })),

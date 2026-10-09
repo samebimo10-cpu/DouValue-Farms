@@ -33,7 +33,7 @@ export const DIGEST_HOUR = 7;
 export const IMMEDIATE_WITHIN_HOURS = 48;
 
 /** Whose phones offer the digest: the people who see the whole farm. Anyone raises an alarm. */
-export const DIGEST_ROLES = new Set(['supervisor', 'agronomist', 'manager', 'ceo']);
+export const DIGEST_ROLES = new Set(['supervisor', 'manager', 'ceo']);
 
 /** WhatsApp's own ceiling on a text body. */
 export const MAX_MESSAGE_CHARS = 4096;

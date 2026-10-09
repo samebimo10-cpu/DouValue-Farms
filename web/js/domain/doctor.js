@@ -200,7 +200,7 @@ export function doctorOutput({
 }
 
 /** Who may confirm or approve what. Ranks mirror web/js/store.js. */
-const RANK = { hand: 10, supervisor: 50, agronomist: 60, manager: 80, ceo: 100 };
+const RANK = { hand: 10, supervisor: 50, manager: 80, ceo: 100 };
 const rankOf = (person) => (person && RANK[person.role]) || 0;
 const isDoctor = (person) => !person || person.id === DOCTOR.id || person.role === 'doctor';
 

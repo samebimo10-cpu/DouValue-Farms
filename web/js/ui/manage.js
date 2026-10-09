@@ -105,7 +105,11 @@ export const dashboardView = {
         : stat('Still to pick', kg(sum(forecasts, (f) => f.forecast.remainingKg), 0), 'across all beds'))
       + (showsValue
         ? stat('Still on the plants', naira(expectedRemaining, true), 'forecast value')
-        : stat('Open jobs', String(openTasks(state).length), 'assigned and due'))
+        // The harvest forecast is operational, so the Farm Manager sees it in
+        // kilograms where the Owner sees what it is worth (FR-SIMP-04).
+        : showsMoney
+          ? stat('Still to pick', kg(sum(forecasts, (f) => f.forecast.remainingKg), 0), 'across all beds')
+          : stat('Open jobs', String(openTasks(state).length), 'assigned and due'))
       + '</div>'
       + '<h3 style="margin-top:16px">Picking, last 14 days</h3>'
       + spark(days, { caption: `Total ${kg(sum(days, (d) => d.value), 0)} over the fortnight.` }),
@@ -363,7 +367,7 @@ export const reportsView = {
       workByType.set(w.activity, (workByType.get(w.activity) || 0) + (Number(w.hours) || 0));
     }
 
-    // An agronomist may read reports but is not sent sales or costs. Their
+    // A supervising role may read reports but is not sent sales or costs. Their
     // totals would come out as zeroes, which reads as "the farm sold nothing"
     // rather than "you were not shown this".
     const showsMoney = can(ctx.user, 'manageMoney');
@@ -486,7 +490,7 @@ export const peopleView = {
       + (isOwner
         ? note('info', 'You are the CEO',
           '<small>Only you can appoint or change a farm manager, and only you can set up the sync '
-          + 'link that keeps every phone in step. A manager can take on supervisors, agronomists and '
+          + 'link that keeps every phone in step. A manager can take on supervisors and '
           + 'farm hands, but cannot create another manager or touch your account.</small>')
         : note('info', 'What you can do here',
           '<small>You can take on the people below your own level. Appointing or changing a manager, '

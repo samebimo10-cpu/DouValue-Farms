@@ -381,7 +381,7 @@ test('only the Owner may override a gate', () => {
     payload: { gate: 'nematode', zoneId: 'gh1', reason: 'Second sample already at the lab' },
   };
 
-  for (const role of ['hand', 'supervisor', 'agronomist', 'manager']) {
+  for (const role of ['hand', 'supervisor', 'manager']) {
     assert.equal(core.can(role, 'manageOwners'), false, `${role} must not hold the override permission`);
   }
   assert.equal(core.can('ceo', 'manageOwners'), true);

@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.16 (draft for restructuring) |
+| Version | 1.17 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -413,6 +413,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.17 | 9 Oct 2026 | The Agronomist role removed from the app (FR-GATE-00); a person still recorded with it works as a Field Supervisor. The carbofuran "avoid" row removed from the problem cards (FR-STOCK-09). FR-SIMP-04: harvest, labour and stock forecasts are the Farm Manager's too. The farm server's adviser and photo review default to Claude Opus 5.5, with refusal fallback (FR-ADV-07 costs it at its own prices) |
 | 1.16 | 9 Oct 2026 | FR-DOC-03: photo review for the Field Supervisor and above. FR-ADV-07: the Owner's monthly cap in US dollars, beside the daily limit. FR-TREAT-01: litres sprayed and area treated. FR-STOCK-01: a spray draws its stock down by itself. FR-COST-04 points to FR-SIMP-04 for the Farm Manager's view of the money. SR-04 re-spray tasks generated from hourly rain. The Farm check runs as verification Part A, nightly on the server, Owner-only |
 | 1.15 | 9 Oct 2026 | FR-COST-05 added: pay, per-person daily rates and wage redaction removed, attendance kept; the Owner's daily rate per position prices labour per zone as days worked × rate. §6.16 to §6.19 point to docs/verification.md (FR-VER, FR-XCHK, XC-01 to XC-12, FR-WALK) and docs/simplify.md (FR-SIMP) as authoritative |
 | 1.14 | 8 Oct 2026 | UX-28 added: the CEO makes each person's sign-in name and password and sends them; a new phone opens on a sign-in page and lands on that person's job. Replaces the single-use invite link and code |

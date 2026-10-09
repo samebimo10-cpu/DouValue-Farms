@@ -58,8 +58,8 @@ const STRINGS = {
   'dx.result': { en: 'What it looks like', pcm: 'Wetin e fit be' },
   'dx.confirm': { en: 'Check this to be sure', pcm: 'Check dis one make you sure' },
   'dx.doNow': { en: 'Do this now', pcm: 'Do dis one now now' },
-  'dx.none': { en: 'Nothing matched. Tick a few more things, or call the agronomist.',
-    pcm: 'Nothing match. Tick more thing, or call di crop doctor.' },
+  'dx.none': { en: 'Nothing matched. Tick a few more things, or call the Field Supervisor.',
+    pcm: 'Nothing match. Tick more thing, or call di oga for field.' },
 
   // Shared
   'common.save': { en: 'Save', pcm: 'Save am' },

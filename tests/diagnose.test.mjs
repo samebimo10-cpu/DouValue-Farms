@@ -531,7 +531,6 @@ test('only the Owner and the Farm Manager may fill a slot', () => {
   assert.equal(may('ceo'), true, 'the Owner');
   assert.equal(may('manager'), true, 'the Farm Manager');
   assert.equal(may('supervisor'), false);
-  assert.equal(may('agronomist'), false);
   assert.equal(may('hand'), false);
   // Everyone reads them: a reference photo on one phone is worth nothing.
   assert.equal(core.EVENT_POLICY['reference.photo.set'].read, core.EVENT_POLICY['scout.record'].read);

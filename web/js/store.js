@@ -54,13 +54,6 @@ export const ROLES = {
     home: '#/field',
     blurb: 'Assigns the day\'s work, checks the harvest, records sprays and inputs.',
   },
-  agronomist: {
-    id: 'agronomist', name: 'Agronomist', pidgin: 'Crop doctor', rank: 60,
-    can: ['viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose', 'scout', 'logSpray', 'prescribe', 'manageCycles',
-      'viewTeam', 'viewReports', 'assignTasks', 'viewTreatment'],
-    home: '#/clinic',
-    blurb: 'Diagnoses problems, writes the spray plan, watches the risk board.',
-  },
   manager: {
     id: 'manager', name: 'Farm manager', pidgin: 'Oga', rank: 80,
     can: ['clockIn', 'logWork', 'logHarvest', 'reportProblem', 'viewOwnTasks', 'viewGuide', 'countTraps', 'diagnose',
@@ -84,15 +77,25 @@ export const ROLES = {
 /** Roles from the top down, for pickers and tables. */
 export const ROLE_LIST = Object.values(ROLES).sort((a, b) => b.rank - a.rank);
 
+/**
+ * Jobs that no longer exist, and the job a person who held one now has.
+ * The Agronomist was removed (FR-GATE-00: the Farm Doctor replaced the site
+ * agronomist). Its diagnosing, scouting and spraying are the Field
+ * Supervisor's, so anyone still recorded as one signs in as a Field Supervisor
+ * rather than to an app that shows them nothing. The farm server does the same.
+ */
+export const LEGACY_ROLES = { agronomist: 'supervisor' };
+export const currentRole = (role) => LEGACY_ROLES[role] || role;
+
 export function roleRank(person) {
   if (!person) return -1;
-  const role = ROLES[person.role || person];
+  const role = ROLES[currentRole(person.role || person)];
   return role ? role.rank : -1;
 }
 
 export function can(person, permission) {
   if (!person) return false;
-  const role = ROLES[person.role];
+  const role = ROLES[currentRole(person.role)];
   return !!role && role.can.includes(permission);
 }
 
@@ -346,6 +349,7 @@ export function reduce(events) {
 
       case 'person.upsert':
         state.people[p.id] = { ...(state.people[p.id] || {}), ...p, active: p.active !== false };
+        if (state.people[p.id].role) state.people[p.id].role = currentRole(state.people[p.id].role);
         break;
       case 'person.deactivate':
         if (state.people[p.id]) state.people[p.id].active = false;

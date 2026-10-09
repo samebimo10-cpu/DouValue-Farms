@@ -45,7 +45,7 @@ export const FARM_UTC_OFFSET_HOURS = 1;
 /** A Farm Manager not clocked in by this farm hour counts as away (positions.js uses the same 9). */
 export const NO_SHOW_HOUR = 9;
 
-const TITLE = { supervisor: 'Field Supervisor', agronomist: 'Agronomist', manager: 'Farm Manager', ceo: 'Owner' };
+const TITLE = { supervisor: 'Field Supervisor', manager: 'Farm Manager', ceo: 'Owner' };
 export const roleTitle = (role) => TITLE[role] || 'Farm Manager';
 
 const HOUR = 3600000;
@@ -62,7 +62,7 @@ const active = (p) => !!p && p.active !== false;
 export function approverFor(role) {
   if (role === 'ceo') return null;
   if (role === 'manager') return 'ceo';
-  if (role === 'supervisor' || role === 'agronomist' || role === 'hand') return 'manager';
+  if (role === 'supervisor' || role === 'hand') return 'manager';
   return 'ceo';
 }
 

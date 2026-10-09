@@ -28,16 +28,35 @@ const hand = { id: 'u_hand', name: 'Hand', role: 'hand' };
 
 test('roles are ranked from the farm hand up to the owner', () => {
   assert.ok(store.roleRank(ceo) > store.roleRank(manager));
-  assert.ok(store.roleRank(manager) > store.roleRank({ role: 'agronomist' }));
-  assert.ok(store.roleRank({ role: 'agronomist' }) > store.roleRank(supervisor));
+  assert.ok(store.roleRank(manager) > store.roleRank(supervisor));
   assert.ok(store.roleRank(supervisor) > store.roleRank(hand));
 });
 
+// The Agronomist was removed (FR-GATE-00: the Farm Doctor replaced the site
+// agronomist). Nobody can be given the job, and anyone still recorded with it
+// works as a Field Supervisor rather than being locked out.
+test('the Agronomist role is gone, and a person still recorded as one is a Field Supervisor', () => {
+  assert.equal(store.ROLES.agronomist, undefined);
+  assert.equal(core.ROLES.agronomist, undefined);
+  assert.equal(store.assignableRoles(ceo).includes('agronomist'), false);
+  const grant = { id: 'p', type: 'person.upsert', payload: { id: 'x', name: 'Chidi', role: 'agronomist' } };
+  assert.equal(core.mayWrite(grant, { id: 'c', role: 'ceo' }).ok, false, 'not even the Owner can hand it out');
+
+  const s = store.reduce([{ id: 'e1', type: 'person.upsert', at: '2026-01-01T08:00:00Z', by: 'c',
+    payload: { id: 'x', name: 'Chidi', role: 'agronomist' } }]);
+  assert.equal(s.people.x.role, 'supervisor');
+  for (const perm of ['guideDiagnosis', 'scout', 'logSpray', 'viewOwnTasks']) {
+    assert.equal(store.can({ role: 'agronomist' }, perm), true, perm);
+    assert.equal(core.can('agronomist', perm), true, perm);
+  }
+  assert.equal(core.can('agronomist', 'viewReports'), false, 'the Agronomist\'s old extras went with it');
+});
+
 test('the CEO can appoint anyone; a manager only below themselves', () => {
-  for (const role of ['ceo', 'manager', 'agronomist', 'supervisor', 'hand']) {
+  for (const role of ['ceo', 'manager', 'supervisor', 'hand']) {
     assert.ok(store.assignableRoles(ceo).includes(role));
   }
-  assert.deepEqual(store.assignableRoles(manager).sort(), ['agronomist', 'hand', 'supervisor']);
+  assert.deepEqual(store.assignableRoles(manager).sort(), ['hand', 'supervisor']);
   assert.deepEqual(store.assignableRoles(hand), []);
 });
 
@@ -72,7 +91,6 @@ test('a farm hand is never sent the money, redaction or not', () => {
   const sale = { id: 's1', type: 'sale.record', payload: { amount: 500000 } };
   assert.equal(core.visibleTo(sale, { memberId: 'h', role: 'hand' }), null);
   assert.equal(core.visibleTo(sale, { memberId: 's', role: 'supervisor' }), null);
-  assert.equal(core.visibleTo(sale, { memberId: 'a', role: 'agronomist' }), null);
   assert.ok(core.visibleTo(sale, { memberId: 'm', role: 'manager' }));
   assert.ok(core.visibleTo(sale, { memberId: 'c', role: 'ceo' }));
 });
@@ -110,7 +128,7 @@ test('own details work whether the reader is a session or a stored member', () =
 
 test('FR-COST-05: the rate per position is the Owner\'s alone, to read and to write', () => {
   const rate = { id: 'r1', type: 'rate.set', payload: { role: 'hand', perDay: 3500 } };
-  for (const role of ['hand', 'supervisor', 'agronomist', 'manager']) {
+  for (const role of ['hand', 'supervisor', 'manager']) {
     assert.equal(core.visibleTo(rate, { memberId: 'x', role }), null, `${role} must not receive a rate`);
     assert.equal(core.mayWrite(rate, { id: 'x', role }).ok, false, `${role} must not set a rate`);
   }
@@ -578,13 +596,13 @@ test('UX-28: a manager makes sign-ins only below their own level', async () => {
 
 test('UX-28: changing the job keeps the password; a new password replaces the old', async () => {
   const id = (await signIn('blessing', '737373')).body.member.id;
-  const promoted = await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'agronomist', login: 'blessing' });
+  const promoted = await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'supervisor', login: 'blessing' });
   assert.equal(promoted.status, 200);
   assert.equal(promoted.body.passwordChanged, false);
   const after = await signIn('blessing', '737373');
-  assert.equal(after.body.member.role, 'agronomist', 'the next sign-in carries the new job');
+  assert.equal(after.body.member.role, 'supervisor', 'the next sign-in carries the new job');
 
-  await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'agronomist', login: 'blessing', password: '909090' });
+  await account(ceoToken, { memberId: id, name: 'Blessing Ama', role: 'supervisor', login: 'blessing', password: '909090' });
   assert.equal((await signIn('blessing', '737373')).status, 403);
   assert.equal((await signIn('blessing', '909090')).status, 200);
 
@@ -668,7 +686,7 @@ test('the adviser brief is redacted again on the server, whatever the app sent',
     economics: { last90Days: { revenueNgn: 900000, costPerKgNgn: 1200 } },
   };
 
-  for (const role of ['hand', 'supervisor', 'agronomist']) {
+  for (const role of ['hand', 'supervisor']) {
     const out = core.redactBrief(structuredClone(sent), role);
     assert.equal(out.economics, undefined, `${role} must not receive money`);
     assert.equal(out.farm.askedBy.seesMoney, false, `${role} is told they cannot see money`);

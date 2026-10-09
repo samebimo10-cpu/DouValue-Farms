@@ -68,7 +68,6 @@ test('FR-DIAG-07: only the Field Supervisor and the Farm Manager hold the guided
   assert.equal(may('hand'), false, 'a Greenhouse Hand');
   assert.equal(may('supervisor'), true, 'the Field Supervisor');
   assert.equal(may('manager'), true, 'the Farm Manager');
-  assert.equal(may('agronomist'), false);
   assert.equal(may('ceo'), false);
   // The app and the server agree, role by role.
   for (const role of Object.keys(core.ROLES)) {
