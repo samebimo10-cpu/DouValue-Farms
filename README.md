@@ -578,6 +578,15 @@ deployment to read it from somewhere else. `server/deno-sync.ts` carries the app
 modules the gates are judged with, bundled by `node scripts-build-deno.mjs` with
 no dependencies, so it is still one file to paste.
 
+**One farm per server unless you say otherwise.** The first farm created on an
+empty server needs nothing. After that the server refuses to create another,
+because creating a farm needs no account and a farm's CEO can spend the
+server's adviser key and message the Owner's WhatsApp, while the server's
+address is in every sign-in link sent to staff. To host more than one farm, set
+`FARM_SETUP_KEY` on the deployment and enter it in *Connect the farm* under
+**Server setup key**. A CEO pressing *Connect the farm* on a second phone is
+told to sign in instead of being given a second, empty farm.
+
 Prefer your own machine? `server/node-sync.mjs` serves the same contract
 and keeps each farm in an append-only JSON-lines file, so a backup is a file copy.
 Put either behind HTTPS: tokens and PINs travel in the request, and plain HTTP

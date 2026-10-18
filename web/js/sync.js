@@ -132,12 +132,12 @@ export async function checkServer(url) {
 }
 
 /** The CEO creates the farm on the server and enrols this phone as the owner. */
-export async function bootstrapFarm({ url, farmId, farmName, name, password, memberId }) {
+export async function bootstrapFarm({ url, farmId, farmName, name, password, memberId, setupKey }) {
   const base = trimUrl(url);
   const id = farmId || newFarmId();
   const result = await api(`/api/farms/${encodeURIComponent(id)}/bootstrap`, {
     method: 'POST', base, token: null,
-    body: { name, password, farmName, memberId, device: await deviceLabel() },
+    body: { name, password, farmName, memberId, setupKey: setupKey || undefined, device: await deviceLabel() },
   });
   await saveAuth({
     url: base, farmId: id, token: result.token,

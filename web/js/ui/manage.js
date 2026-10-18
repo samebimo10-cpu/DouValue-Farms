@@ -1543,6 +1543,8 @@ function openSyncSetup(ctx) {
     + field('Your PIN', input('password', { type: 'password', required: true, inputmode: 'numeric', placeholder: '0000' }),
       `${PIN_MIN} to ${PIN_MAX} digits. This is what you type to sign in on this phone.`)
     + field('Type it again', input('password2', { type: 'password', inputmode: 'numeric', placeholder: '0000' }))
+    + field('Server setup key', input('setupKey', { type: 'password', placeholder: 'Only if the server asks for one' }),
+      'Leave empty for your first farm. A server that already holds a farm asks for the key set on it.')
     + '<button class="btn-block btn-lg" type="submit">Create the farm</button>'
     + '</form>'
     + note('info', 'What the server protects',
@@ -1566,7 +1568,7 @@ async function saveSyncSetup(ctx, form) {
   try {
     const result = await bootstrapFarm({
       url, farmId: newFarmId(), farmName: ctx.state.settings.farmName,
-      name: ctx.user.name, password, memberId: ctx.user.id,
+      name: ctx.user.name, password, memberId: ctx.user.id, setupKey: String(data.setupKey || '').trim(),
     });
     await setMeta('devicePin', await hashPin(password, result.member.id));
     await forgetDeviceLock();

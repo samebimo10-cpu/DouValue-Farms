@@ -1293,10 +1293,43 @@ function guardInputUpsert(event) {
   return { ok: true };
 }
 
+/**
+ * Who may create a farm on this server.
+ *
+ * Creating one needs no account — there is nobody to sign in as yet — and a
+ * farm's CEO can spend the server's adviser key and message the Owner's
+ * WhatsApp (NFR-SEC-03, FR-ADV-07, FR-REP-02). The server's address travels
+ * in every staff sign-in link, so "nobody knows the address" protects
+ * nothing. The first farm on an empty server needs no key, which keeps a
+ * fresh setup exactly as it was; after that, a new farm needs the setup key
+ * set on the deployment (FARM_SETUP_KEY). It also stops a second phone's
+ * "Connect the farm" quietly making a second, empty farm.
+ */
+export async function maySetUpFarm(farmId, body, store, { env = envVar } = {}) {
+  const others = [];
+  for (const id of (store.listFarms ? await store.listFarms() : [])) {
+    if (id !== farmId && await store.getFarm(id)) others.push(id);
+  }
+  if (!others.length) return { ok: true };
+  const key = env('FARM_SETUP_KEY');
+  const given = String((body && body.setupKey) || '');
+  if (!key) {
+    return { ok: false, why: 'This server already holds a farm. To connect this phone to it, sign in with your '
+      + 'sign-in name and password instead. To add another farm, set FARM_SETUP_KEY on the server first.' };
+  }
+  if (!given || !timingSafeEqualHex(given, key)) {
+    return { ok: false, why: 'This server already holds a farm, so a new one needs the server\'s setup key. '
+      + 'If you meant to join your own farm, sign in with your sign-in name and password instead.' };
+  }
+  return { ok: true };
+}
+
 /** Create the farm and its first account. Works exactly once per farm. */
 async function bootstrap(farmId, body, store) {
   const existing = await store.getFarm(farmId);
   if (existing) return json({ error: 'That farm already exists. Ask the CEO for an invite.' }, 409);
+  const setup = await maySetUpFarm(farmId, body, store);
+  if (!setup.ok) return json({ error: setup.why, reason: 'setup-key' }, 403);
 
   const name = String(body.name || '').trim();
   const password = String(body.password || '');

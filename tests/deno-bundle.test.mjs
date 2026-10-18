@@ -31,6 +31,7 @@ function tooLarge(value) {
   if (kvBytes(value) >= KV_VALUE_MAX) throw new TypeError(`Value too large (max ${KV_VALUE_MAX} bytes)`);
 }
 let theKv = null;
+const SETUP_KEY = 'operator-setup-key';
 function memoryKv() {
   const data = new Map();
   let stamp = 0;
@@ -93,7 +94,8 @@ before(async () => {
   globalThis.Deno = {
     openKv: async () => memoryKv(),
     serve: (fn) => { handler = fn; },
-    env: { get: () => undefined },
+    // A server holding several farms, as an operator's would: new ones need the key.
+    env: { get: (name) => (name === 'FARM_SETUP_KEY' ? SETUP_KEY : undefined) },
   };
   await import(pathToFileURL(file).href);
 });
@@ -149,7 +151,7 @@ const report = (id, extra = {}) => ({ id, type: 'report.record', at: '2026-05-04
   payload: { id: `r_${id}`, note: 'leaf spots on the lower leaves', ...extra } });
 
 test('a photo-sized record is stored on Deno KV and pulled back exactly as it was sent', async () => {
-  const boot = await call('/api/farms/f_photo/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const boot = await call('/api/farms/f_photo/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456', setupKey: SETUP_KEY } });
   const token = boot.body.token;
   const sent = [
     report('small'),
@@ -179,7 +181,7 @@ test('a photo-sized record is stored on Deno KV and pulled back exactly as it wa
 });
 
 test('a record too large to keep is refused on its own; the rest of the batch goes in', async () => {
-  const boot = await call('/api/farms/f_huge/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const boot = await call('/api/farms/f_huge/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456', setupKey: SETUP_KEY } });
   const token = boot.body.token;
   const res = await call('/api/farms/f_huge/events', { method: 'POST', token,
     body: { events: [report('before'), report('huge', { photos: [{ dataUrl: photo(4500) }] }), report('next')] } });
@@ -190,7 +192,7 @@ test('a record too large to keep is refused on its own; the rest of the batch go
 });
 
 test('a record that loses every race is held for the phone to send again, never counted as sent', async () => {
-  const boot = await call('/api/farms/f_busy/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const boot = await call('/api/farms/f_busy/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456', setupKey: SETUP_KEY } });
   const token = boot.body.token;
   theKv.busy = 5;
   const res = await call('/api/farms/f_busy/events', { method: 'POST', token, body: { events: [report('raced'), report('calm')] } });
