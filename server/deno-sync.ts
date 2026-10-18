@@ -39,6 +39,7 @@ function __dvBindAll() {
 // ─── web/js/db.js ──────────────────────────────────────────────────────────
 await (async function (__dvExports) {
 Object.defineProperties(__dvExports, {
+  "NotSavedError": { enumerable: true, get: () => NotSavedError },
   "loadEvents": { enumerable: true, get: () => loadEvents },
   "appendEvents": { enumerable: true, get: () => appendEvents },
   "mergeEvents": { enumerable: true, get: () => mergeEvents },
@@ -112,6 +113,43 @@ function lsWrite(events) {
   catch { return false; }
 }
 
+/**
+ * UX-20, NFR-OFF-01 — a record is "saved" only once it is somewhere that
+ * outlives the app being closed. Thrown when it is not, so the screen says it
+ * did not save instead of showing a tick for a record that will vanish.
+ */
+class NotSavedError extends Error {
+  constructor() {
+    super('Not saved: this phone has no room left. Free some space (delete old photos or videos), then try again.');
+    this.name = 'NotSavedError';
+  }
+}
+
+/**
+ * Records that went to localStorage because IndexedDB refused them — a full
+ * phone, a browser hiccup. They used to sit there unread once IndexedDB worked
+ * again, never shown and never synced. Every load now reads them, moves them
+ * into IndexedDB, and clears them once they are safely there.
+ */
+async function rescueFallback(db, held) {
+  const rescued = lsRead();
+  if (!rescued.length) return held;
+  const known = new Set(held.map((e) => e.id));
+  const missing = rescued.filter((e) => e && e.id && !known.has(e.id));
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(EVENT_STORE, 'readwrite');
+      const store = tx.objectStore(EVENT_STORE);
+      for (const e of missing) store.put(e);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    try { localStorage.removeItem(LS_KEY); } catch { /* cleared next time */ }
+  } catch { /* still full: they stay in localStorage, and are shown from there */ }
+  return held.concat(missing);
+}
+
 async function loadEvents() {
   if (!hasIndexedDB()) {
     if (memoryFallback) return memoryFallback;
@@ -120,23 +158,35 @@ async function loadEvents() {
   }
   try {
     const db = await openDb();
-    return await new Promise((resolve, reject) => {
+    const held = await new Promise((resolve, reject) => {
       const tx = db.transaction(EVENT_STORE, 'readonly');
       const req = tx.objectStore(EVENT_STORE).getAll();
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
+    return await rescueFallback(db, held);
   } catch {
     memoryFallback = lsRead();
     return memoryFallback;
   }
 }
 
+/**
+ * Into localStorage, or throw; the list in memory is left as it was if that
+ * fails. With no IndexedDB, localStorage is the log and the memory list its
+ * copy; otherwise it is only the rescue list, read fresh every time.
+ */
+function saveToFallback(events) {
+  const base = hasIndexedDB() ? lsRead() : (memoryFallback || lsRead());
+  const next = base.concat(events);
+  if (!lsWrite(next)) throw new NotSavedError();
+  if (!hasIndexedDB()) memoryFallback = next;
+}
+
 async function appendEvents(events) {
   if (!events.length) return;
   if (!hasIndexedDB()) {
-    memoryFallback = (memoryFallback || lsRead()).concat(events);
-    lsWrite(memoryFallback);
+    saveToFallback(events);
     return;
   }
   try {
@@ -150,8 +200,10 @@ async function appendEvents(events) {
       tx.onabort = () => reject(tx.error);
     });
   } catch {
-    memoryFallback = (memoryFallback || lsRead()).concat(events);
-    lsWrite(memoryFallback);
+    // IndexedDB refused it. localStorage keeps it until the next load moves it
+    // back (rescueFallback); if that is full too, nothing was saved, and the
+    // person is told so rather than shown a tick.
+    saveToFallback(events);
   }
 }
 
