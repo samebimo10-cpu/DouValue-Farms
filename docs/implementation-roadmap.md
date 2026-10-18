@@ -32,6 +32,8 @@ Phase 2 (onboarding imports) is smaller than the brief assumes: mid-season crops
 - Erase with unsent records is refused with the count.
 - Full suite green; Deno bundle regenerated with no drift; site assembles.
 
+**Status (18 October 2026): 1a.1–1a.4 done.** Each fix has tests that fail on the old code and pass on the new. Suite 989/989, clock-shifted suite green, Deno bundle regenerated with no drift, site assembles. 1a.1 also checked against a real Deno 2.9 server (photo-sized, non-ASCII and over-limit records; a tampered resend cannot overwrite). Not verified here: a live Deno Deploy instance, and the erase-time backup download on iOS Safari, which may need the person to choose *Save to Files*.
+
 ## Phase 1b — Shared-phone security and "did it send?"
 
 | Item | Gap | Change |
