@@ -16,7 +16,21 @@ import { pathToFileURL } from 'node:url';
 
 const ROOT = new URL('../', import.meta.url);
 
-/** Just enough of Deno KV for the adapter: get, set, delete, list, atomic. */
+/**
+ * Just enough of Deno KV for the adapter: get, set, delete, list, atomic.
+ *
+ * With Deno KV's own value limit: a value of 64 KiB or more is refused with
+ * the error Deno throws. Without it this stand-in stored records a real
+ * server cannot, and a photo-sized record crashing every push went unseen.
+ * `busy` makes the next commits lose their race, as with other phones pushing.
+ */
+const KV_VALUE_MAX = 65536;
+const kvBytes = (value) => (value instanceof Uint8Array ? value.byteLength
+  : new TextEncoder().encode(JSON.stringify(value)).length);
+function tooLarge(value) {
+  if (kvBytes(value) >= KV_VALUE_MAX) throw new TypeError(`Value too large (max ${KV_VALUE_MAX} bytes)`);
+}
+let theKv = null;
 function memoryKv() {
   const data = new Map();
   let stamp = 0;
@@ -33,7 +47,8 @@ function memoryKv() {
       const hit = data.get(id(key));
       return hit ? { key, value: hit.value, versionstamp: hit.stamp } : { key, value: null, versionstamp: null };
     },
-    async set(key, value) { data.set(id(key), { key, value, stamp: String(++stamp) }); return { ok: true }; },
+    busy: 0,
+    async set(key, value) { tooLarge(value); data.set(id(key), { key, value, stamp: String(++stamp) }); return { ok: true }; },
     async delete(key) { data.delete(id(key)); },
     async *list(sel, { limit = Infinity } = {}) {
       const rows = [...data.values()].filter(({ key }) => (sel.prefix
@@ -48,6 +63,8 @@ function memoryKv() {
         check(c) { checks.push(c); return op; },
         set(key, value) { sets.push([key, value]); return op; },
         async commit() {
+          for (const [, value] of sets) tooLarge(value);
+          if (kv.busy > 0) { kv.busy--; return { ok: false }; }
           for (const c of checks) {
             const hit = data.get(id(c.key));
             if ((hit ? hit.stamp : null) !== c.versionstamp) return { ok: false };
@@ -59,6 +76,7 @@ function memoryKv() {
       return op;
     },
   };
+  theKv = kv;
   return kv;
 }
 
@@ -120,4 +138,67 @@ test('the bundled server judges a planting, a spray and a harvest with the app\'
   assert.match(why.s1.why, /diagnosed/);
   assert.equal(why.s1.rule, 'FR-GATE-04');
   assert.equal(res.body.accepted, 1, 'the zone itself went in');
+});
+
+// NFR-OFF-02, NFR-OFF-06 — a record with a photo is bigger than one Deno KV
+// value. It used to throw inside the push, so the whole batch came back as a
+// 500 and the phone sent the same batch for ever: nothing from that phone
+// reached the farm again.
+const photo = (kb) => `data:image/jpeg;base64,${'QUJD'.repeat(kb * 256)}`;
+const report = (id, extra = {}) => ({ id, type: 'report.record', at: '2026-05-04T08:00:00.000Z',
+  payload: { id: `r_${id}`, note: 'leaf spots on the lower leaves', ...extra } });
+
+test('a photo-sized record is stored on Deno KV and pulled back exactly as it was sent', async () => {
+  const boot = await call('/api/farms/f_photo/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const token = boot.body.token;
+  const sent = [
+    report('small'),
+    report('photo', { photos: [{ dataUrl: photo(120) }] }),
+    report('words', { note: 'Ọ̀gá — “pidgin” 🌶️ '.repeat(4000) }),
+    report('after'),
+  ];
+  const res = await call('/api/farms/f_photo/events', { method: 'POST', token, body: { events: sent } });
+  assert.equal(res.status, 200, 'a big record no longer fails the push');
+  assert.equal(res.body.accepted, 4);
+  assert.deepEqual(res.body.refused, []);
+  assert.deepEqual(res.body.held, []);
+
+  const pulled = await call('/api/farms/f_photo/events?since=0', { token });
+  for (const s of sent) {
+    const got = pulled.body.events.find((e) => e.id === s.id);
+    assert.ok(got, `${s.id} came back`);
+    assert.deepEqual(got.payload, s.payload, `${s.id} came back byte for byte`);
+  }
+
+  // A repeat send is skipped, and cannot replace what the first one stored.
+  const again = await call('/api/farms/f_photo/events', { method: 'POST', token,
+    body: { events: [{ ...sent[1], payload: { ...sent[1].payload, note: 'swapped' } }] } });
+  assert.equal(again.body.skipped, 1);
+  const after = await call('/api/farms/f_photo/events?since=0', { token });
+  assert.equal(after.body.events.find((e) => e.id === 'photo').payload.note, 'leaf spots on the lower leaves');
+});
+
+test('a record too large to keep is refused on its own; the rest of the batch goes in', async () => {
+  const boot = await call('/api/farms/f_huge/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const token = boot.body.token;
+  const res = await call('/api/farms/f_huge/events', { method: 'POST', token,
+    body: { events: [report('before'), report('huge', { photos: [{ dataUrl: photo(4500) }] }), report('next')] } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.accepted, 2);
+  assert.deepEqual(res.body.refused.map((r) => r.id), ['huge']);
+  assert.match(res.body.refused[0].why, /larger than the farm server keeps/);
+});
+
+test('a record that loses every race is held for the phone to send again, never counted as sent', async () => {
+  const boot = await call('/api/farms/f_busy/bootstrap', { method: 'POST', body: { name: 'Owner', password: '123456' } });
+  const token = boot.body.token;
+  theKv.busy = 5;
+  const res = await call('/api/farms/f_busy/events', { method: 'POST', token, body: { events: [report('raced'), report('calm')] } });
+  theKv.busy = 0;
+  assert.equal(res.status, 200);
+  assert.equal(res.body.skipped, 0, 'not reported as already held — the phone would mark it sent');
+  assert.deepEqual(res.body.held.map((h) => h.id), ['raced']);
+  assert.equal(res.body.accepted, 1);
+  const retry = await call('/api/farms/f_busy/events', { method: 'POST', token, body: { events: [report('raced')] } });
+  assert.equal(retry.body.accepted, 1, 'sent again, it goes in');
 });

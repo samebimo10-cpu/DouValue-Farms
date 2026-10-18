@@ -1680,6 +1680,15 @@ export async function writeEvents(farmId, body, me, store) {
   }
 
   const stored = await store.appendEvents(farmId, allowed);
+  // A record the storage could not keep is answered for on its own (NFR-OFF-06):
+  // one that can never be stored is refused with the reason, one that failed
+  // for now is held and the phone sends it again. Never counted as accepted,
+  // so a phone never marks as sent a record the farm does not have.
+  for (const f of stored.failed || []) {
+    const event = allowed.find((e) => e.id === f.id) || { id: f.id };
+    if (f.permanent) refuse(event, f.why, { rule: 'NFR-OFF-06' });
+    else held.push({ id: f.id, type: event.type, why: f.why });
+  }
   return json({
     accepted: stored.accepted, skipped: stored.skipped, refused, held,
     total: await store.countEvents(farmId), cursor: stored.cursor,

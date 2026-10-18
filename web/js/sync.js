@@ -572,7 +572,7 @@ export function statusLine(s = getStatus()) {
     case 'error': return { text: s.lastError || 'Could not sync', tone: 'danger' };
     case 'idle':
       if (s.held) {
-        return { text: `${s.held} record${s.held === 1 ? '' : 's'} waiting: the farm server cannot check them yet`, tone: 'warn' };
+        return { text: `${s.held} record${s.held === 1 ? '' : 's'} waiting: the farm server could not take them yet, sending again`, tone: 'warn' };
       }
       return s.pending
         ? { text: `${s.pending} record${s.pending === 1 ? '' : 's'} waiting to send`, tone: 'warn' }

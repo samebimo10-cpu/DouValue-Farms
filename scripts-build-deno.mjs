@@ -194,6 +194,47 @@ const adapter = `
 
 const kv = await Deno.openKv();
 
+// A record in parts: Deno KV takes values under 64 KiB (65,536 bytes), so the
+// JSON goes in slices comfortably under that, under a random key, written
+// before the pointer to them so a pointer never names parts that are not
+// there yet. The random key means a repeat send of the same id, refused at the
+// pointer, can never overwrite the parts an earlier send stored.
+const PART_BYTES = 60000;
+const RECORD_MAX_BYTES = 4500000;
+const isTooLarge = (err) => /too large/i.test(String((err && err.message) || err));
+const isPartsPointer = (v) => !!v && v.$parts === true && typeof v.type === "undefined";
+
+async function storeInParts(farmId, event) {
+  const bytes = new TextEncoder().encode(JSON.stringify(event));
+  if (bytes.length > RECORD_MAX_BYTES) {
+    const err = new Error("This record is larger than the farm server keeps in one piece. Take fewer or smaller photos.");
+    err.permanent = true;
+    throw err;
+  }
+  const blob = crypto.randomUUID();
+  let parts = 0;
+  for (let at = 0; at < bytes.length; at += PART_BYTES) {
+    await kv.set(["farm", farmId, "part", blob, parts], bytes.slice(at, at + PART_BYTES));
+    parts++;
+  }
+  return { $parts: true, id: event.id, blob, parts, bytes: bytes.length };
+}
+
+async function readParts(farmId, pointer) {
+  const chunks = [];
+  for await (const e of kv.list({ prefix: ["farm", farmId, "part", pointer.blob] })) chunks.push(e.value);
+  if (chunks.length !== pointer.parts) {
+    // Only possible if someone deleted keys by hand. The pointer has no type,
+    // so it is relayed to nobody; say so where the operator will see it.
+    console.error("Record " + pointer.id + " is missing " + (pointer.parts - chunks.length) + " of its stored parts");
+    return pointer;
+  }
+  const whole = new Uint8Array(pointer.bytes);
+  let at = 0;
+  for (const c of chunks) { whole.set(c, at); at += c.length; }
+  return JSON.parse(new TextDecoder().decode(whole));
+}
+
 const store = {
   async getFarm(farmId) { return (await kv.get(["farm", farmId, "meta"])).value; },
   async setFarm(farmId, farm) {
@@ -238,28 +279,53 @@ const store = {
     }
   },
 
+  // NFR-OFF-02, NFR-OFF-06. Deno KV refuses any value of 64 KiB or more, and
+  // a record with a photo in it is usually bigger than that. Such a record is
+  // stored as its JSON in parts under a key of its own, and the sequence slot
+  // holds a small pointer to them; listEvents puts it back together, so a
+  // phone pulls exactly what was pushed. Each record succeeds or fails on its
+  // own: one that cannot be stored is reported in failed, never thrown, so it
+  // cannot take the rest of the batch down with it or wedge a phone's outbox.
   async appendEvents(farmId, events) {
     if (events.length) await kv.set(["farms", farmId], true);
     const countKey = ["farm", farmId, "count"];
     let accepted = 0, skipped = 0;
+    const failed = [];
     for (const event of events) {
+      let value = event;
       let placed = false;
-      for (let attempt = 0; attempt < 5 && !placed; attempt++) {
-        const current = await kv.get(countKey);
-        const seq = (current.value || 0) + 1;
-        const result = await kv.atomic()
-          .check({ key: ["farm", farmId, "ev", event.id], versionstamp: null })
-          .check({ key: countKey, versionstamp: current.versionstamp })
-          .set(["farm", farmId, "ev", event.id], seq)
-          .set(["farm", farmId, "seq", seq], event)
-          .set(countKey, seq)
-          .commit();
-        if (result.ok) { accepted++; placed = true; break; }
-        if ((await kv.get(["farm", farmId, "ev", event.id])).value !== null) { skipped++; placed = true; }
+      try {
+        for (let attempt = 0; attempt < 5 && !placed; attempt++) {
+          if ((await kv.get(["farm", farmId, "ev", event.id])).value !== null) { skipped++; placed = true; break; }
+          const current = await kv.get(countKey);
+          const seq = (current.value || 0) + 1;
+          let result;
+          try {
+            result = await kv.atomic()
+              .check({ key: ["farm", farmId, "ev", event.id], versionstamp: null })
+              .check({ key: countKey, versionstamp: current.versionstamp })
+              .set(["farm", farmId, "ev", event.id], seq)
+              .set(["farm", farmId, "seq", seq], value)
+              .set(countKey, seq)
+              .commit();
+          } catch (err) {
+            if (value !== event || !isTooLarge(err)) throw err;
+            value = await storeInParts(farmId, event);
+            attempt--;
+            continue;
+          }
+          if (result.ok) { accepted++; placed = true; }
+        }
+        // Five lost races with other phones pushing at the same moment. Not
+        // stored, so the phone must keep it and send it again.
+        if (!placed) failed.push({ id: event.id, why: "The farm server was busy. This record is sent again.", permanent: false });
+      } catch (err) {
+        failed.push(isTooLarge(err) || (err && err.permanent)
+          ? { id: event.id, why: (err && err.permanent && err.message) || "This record is too large for the farm server to store.", permanent: true }
+          : { id: event.id, why: "The farm server could not store this record just now. It is sent again.", permanent: false });
       }
-      if (!placed) skipped++;
     }
-    return { accepted, skipped, cursor: (await kv.get(countKey)).value || 0 };
+    return { accepted, skipped, failed, cursor: (await kv.get(countKey)).value || 0 };
   },
 
   async listEvents(farmId, since, limit) {
@@ -269,7 +335,10 @@ const store = {
       start: ["farm", farmId, "seq", since + 1],
       end: ["farm", farmId, "seq", Number.MAX_SAFE_INTEGER],
     }, { limit });
-    for await (const entry of iter) { out.push(entry.value); cursor = Number(entry.key[3]); }
+    for await (const entry of iter) {
+      out.push(isPartsPointer(entry.value) ? await readParts(farmId, entry.value) : entry.value);
+      cursor = Number(entry.key[3]);
+    }
     return { events: out, cursor, more: out.length === limit };
   },
 
