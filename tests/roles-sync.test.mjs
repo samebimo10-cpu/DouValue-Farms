@@ -671,7 +671,10 @@ test('the same farm replays differently for a hand, and still works', async () =
   const rebuilt = store.reduce(page.body.events);
 
   assert.equal(rebuilt.plots.b1.name, 'Bed 1', 'the beds are there');
-  assert.equal(rebuilt.cycles.c1.harvestedKg, 48, 'the harvest is there');
+  // FR-ROLE-03, the Owner's decision of 18 October 2026: each person sees
+  // what concerns them. A hand who holds no zone and picked nothing is not
+  // sent other people's pickings.
+  assert.equal(rebuilt.harvests.length, 0, "other people's harvests are not");
   assert.equal(rebuilt.sales.length, 0, 'the money is not');
   assert.equal(rebuilt.expenses.length, 0);
 });

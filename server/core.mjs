@@ -25,6 +25,7 @@
 import { JUDGED, judgeRecord, judgingLog } from './judge.mjs';
 import { reduce } from '../web/js/store.js';
 import { audit } from '../web/js/domain/integrity.js';
+import { zoneHolders, zonesHeldBy } from '../web/js/domain/assignments.js';
 import { loadRules, peekRules, rulesLoaded, setRules } from '../web/js/rules.js';
 
 // --- Roles ----------------------------------------------------------------
@@ -126,7 +127,7 @@ export const EVENT_POLICY = {
   // report.record above: that one is an exception, this one is the day.
   'shift.record':      { write: 'viewOwnTasks',  read: ANY, guard: guardShift },
   'shift.comment':     { write: 'assignTasks',   read: ANY, guard: guardShiftComment },
-  'input.upsert':      { write: 'logInputs',     read: ANY, guard: guardInputUpsert },
+  'input.upsert':      { write: 'logInputs',     read: ANY, guard: guardInputUpsert, redact: redactInputCost },
   // FR-STOCK-06/09 — the catalogue. Adding an active ingredient is the Owner's
   // alone (`manageOwners` is the CEO and nobody else); attaching a brand label
   // to an active that is already in the catalogue is the Farm Manager's.
@@ -141,8 +142,8 @@ export const EVENT_POLICY = {
   'active.add':        { write: 'manageOwners',  read: ANY, guard: guardActiveAdd },
   'label.add':         { write: 'settings',      read: ANY, guard: guardLabelAdd },
   'label.retire':      { write: 'settings',      read: ANY },
-  'input.receive':     { write: 'logInputs',     read: ANY },
-  'input.issue':       { write: 'logInputs',     read: ANY },
+  'input.receive':     { write: 'logInputs',     read: ANY, redact: redactInputCost },
+  'input.issue':       { write: 'logInputs',     read: ANY, redact: redactInputCost },
   'weather.record':    { write: 'logWork',       read: ANY },
 
   // FR-DIAG-01 — reference photos for the triage rows and diagnosis cards.
@@ -555,11 +556,186 @@ export function mayWrite(event, author) {
   return { ok: true };
 }
 
-export function visibleTo(event, reader) {
+/**
+ * Whether this reader receives this record, and in what shape.
+ *
+ * `scope` is what the farm's log says concerns the reader (readScope below).
+ * Without one, the role alone decides, as it always did; readEvents always
+ * passes one, so the live server never relays on role alone.
+ */
+export function visibleTo(event, reader, scope = null) {
   const policy = EVENT_POLICY[event.type];
   if (!policy) return null;                            // unknown types are not relayed
   if (!can(reader.role, policy.read)) return null;
+  if (scope && !concerns(event, scope)) return null;
   return policy.redact ? policy.redact(event, reader) : event;
+}
+
+/** FR-SIMP-04: what a store item cost is the Farm Manager's and the Owner's. */
+function redactInputCost(event, reader) {
+  if (can(reader.role, 'manageMoney')) return event;
+  const p = { ...(event.payload || {}) };
+  for (const k of ['unitCost', 'cost', 'totalCost', 'price', 'value']) delete p[k];
+  return { ...event, payload: p };
+}
+
+// --- What concerns each person — FR-ROLE-03, Owner decision of 18 Oct 2026 --
+//
+// "Each person should only see what concerns them based on the login they
+// have." The money already went only to the roles that run the books. This
+// goes further, record by record:
+//
+//   * The Owner and the Farm Manager run the whole farm and receive all of it
+//     (less what is the Owner's alone: rates and the record checks).
+//   * A Field Supervisor checks everybody's work and runs the shift board
+//     (FR-TASK-05), so receives the team's work records — but not money,
+//     rates, the record checks or what stock cost.
+//   * A farm hand receives their own records, and the work of the zones they
+//     hold: those zones' tasks, trap counts and alerts, and whether the people
+//     who share those zones are in, which is what decides who covers
+//     (FR-ROLE-02). Not anybody else's harvests, hours, shift reports or
+//     problem reports, nor the store, the gates' evidence, the lab or the
+//     Farm Doctor's working.
+//
+// Some records reach every phone because a phone cannot work safely without
+// them: the zones and crops, people's names and jobs, who holds which zone,
+// the catalogue, and every spray — a spray's waiting periods are what stop a
+// hand picking or walking into a sprayed bed (FR-TREAT-02), wherever they are
+// sent that day. Safety outranks privacy.
+//
+// A record is judged when it is pulled. A hand given a new zone receives that
+// zone's records from then on; signing in again on the phone fetches the
+// history afresh (the sign-in resets the pull cursor).
+
+/** The records every phone needs to work at all. */
+const FARM_WIDE = new Set([
+  'settings.update', 'person.upsert', 'person.deactivate',
+  'plot.upsert', 'plot.remove', 'plot.retire', 'plot.restore',
+  'cycle.start', 'cycle.update', 'cycle.close', 'cycle.onboard', 'backfill.record',
+  'position.upsert', 'position.assign', 'position.retire', 'zone.assign', 'zone.unassign',
+  'active.add', 'label.add', 'label.retire', 'reference.photo.set', 'reference.photo.clear',
+  'spray.record', 'weather.record',
+]);
+
+/** The records that decide who holds which zone. */
+const HOLDING = new Set(['person.upsert', 'person.deactivate', 'plot.upsert', 'plot.remove', 'plot.retire',
+  'plot.restore', 'position.upsert', 'position.assign', 'position.retire', 'zone.assign', 'zone.unassign']);
+
+/** Facts about the farm's log that scoping needs, folded one record at a time. */
+export function emptyScopeFacts() {
+  return {
+    count: 0, holding: [], holdingState: null,
+    reportBy: new Map(), harvestBy: new Map(), shiftBy: new Map(), diagnosisReport: new Map(),
+    task: new Map(), cycleZone: new Map(), batchZone: new Map(),
+  };
+}
+
+export function foldScopeFact(facts, e) {
+  const p = (e && e.payload) || {};
+  facts.count++;
+  if (HOLDING.has(e.type)) { facts.holding.push(e); facts.holdingState = null; }
+  switch (e.type) {
+    case 'report.record': facts.reportBy.set(p.id, e.by); break;
+    case 'harvest.record': facts.harvestBy.set(p.id, e.by); break;
+    case 'shift.record': facts.shiftBy.set(p.id, p.personId || e.by); break;
+    case 'diagnosis.record': if (p.reportId) facts.diagnosisReport.set(p.id || e.id, p.reportId); break;
+    case 'cycle.start': case 'cycle.onboard': if (p.plotId) facts.cycleZone.set(p.id, p.plotId); break;
+    case 'seedling.sow': if (p.nurseryZoneId) facts.batchZone.set(p.id, p.nurseryZoneId); break;
+    case 'task.create':
+      facts.task.set(p.id, { zoneId: p.zoneId || null, cycleId: p.cycleId || null,
+        person: p.assignedTo || p.personId || null, by: e.by });
+      break;
+    default:
+  }
+}
+
+/** Who holds what, rebuilt with the app's own reduce() only when a holding record changed. */
+function holdingState(facts) {
+  if (!facts.holdingState) facts.holdingState = reduce(facts.holding);
+  return facts.holdingState;
+}
+
+/**
+ * What concerns this reader. null for the roles that receive everything their
+ * role allows (Owner, Farm Manager).
+ */
+export function readScope(facts, reader) {
+  const role = currentRole(reader.role);
+  if (can(role, 'manageMoney')) return null;
+  const id = reader.memberId || reader.id;
+  if (role !== 'hand') return { kind: 'team', id, facts };
+  const state = holdingState(facts);
+  const zones = new Set(zonesHeldBy(state, id).map((z) => z.zone.id));
+  const coHolders = new Set([id]);
+  for (const zoneId of zones) {
+    const h = zoneHolders(state, zoneId);
+    for (const x of [...h.primary, ...h.backup]) coHolders.add(x.person.id);
+  }
+  return { kind: 'own', id, facts, zones, coHolders };
+}
+
+function concerns(event, scope) {
+  const p = event.payload || {};
+  const { id, facts } = scope;
+  if (event.by && event.by === id) return true;        // your own records are always yours
+  if (scope.kind === 'team') return true;
+  if (FARM_WIDE.has(event.type)) return true;
+
+  const zoneOf = (x) => x.zoneId || (x.cycleId && facts.cycleZone.get(x.cycleId)) || null;
+  const inMyZone = (x) => { const z = zoneOf(x); return !!z && scope.zones.has(z); };
+  const myReport = (reportId) => !!reportId && facts.reportBy.get(reportId) === id;
+  const taskConcerns = (t) => !!t && (t.person === id || t.by === id || inMyZone(t));
+
+  switch (event.type) {
+    case 'attendance.in': case 'attendance.out':
+      return scope.coHolders.has(p.personId || event.by);
+    case 'absence.record':
+      return scope.coHolders.has(p.personId);
+    case 'absence.cancel':
+      return true;                                     // names nobody; it only cancels a record the phone may hold
+    case 'harvest.verify':
+      return facts.harvestBy.get(p.id) === id;
+    case 'shift.comment':
+      return facts.shiftBy.get(p.shiftId) === id;
+    case 'report.resolve':
+      return myReport(p.id);
+    case 'diagnosis.record':                           // FR-DIAG-10: the result of their own report
+      return myReport(p.reportId);
+    case 'diagnosis.confirm': case 'diagnosis.approve':
+      return myReport(facts.diagnosisReport.get(p.id));
+    case 'scout.record': case 'alert.ack': case 'alert.decide':
+      return inMyZone(p);
+    case 'task.create':
+      return taskConcerns({ zoneId: p.zoneId, cycleId: p.cycleId, person: p.assignedTo || p.personId, by: event.by });
+    case 'task.update': case 'task.complete': case 'task.cancel':
+      return taskConcerns(facts.task.get(p.id));
+    case 'seedling.sow':
+      return scope.zones.has(p.nurseryZoneId);
+    case 'seedling.check': case 'seedling.harden': case 'seedling.discard': case 'seedling.release':
+      return scope.zones.has(facts.batchZone.get(p.batchId || p.id));
+    default:
+      // Anybody else's harvests, hours, shift and problem reports; the store,
+      // the gates' evidence, the lab, the Farm Doctor's working.
+      return false;
+  }
+}
+
+/**
+ * The scope facts for a farm, kept current by reading only what was added
+ * since the last pull. Per server process; rebuilt from the log after a restart.
+ */
+const scopeCache = new WeakMap();
+export async function scopeFacts(farmId, store) {
+  if (!scopeCache.has(store)) scopeCache.set(store, new Map());
+  const farms = scopeCache.get(store);
+  let facts = farms.get(farmId);
+  if (!facts) { facts = emptyScopeFacts(); farms.set(farmId, facts); }
+  for (;;) {
+    const page = await store.listEvents(farmId, facts.count, MAX_PULL);
+    for (const e of page.events) foldScopeFact(facts, e);
+    if (!page.more || !page.events.length) break;
+  }
+  return facts;
 }
 
 // --- Secrets --------------------------------------------------------------
@@ -1623,10 +1799,11 @@ async function readEvents(farmId, url, me, store) {
   const since = Math.max(0, Number(url.searchParams.get('since') || 0) || 0);
   const limit = Math.min(MAX_PULL, Math.max(1, Number(url.searchParams.get('limit') || 500) || 500));
   const page = await store.listEvents(farmId, since, limit);
+  const scope = readScope(await scopeFacts(farmId, store), me);
 
   const visible = [];
   for (const event of page.events) {
-    const shaped = visibleTo(event, me);
+    const shaped = visibleTo(event, me, scope);
     if (shaped) visible.push(shaped);
   }
   return json({
