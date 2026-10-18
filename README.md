@@ -98,6 +98,14 @@ or grade. What comes in is kept as history, apart from live records: it never be
 live harvest, spray or treatment, so it cannot get round a gate or a waiting period.
 Spray history goes in through Setup above, where the rotation and the waiting periods read it.
 
+What comes in shows under **Reports → Farm history**: year by year and zone by zone, the
+app's own records with the imported ones, each figure saying how much of it is imported.
+A year with no sales on record says so rather than showing ₦0; a picking written only in
+crates is counted at the farm's crate weight and said to be. Kilograms are for everyone who
+reads reports, sales and spending for the people who run the books, and the difference
+between them for the Owner (`FR-SIMP-04`). The forecasts, the success measures and the
+record checks still read only the app's own records.
+
 ---
 
 ## Who is who

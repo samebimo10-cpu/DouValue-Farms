@@ -107,3 +107,22 @@ test('a farm hand cannot open it', opts, async () => {
   await phone.as('sp_emeka', '#/import');
   assert.doesNotMatch(await text(), /Bring in existing records/);
 });
+
+test('imported history shows in Reports beside the live figures, with no sideways scroll', opts, async () => {
+  await phone.as('sp_owner', '#/import');
+  await phone.evaluate(`(async () => {
+    const st = __douvalueCtx.store;
+    await st.dispatchMany([
+      { type: 'import.batch', eventId: 'ev_import_rep', payload: { id: 'imp_rep', kind: 'harvest', source: 'paper', imported: 1 } },
+      { type: 'history.harvest', eventId: 'ev_hist_rep_2', payload: { id: 'hist_rep_2', importId: 'imp_rep', source: 'paper', date: '2025-03-14', zoneId: null, kg: 320 } },
+    ]);
+    return true; })()`);
+  await phone.evaluate(`location.hash = '#/reports'; true`);
+  await sleep(600);
+  const t = await text();
+  assert.match(t, /Farm history/);
+  assert.match(t, /2025/);
+  assert.match(t, /Sold − spent/i, 'the Owner sees the difference');
+  assert.ok((await width()) <= PHONE.width, 'no sideways scroll');
+  await shot('9-history');
+});

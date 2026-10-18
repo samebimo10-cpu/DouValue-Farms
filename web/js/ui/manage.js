@@ -32,6 +32,7 @@ import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid
 import { forgetDeviceLock, hashPin, isPin, params, PIN_MAX, PIN_MIN } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { countUnsynced, exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
+import { hasHistory, historyByYear, historyByZone } from '../domain/history.js';
 import { devicePinDigest } from '../domain/unlock.js';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -446,6 +447,7 @@ export const reportsView = {
       + card(cardHead('Yield by bed')
         + table([{ label: 'Bed' }, { label: 'Crop' }, { label: 'Status' }, { label: 'Picked', num: true },
           { label: 'Forecast', num: true }, { label: 'Per plant', num: true }], yieldRows))
+      + historyCard(state, { showsMoney, showsProfit })
       + (showsMoney
         ? card(cardHead('Where the money went')
           + (costByCategory.size
@@ -1510,6 +1512,51 @@ export const settingsView = {
     }
   },
 };
+
+/**
+ * Phase 2 — the farm's history, live and imported side by side, year by year
+ * and zone by zone (domain/history.js). Shown once anything has been brought
+ * in; every figure says how much of it is imported.
+ */
+export function historyCard(state, { showsMoney = false, showsProfit = false } = {}) {
+  if (!hasHistory(state)) return '';
+  const years = historyByYear(state, { money: showsMoney, profit: showsProfit });
+  const share = (part, whole) => (whole > 0 && part > 0 ? ` · ${Math.round((part / whole) * 100)}% imported` : '');
+  // A list, not a table: at 360 px a table pushes the money off to the right.
+  const item = (title, lines) => '<li style="padding:10px 0;border-top:1px solid var(--line)">'
+    + `<b>${esc(title)}</b>` + lines.map((l) => `<div>${l}</div>`).join('') + '</li>';
+  const list = (items) => `<ul style="list-style:none;padding:0;margin:8px 0">${items.join('')}</ul>`;
+  const yearItems = years.map((y) => {
+    const lines = [`Picked ${esc(kg(y.kg, 0))}<small>${esc(share(y.kgImported, y.kg))}</small>`];
+    if (showsMoney) {
+      lines.push(y.salesRecords ? `Sold ${esc(naira(y.sales, true))}<small>${esc(share(y.salesImported, y.sales))}</small>`
+        : '<small>No sales recorded or imported</small>');
+      lines.push(y.spentRecords ? `Spent ${esc(naira(y.spent, true))}<small>${esc(share(y.spentImported, y.spent))}</small>`
+        : '<small>No spending recorded or imported</small>');
+    }
+    if (showsProfit && y.difference != null) lines.push(`Sold − spent <b>${esc(naira(y.difference, true))}</b>`);
+    return item(y.period, lines);
+  });
+  const notes = [];
+  const fromCrates = sum(years, (y) => y.kgFromCrates);
+  if (fromCrates) notes.push(`${fromCrates} imported picking${fromCrates === 1 ? ' was' : 's were'} written in crates only; their kilograms are crates × ${state.settings.crateKg} kg.`);
+  if (showsMoney) {
+    const worked = sum(years, (y) => y.salesWorkedOut);
+    const unknown = sum(years, (y) => y.salesUnknown);
+    if (worked) notes.push(`${worked} imported sale${worked === 1 ? ' has' : 's have'} no total written; it is price × kg.`);
+    if (unknown) notes.push(`${unknown} imported sale${unknown === 1 ? ' has' : 's have'} no price or total, so ${unknown === 1 ? 'it is' : 'they are'} not in the naira.`);
+  }
+  const zoneItems = historyByZone(state).map((z) => item(z.name,
+    [`${esc(kg(z.kg, 0))}<small>${esc(share(z.kgImported, z.kg))}</small>`]));
+  return card(cardHead('Farm history', badge('includes imported records', 'muted'))
+    + '<p><small>What the app recorded, with what was brought in from spreadsheets and paper books '
+    + '(Setup → Bring in existing records). Only the app\'s own records feed the forecasts, the success '
+    + 'measures and the checks above.</small></p>'
+    + list(yearItems)
+    + (notes.length ? `<p><small>${notes.map(esc).join(' ')}</small></p>` : '')
+    + '<h3 style="margin-top:14px">Picked by zone, all years</h3>'
+    + list(zoneItems));
+}
 
 /** One switch on the outside-advice sheet. */
 function aiAccessToggle(role, label, on) {
