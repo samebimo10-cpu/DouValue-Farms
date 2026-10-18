@@ -350,6 +350,9 @@ What it does:
 
 - **Photo review, online.** The photos go to the farm's own server and come back with a
   stated confidence — high, medium or low — and the field test that would settle it.
+  It, and the wider adviser, are the Owner's until the Owner switches them on for the Farm
+  Manager or the Field Supervisor (Settings → Outside advice → *Who may use it*). Farm
+  hands never use them. The server enforces this before any paid call is made.
 - **Everything else, offline.** Guided diagnosis, the dose calculator, the plan checks and
   the gate checks all run on the phone with no signal. When there is no connection, photo
   review says so and hands you the guided flow rather than a spinner.
@@ -498,18 +501,20 @@ never transmitted. Open that phone's storage and the figures are not there,
 because the server filtered them before they left it. The app's own role checks
 are a convenience for the person using it; the server is the fence.
 
-What each role receives:
+What each person receives — each person is sent only what concerns them
+(`FR-ROLE-03`, the Owner's decision of 18 October 2026):
 
-| | Beds, crops, harvest, sprays, tasks | Colleagues' names | Colleagues' wages | Sales and costs |
-|---|---|---|---|---|
-| CEO | yes | yes | yes | yes |
-| Farm manager | yes | yes | yes | yes |
-| Agronomist | yes | yes | no | no |
-| Supervisor | yes | yes | no | no |
-| Farm hand | yes | yes | no | no |
+| | Zones, crops, names, sprays | Tasks, trap counts, alerts | Other people's harvests, hours, shift and problem reports | Store, gates evidence, lab, Farm Doctor | Sales, expenses, stock costs | Rates, record checks |
+|---|---|---|---|---|---|---|
+| CEO | yes | all zones | yes | yes | yes | yes |
+| Farm manager | yes | all zones | yes | yes | yes | no |
+| Supervisor | yes | all zones | yes | yes (no costs) | no | no |
+| Farm hand | yes | the zones they hold | no — only their own, and the attendance of people sharing their zones | no | no | no |
 
-Everyone always sees their own pay. Nobody, at any level, receives anybody's PIN
-digest: it stays on the server.
+Every spray reaches every phone because its waiting periods are what keep a
+person out of a sprayed bed. A hand given a new zone receives its records from
+then on; signing in again on the phone fetches its history. Nobody, at any
+level, receives anybody's PIN digest: it stays on the server.
 
 **Writes are checked the same way.** A farm hand who pushes a sale, or pushes a
 record making themselves CEO, gets it refused and told why. A manager cannot mint

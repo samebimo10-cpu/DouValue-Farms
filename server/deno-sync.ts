@@ -15726,6 +15726,8 @@ async function readJson(req) {
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
  *   POST /api/farms/:id/checks      run the record checks now (Owner, FR-XCHK-09)
+ *   GET  /api/farms/:id/ai-access   who besides the Owner may use outside advice and photo review (Owner)
+ *   POST /api/farms/:id/ai-access   switch it on or off for the Farm Manager and the Field Supervisor (Owner)
  *   GET  /api/farms/:id/spend-cap   this month's spend on the adviser and photo review, and the cap (Owner)
  *   POST /api/farms/:id/spend-cap   set the monthly cap in US dollars, or clear it (Owner, FR-ADV-07)
  *   GET  /api/farms/:id/notify      whether WhatsApp to the Owner is set up (FR-REP-02)
@@ -15790,6 +15792,11 @@ async function handleRequest(req, store) {
     if (!can(me.role, 'viewAudit')) return json({ error: 'Only the Owner runs the record checks' }, 403);
     return json(await runFarmChecks(farmId, store, { force: true }));
   }
+  // The Owner's decision of 18 October 2026: outside advice and photo review
+  // are the Owner's, and the Owner switches them on for the Farm Manager and
+  // the Field Supervisor.
+  if (action === 'ai-access' && req.method === 'GET') return aiAccessStatus(farmId, me, store);
+  if (action === 'ai-access' && req.method === 'POST') return setAiAccess(farmId, body, me, store);
   if (action === 'spend-cap' && req.method === 'GET') return spendCapStatus(farmId, me, store);
   if (action === 'spend-cap' && req.method === 'POST') return setSpendCap(farmId, body, me, store);
   // FR-REP-02: the Owner's WhatsApp. The phones decide what to say; the key
@@ -17225,6 +17232,55 @@ async function setSpendCap(farmId, body, me, store) {
   return json({ ok: true, ...(await underSpendCap(farmId, store)) });
 }
 
+// --- Who may use outside advice and photo review ---------------------------
+//
+// The Owner's decision of 18 October 2026: "AI spending should be limited to
+// the CEO for now, and the CEO can unlock the feature for the managers and
+// supervisors." Every call costs the farm money on the server's key, so this
+// is decided here, before any call is made, never by the app. A farm hand is
+// never switched on: a hand reports a sick plant (FR-DIAG-07) and the people
+// who diagnose it use these.
+
+/** The roles the Owner may switch outside advice on for. */
+const AI_UNLOCKABLE = ['manager', 'supervisor'];
+
+/** Whether this role may use outside advice and photo review on this farm. */
+function aiAllowed(farm, role) {
+  const r = currentRole(role);
+  if (r === 'ceo') return true;
+  if (!AI_UNLOCKABLE.includes(r)) return false;
+  return !!(farm && farm.aiAccess && farm.aiAccess[r] === true);
+}
+
+const aiAccessOf = (farm) => Object.fromEntries(AI_UNLOCKABLE.map((r) => [r, aiAllowed(farm, r)]));
+
+function aiLocked(role, extra = {}) {
+  const r = currentRole(role);
+  return json({
+    ok: false, reason: r === 'hand' ? 'role' : 'locked', ...extra,
+    message: r === 'hand'
+      ? 'Outside advice and photo review are not for this account. Report the sick plant instead.'
+      : 'Outside advice and photo review are switched on for the Owner only. The Owner can switch them on '
+        + 'for you in Settings. The guided diagnosis, the app\'s own adviser and the calculators all still work.',
+  }, 403);
+}
+
+async function aiAccessStatus(farmId, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner sees who may use outside advice' }, 403);
+  return json({ ok: true, access: aiAccessOf(await store.getFarm(farmId)) });
+}
+
+async function setAiAccess(farmId, body, me, store) {
+  if (!can(me.role, 'manageOwners')) return json({ error: 'Only the Owner switches outside advice on for others' }, 403);
+  const farm = (await store.getFarm(farmId)) || {};
+  const next = { ...aiAccessOf(farm) };
+  for (const r of AI_UNLOCKABLE) {
+    if (body && typeof body[r] === 'boolean') next[r] = body[r];
+  }
+  await store.setFarm(farmId, { ...farm, aiAccess: { ...next, by: me.id, at: new Date().toISOString() } });
+  return json({ ok: true, access: aiAccessOf({ aiAccess: next }) });
+}
+
 /** Count one use against this person's day, and refuse once they are over. */
 async function spendAdviceBudget(farmId, me, store) {
   const today = farmDay();
@@ -17237,6 +17293,7 @@ async function spendAdviceBudget(farmId, me, store) {
 async function advise(farmId, body, me, store) {
   const key = envVar('ANTHROPIC_API_KEY');
   const weather = await liveWeather();
+  if (!aiAllowed(await store.getFarm(farmId), me.role)) return aiLocked(me.role, { weather });
 
   if (!key) {
     // Not an error: the farm simply has not turned this on. The app keeps its
@@ -17413,11 +17470,10 @@ function firstJsonObject(text) {
 }
 
 async function photoReview(farmId, body, me, store) {
-  // FR-DOC-03: photo review is the Field Supervisor's and above. A hand
-  // reports a sick plant (FR-DIAG-07); the people who diagnose it ask for this.
-  if (rankOf(me.role) < rankOf('supervisor')) {
-    return json({ ok: false, reason: 'role', message: 'Photo review is for the Field Supervisor and above. Report the sick plant instead.' }, 403);
-  }
+  // FR-DOC-03: photo review is the Owner's, and the Farm Manager's and the
+  // Field Supervisor's once the Owner switches it on for them. Never a hand's:
+  // a hand reports a sick plant (FR-DIAG-07).
+  if (!aiAllowed(await store.getFarm(farmId), me.role)) return aiLocked(me.role);
   const key = envVar('ANTHROPIC_API_KEY');
   if (!key) {
     return json({

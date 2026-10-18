@@ -10,7 +10,7 @@ import {
   attendanceBetween, dailyRateFor, hasRates, labourByZone, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
 import {
-  bootstrapFarm, checkServer, getAuth, getSpendCap, getStatus, isConnected, makePassword, newFarmId, setSpendCap,
+  bootstrapFarm, checkServer, getAiAccess, getAuth, getSpendCap, getStatus, isConnected, makePassword, newFarmId, setAiAccess, setSpendCap,
   revokeMember, setAccount, signInLink, signOutDevice, statusLine, suggestLogin, syncNow,
 } from '../sync.js';
 import { getMeta, setMeta } from '../db.js';
@@ -1243,7 +1243,12 @@ export const settingsView = {
       + '<p><small>The wider adviser and photo review are paid for on the farm server\'s key. '
       + 'Each person is limited per day; this limits the whole farm per month, in US dollars, '
       + 'which is what the bill is in. Only you see or set it.</small></p>'
-      + button('See this month\'s spend', 'open-spend-cap', { cls: 'btn-ghost', icon: '💳' })) : '')
+      + '<p><small>For now only you can use them. You can switch them on for the Farm Manager and the '
+      + 'Field Supervisor; farm hands never use them.</small></p>'
+      + '<div class="row wrap">'
+      + button('See this month\'s spend', 'open-spend-cap', { cls: 'btn-ghost', icon: '💳' })
+      + button('Who may use it', 'open-ai-access', { cls: 'btn-ghost', icon: '🔑' })
+      + '</div>') : '')
     + syncCard(ctx)
     + trialCard(ctx)
     + card(cardHead('Backup and sharing')
@@ -1323,6 +1328,28 @@ export const settingsView = {
         + field('Monthly limit (US dollars)', input('monthlyUsd', {
           type: 'number', min: 0, step: '1', value: s.capUsd ?? '', placeholder: 'empty for no limit' }))
         + '<button class="btn-block btn-lg" type="submit">Save limit</button></form>');
+    },
+    'open-ai-access': async () => {
+      let a;
+      try { a = await getAiAccess(); } catch (err) { toast(err.message || 'Could not reach the farm server', true); return; }
+      if (!a) { toast('This phone is not connected to the farm server', true); return; }
+      openSheet('<h2>Who may use outside advice</h2>'
+        + '<p><small>Outside advice and photo review are paid for on the farm server\'s key. '
+        + 'You always can. Farm hands never can: they report a sick plant instead.</small></p>'
+        + '<form data-act="save-ai-access">'
+        + aiAccessToggle('manager', 'The Farm Manager', a.access.manager)
+        + aiAccessToggle('supervisor', 'The Field Supervisor', a.access.supervisor)
+        + '<button class="btn-block btn-lg" type="submit">Save</button></form>');
+    },
+    'save-ai-access': async (ctx, form) => {
+      const data = readForm(form);
+      try {
+        const a = await setAiAccess({ manager: data.manager === true, supervisor: data.supervisor === true });
+        closeSheet();
+        toast(aiAccessSummary(a.access));
+      } catch (err) {
+        toast(err.message || 'Could not save', true);
+      }
     },
     'save-spend-cap': async (ctx, form) => {
       const raw = readForm(form).monthlyUsd;
@@ -1432,6 +1459,19 @@ export const settingsView = {
     }
   },
 };
+
+/** One switch on the outside-advice sheet. */
+function aiAccessToggle(role, label, on) {
+  return `<label class="field" style="display:flex;gap:12px;align-items:center;min-height:56px">`
+    + `<input type="checkbox" name="${role}" ${on ? 'checked' : ''} style="width:28px;height:28px">`
+    + `<span>${esc(label)} may use outside advice and photo review</span></label>`;
+}
+
+/** What the Owner just switched on, in one line. */
+export function aiAccessSummary(access = {}) {
+  const on = [access.manager && 'the Farm Manager', access.supervisor && 'the Field Supervisor'].filter(Boolean);
+  return on.length ? `Outside advice: you and ${on.join(' and ')}` : 'Outside advice: you only';
+}
 
 /** The whole log as a file on this phone. */
 async function downloadBackup() {

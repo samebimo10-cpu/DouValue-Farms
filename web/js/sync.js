@@ -508,6 +508,18 @@ export async function setSpendCap(monthlyUsd) {
   return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`, { method: 'POST', body: { monthlyUsd } });
 }
 
+/** Who besides the Owner may use outside advice and photo review (the Owner's decision of 18 Oct 2026). */
+export async function getAiAccess() {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/ai-access`);
+}
+
+/** Switch outside advice on or off for the Farm Manager and the Field Supervisor. The server takes it from the Owner only. */
+export async function setAiAccess({ manager, supervisor }) {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/ai-access`, { method: 'POST', body: { manager, supervisor } });
+}
+
 /** Whether WhatsApp is set up on the farm server, for the Alerts screen. */
 export async function ownerChannelStatus() {
   if (!auth) return null;

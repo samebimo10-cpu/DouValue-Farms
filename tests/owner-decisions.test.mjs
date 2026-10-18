@@ -277,7 +277,7 @@ before(async () => {
     method: 'POST', body: { name: 'Ebimo Sam', password: '842113', farmName: 'DouValue', memberId: 'person_ceo' },
   });
   tokens.ceo = ceo.body.token;
-  for (const [role, login] of [['manager', 'ada'], ['hand', 'emeka']]) {
+  for (const [role, login] of [['manager', 'ada'], ['supervisor', 'tamuno'], ['hand', 'emeka']]) {
     await call(`/api/farms/${FARM}/account`, {
       method: 'POST', token: tokens.ceo, body: { name: login, role, login, password: '551234' },
     });
@@ -306,7 +306,8 @@ test('FR-ADV-07: the monthly cap is the Owner\'s to see and set, and a reached c
   assert.equal(set.body.capUsd, 0);
   assert.equal(set.body.over, true, 'a cap of $0 switches outside advice off');
 
-  const advice = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens.manager, body: { brief: {} } });
+  // The Owner, because outside advice is the Owner's until switched on for others.
+  const advice = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens.ceo, body: { brief: {} } });
   assert.equal(advice.status, 429);
   assert.equal(advice.body.reason, 'monthly-cap');
 
@@ -330,4 +331,56 @@ test('FR-XCHK-09: the Owner runs the checks now; the Farm Manager can neither ru
     body: { events: [{ id: 'e_forged_checks', type: 'checks.record', payload: { findings: [] } }] },
   });
   assert.equal(forged.body.accepted, 0, 'findings come from the server\'s run, never a phone');
+});
+
+// The Owner's decision of 18 October 2026: "AI spending should be limited to
+// the CEO for now, and the CEO can unlock the feature for the managers and
+// supervisors." Every refusal here comes before any call to the API.
+
+test('outside advice and photo review are the Owner\'s alone until the Owner switches them on', async () => {
+  await call(`/api/farms/${FARM}/spend-cap`, { method: 'POST', token: tokens.ceo, body: { monthlyUsd: 0 } });
+  for (const role of ['manager', 'supervisor']) {
+    const advice = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens[role], body: { brief: {} } });
+    assert.equal(advice.status, 403, `${role}: advice refused`);
+    assert.equal(advice.body.reason, 'locked');
+    assert.match(advice.body.message, /Owner can switch them on/);
+    const photos = await call(`/api/farms/${FARM}/photo-review`, { method: 'POST', token: tokens[role], body: { photos: [] } });
+    assert.equal(photos.status, 403, `${role}: photo review refused`);
+    assert.equal(photos.body.reason, 'locked');
+  }
+  const owner = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens.ceo, body: { brief: {} } });
+  assert.equal(owner.body.reason, 'monthly-cap', 'the Owner gets as far as the cap');
+});
+
+test('only the Owner sees or changes who may use it', async () => {
+  for (const role of ['manager', 'supervisor', 'hand']) {
+    assert.equal((await call(`/api/farms/${FARM}/ai-access`, { token: tokens[role] })).status, 403, role);
+    const tried = await call(`/api/farms/${FARM}/ai-access`, { method: 'POST', token: tokens[role], body: { manager: true, supervisor: true } });
+    assert.equal(tried.status, 403, `${role} cannot switch it on`);
+  }
+  const seen = await call(`/api/farms/${FARM}/ai-access`, { token: tokens.ceo });
+  assert.deepEqual(seen.body.access, { manager: false, supervisor: false }, 'off for everyone by default');
+});
+
+test('switched on for the Farm Manager only: the manager gets through, the supervisor does not', async () => {
+  const set = await call(`/api/farms/${FARM}/ai-access`, { method: 'POST', token: tokens.ceo, body: { manager: true } });
+  assert.deepEqual(set.body.access, { manager: true, supervisor: false });
+  const manager = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens.manager, body: { brief: {} } });
+  assert.equal(manager.body.reason, 'monthly-cap', 'past the lock; the cap still holds');
+  const supervisor = await call(`/api/farms/${FARM}/photo-review`, { method: 'POST', token: tokens.supervisor, body: { photos: [] } });
+  assert.equal(supervisor.body.reason, 'locked');
+
+  await call(`/api/farms/${FARM}/ai-access`, { method: 'POST', token: tokens.ceo, body: { supervisor: true } });
+  const now = await call(`/api/farms/${FARM}/photo-review`, { method: 'POST', token: tokens.supervisor, body: { photos: [] } });
+  assert.notEqual(now.body.reason, 'locked', 'switched on, the supervisor gets past the lock');
+});
+
+test('a farm hand can never be switched on', async () => {
+  const sneaky = await call(`/api/farms/${FARM}/ai-access`, { method: 'POST', token: tokens.ceo, body: { hand: true } });
+  assert.equal(sneaky.body.access.hand, undefined);
+  const hand = await call(`/api/farms/${FARM}/advise`, { method: 'POST', token: tokens.hand, body: { brief: {} } });
+  assert.equal(hand.status, 403);
+  assert.equal(hand.body.reason, 'role');
+  await call(`/api/farms/${FARM}/ai-access`, { method: 'POST', token: tokens.ceo, body: { manager: false, supervisor: false } });
+  await call(`/api/farms/${FARM}/spend-cap`, { method: 'POST', token: tokens.ceo, body: { monthlyUsd: null } });
 });

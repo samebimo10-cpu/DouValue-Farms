@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.17 (draft for restructuring) |
+| Version | 1.18 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -61,7 +61,7 @@ Roles are **positions, not people**. A person can be moved between positions wit
 
 - **FR-ROLE-01 (MUST):** Each position has one primary zone and one backup zone.
 - **FR-ROLE-02 (MUST):** When a person is absent, their tasks move to the backup holder automatically.
-- **FR-ROLE-03 (MUST):** Each role sees only the screens and buttons it needs. Greenhouse Hands never see settings, costs or other people's records.
+- **FR-ROLE-03 (MUST):** Each role sees only the screens and buttons it needs. Greenhouse Hands never see settings, costs or other people's records. Each person is sent only what concerns them, decided on the farm server: the Owner and the Farm Manager everything their role allows; the Field Supervisor the team's work (including the shift board), but no money, rates, record checks or stock costs; a Greenhouse Hand their own records, the work of the zones they hold, the attendance of the people sharing those zones, and the answer to their own report. Zones, crops, names, holdings, the catalogue and every spray reach every phone, because the spray's waiting periods are what keep a person out of a sprayed bed (FR-TREAT-02).
 - **FR-ROLE-04 (SHOULD):** The Farm Manager can reassign a position to a different person in under one minute.
 
 ### 4.1 Field assignments
@@ -259,12 +259,12 @@ Fixes staff who cannot tell one problem from another until it is too late.
 - **FR-ADV-04 (MUST):** Adviser suggestions never bypass gates. A suggested treatment still needs a confirmed diagnosis.
 - **FR-ADV-05 (MUST):** All external links and text shown by the adviser are sanitised (see `NFR-SEC-04`).
 - **FR-ADV-06 (SHOULD):** Staff can ask the adviser by typing, and optionally by voice.
-- **FR-ADV-07 (SHOULD):** Online use (the wider adviser and photo review) has a monthly spending cap in US dollars, seen and set by the Owner only, alongside the per-person daily limit.
+- **FR-ADV-07 (SHOULD):** Online use (the wider adviser and photo review) has a monthly spending cap in US dollars, seen and set by the Owner only, alongside the per-person daily limit. Online use is the Owner's alone until the Owner switches it on for the Farm Manager, the Field Supervisor, or both; a Greenhouse Hand never has it. The farm server enforces both before any call is made.
 
 ### 6.14 Farm Doctor (in place of a site agronomist)
 - **FR-DOC-01 (MUST):** Guided diagnosis from symptom to triage row, card and confirm test. It asks for photos and the confirm step before naming a cause.
 - **FR-DOC-02 (MUST):** Names look-alike causes and the test that tells them apart (e.g. nematode galls vs acid-soil roots).
-- **FR-DOC-03 (MUST):** Online photo review with a stated confidence (high / medium / low), for the Field Supervisor and above. Offline, the rules-based diagnosis, calculators and plan checks still work.
+- **FR-DOC-03 (MUST):** Online photo review with a stated confidence (high / medium / low), for the Owner, and for the Farm Manager and the Field Supervisor once the Owner switches it on for them (FR-ADV-07). Offline, the rules-based diagnosis, calculators and plan checks still work.
 - **FR-DOC-04 (MUST):** Treatment plans already pass Gate 3, rotation, PHI, REI, mixing, timing, the Week 10 organics rule, and stock on hand.
 - **FR-DOC-05 (MUST):** Dose calculator (per 16 L knapsack, 500 L and 1,000 L tank) and lime calculator (pH, texture, bed area → route and kg).
 - **FR-DOC-06 (MUST):** Checks Gate 0, 1 and 4 evidence and lists anything missing.
@@ -413,6 +413,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.18 | 18 Oct 2026 | Owner decisions: FR-ROLE-03, each person is sent only what concerns them, enforced on the farm server. FR-ADV-07 and FR-DOC-03, outside advice and photo review are the Owner's until the Owner switches them on for the Farm Manager or the Field Supervisor. Import of existing records from spreadsheets, paper reports and hand-filled sheets added to the plan (docs/implementation-roadmap.md, Phase 2) |
 | 1.17 | 9 Oct 2026 | The Agronomist role removed from the app (FR-GATE-00); a person still recorded with it works as a Field Supervisor. The carbofuran "avoid" row removed from the problem cards (FR-STOCK-09). FR-SIMP-04: harvest, labour and stock forecasts are the Farm Manager's too. The farm server's adviser and photo review default to Claude Opus 5.5, with refusal fallback (FR-ADV-07 costs it at its own prices) |
 | 1.16 | 9 Oct 2026 | FR-DOC-03: photo review for the Field Supervisor and above. FR-ADV-07: the Owner's monthly cap in US dollars, beside the daily limit. FR-TREAT-01: litres sprayed and area treated. FR-STOCK-01: a spray draws its stock down by itself. FR-COST-04 points to FR-SIMP-04 for the Farm Manager's view of the money. SR-04 re-spray tasks generated from hourly rain. The Farm check runs as verification Part A, nightly on the server, Owner-only |
 | 1.15 | 9 Oct 2026 | FR-COST-05 added: pay, per-person daily rates and wage redaction removed, attendance kept; the Owner's daily rate per position prices labour per zone as days worked × rate. §6.16 to §6.19 point to docs/verification.md (FR-VER, FR-XCHK, XC-01 to XC-12, FR-WALK) and docs/simplify.md (FR-SIMP) as authoritative |
