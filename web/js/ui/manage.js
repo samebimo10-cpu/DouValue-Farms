@@ -31,7 +31,7 @@ import { PRICE_SEASONALITY, seasonOn, SEASON_LABELS, climateFor } from '../domai
 import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid } from '../util.js';
 import { forgetDeviceLock, hashPin, isPin, params, PIN_MAX, PIN_MIN } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
-import { exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
+import { countUnsynced, exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -1365,16 +1365,7 @@ export const settingsView = {
     },
 
     'export-data': async () => {
-      const bundle = await exportBundle();
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `douvalue-farm-${isoDate()}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      const bundle = await downloadBackup();
       toast(`Exported ${bundle.eventCount} records`);
     },
 
@@ -1394,10 +1385,16 @@ export const settingsView = {
     },
 
     'wipe-data': async (ctx) => {
-      const ok = await confirmSheet('Erase everything?',
-        'Every record on this phone will be deleted: people, beds, harvests, money, all of it. '
-        + 'If you have not exported a backup, it is gone for good.', 'Erase it all');
+      // Records that have not reached a farm server exist only here, so they
+      // are never erased without a backup file of them (NFR-DATA-02).
+      const unsent = await countUnsynced();
+      const ok = await confirmSheet('Erase everything?', eraseWarning(unsent, isConnected()),
+        unsent ? 'Save a backup, then erase' : 'Erase it all');
       if (!ok) return;
+      if (unsent) {
+        const bundle = await downloadBackup();
+        toast(`Backup saved: ${bundle.eventCount} records`);
+      }
       await clearEvents();
       sessionStorage.removeItem('douvalue.user');
       location.reload();
@@ -1435,6 +1432,39 @@ export const settingsView = {
     }
   },
 };
+
+/** The whole log as a file on this phone. */
+async function downloadBackup() {
+  const bundle = await exportBundle();
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `douvalue-farm-${isoDate()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return bundle;
+}
+
+/**
+ * What erasing this phone costs. Records not yet on a farm server are said by
+ * number, because "export first" is easy to skim past and a hand's unsent
+ * harvests are exactly what a manager tidying a shared phone would lose.
+ */
+export function eraseWarning(unsent, connected) {
+  const all = 'Every record on this phone will be deleted: people, beds, harvests, money, all of it.';
+  if (!unsent) {
+    return `${all} Everything here has already reached the farm server, so it stays on the farm.`;
+  }
+  const n = `${unsent} record${unsent === 1 ? '' : 's'}`;
+  return connected
+    ? `${all} ${n} on this phone ${unsent === 1 ? 'has' : 'have'} not reached the farm server yet and exist nowhere else. `
+      + 'A backup file of everything is saved to this phone first; keep it, or wait for the sync and erase later.'
+    : `${all} This farm has no server, so all ${n} exist only here. `
+      + 'A backup file of everything is saved to this phone first. Keep it somewhere safe.';
+}
 
 // --- The field trial — UX-26, UX-27, §9a ----------------------------------
 //
