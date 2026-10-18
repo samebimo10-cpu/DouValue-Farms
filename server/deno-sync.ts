@@ -12736,6 +12736,11 @@ const EMPTY = () => ({
   weather: [],
   reports: [],
   shifts: [],
+  // Phase 2 — records brought in from spreadsheets and paper books
+  // (domain/importer.js). History, kept apart from the live lists on purpose:
+  // no gate, waiting period or record check reads it as live work.
+  imports: {},
+  history: { harvest: [], sale: [], expense: [] },
   log: [],
   orphans: [],
 });
@@ -12778,6 +12783,7 @@ function reduce(events) {
       case 'seedling.sow': return `seedling:${p.id}`;
       case 'media.receive': return `media:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
+      case 'import.batch': return `import:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
       default: return null;
@@ -12805,6 +12811,7 @@ function reduce(events) {
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'zone.unassign': return `assignment:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
+      case 'import.revert': return `import:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
       case 'seedling.check': case 'seedling.harden': case 'seedling.discard': return `seedling:${p.batchId}`;
       case 'seedling.release': return `seedling:${p.id}`;
@@ -12848,6 +12855,7 @@ function reduce(events) {
       case 'plot': return !!state.plots[id];
       case 'seedling': return !!state.seedlingBatches[id];
       case 'media': return !!state.mediaBatches[id];
+      case 'import': return !!state.imports[id];
       case 'report': return state.reports.some((r) => r.id === id);
       case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
@@ -13140,6 +13148,19 @@ function reduce(events) {
       // proves the rule — the store holds one number per item — so the count
       // lands as an opening balance, a stock move of its own kind that no
       // usage figure reads.
+      // --- Imported history (Phase 2) ------------------------------------
+      // An import is undone as a whole, and never deleted (NFR-SEC-05): its
+      // rows stay in the log and the selectors leave them out.
+      case 'import.batch':
+        state.imports[p.id] = { ...p, by: e.by, at: e.at, reverted: false };
+        break;
+      case 'import.revert':
+        Object.assign(state.imports[p.id], { reverted: true, revertedBy: e.by, revertedAt: e.at, revertReason: p.reason || '' });
+        break;
+      case 'history.harvest': case 'history.sale': case 'history.expense':
+        state.history[e.type.slice(8)].push({ ...p, id: p.id || e.id, historical: true, by: e.by, at: e.at });
+        break;
+
       case 'backfill.record': {
         if (!['spray', 'harvest', 'stock', 'evidence', 'declare'].includes(p.kind)) break;
         const entry = { ...p, id: p.id || e.id, backfilled: true, by: e.by, at: e.at };
@@ -13634,18 +13655,24 @@ async function createStore() {
     /**
      * Several events at once, one redraw. An entry may carry its own `by` and
      * `at` so historical records (a seeded sample, or a paper book being typed
-     * up after the fact) land under the right name and date.
+     * up after the fact) land under the right name and date. `eventId` pins
+     * an entry's id, as `opts.eventId` does for dispatch, so filing the same
+     * batch twice (an import saved twice) files nothing new.
      */
     async dispatchMany(list) {
-      const batch = list.map(({ type, payload, by, at }) => ({
-        id: uid('ev'), type, at: at || new Date().toISOString(),
+      const batch = list.map(({ type, payload, by, at, eventId }) => ({
+        id: eventId || uid('ev'), type, at: at || new Date().toISOString(),
         by: by || (currentUser ? currentUser.id : 'system'), device, payload: payload || {},
       }));
-      if (!practice) await appendEvents(batch);
-      events.push(...batch);
+      // A pinned id already in the log is already filed: writing it again
+      // would replace the stored copy and count it twice on this screen.
+      const known = new Set(events.map((e) => e.id));
+      const fresh = batch.filter((e) => !known.has(e.id));
+      if (!practice) await appendEvents(fresh);
+      events.push(...fresh);
       state = reduce(events);
       notify();
-      return batch;
+      return fresh;
     },
 
     async reload() {
@@ -15098,6 +15125,17 @@ const EVENT_POLICY = {
   'absence.record':    { write: 'viewOwnTasks',  read: ANY },
   'absence.cancel':    { write: 'viewOwnTasks',  read: ANY },
 
+  // Phase 2 — the farm's existing records, brought in from spreadsheets and
+  // paper books (web/js/domain/importer.js). History, filed by the Farm
+  // Manager or the Owner and read by them; the money in it only by the roles
+  // that run the books. None of these is a live harvest, spray or treatment,
+  // so none of them is judged by the gates, and none can stand in for one.
+  'import.batch':      { write: 'settings',      read: 'viewReports', guard: guardImportBatch },
+  'import.revert':     { write: 'settings',      read: 'viewReports', guard: guardImportRevert },
+  'history.harvest':   { write: 'settings',      read: 'viewReports', guard: guardHistory },
+  'history.sale':      { write: 'manageMoney',   read: 'manageMoney', guard: guardHistory },
+  'history.expense':   { write: 'manageMoney',   read: 'manageMoney', guard: guardHistory },
+
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
@@ -16135,6 +16173,47 @@ function guardDoctorConfirm(event, author) {
   const who = author.memberId || author.id;
   if (who === 'farm-doctor') {
     return { ok: false, why: 'The Farm Doctor does not confirm or approve its own work (FR-DOC-08)' };
+  }
+  return { ok: true };
+}
+
+// --- Imported history (Phase 2) -----------------------------------------------
+//
+// The kinds are repeated from web/js/domain/importer.js because the server
+// does not import the app; tests/importer.test.mjs fails if they drift.
+const IMPORT_KIND_RECORDS = { harvest: 'history.harvest', sale: 'history.sale', expense: 'history.expense' };
+const IMPORT_SOURCE_IDS = ['spreadsheet', 'paper', 'handfilled'];
+
+function guardImportBatch(event, author) {
+  const p = event.payload || {};
+  if (!p.id || !safeId(String(p.id))) return { ok: false, why: 'An import needs an id' };
+  if (!IMPORT_KIND_RECORDS[p.kind]) return { ok: false, why: 'Unknown kind of import' };
+  if (!IMPORT_SOURCE_IDS.includes(p.source)) return { ok: false, why: 'Say where the records came from' };
+  if (p.kind !== 'harvest' && !can(author.role, 'manageMoney')) {
+    return { ok: false, why: 'Only the people who run the books import sales and expenses' };
+  }
+  return { ok: true };
+}
+
+function guardImportRevert(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which import is being undone' };
+  if (String(p.reason || '').trim().length < 4) return { ok: false, why: 'Say why the import is being undone' };
+  return { ok: true };
+}
+
+/** An imported row: from a named import and source, dated in the past, numbers from zero up. */
+function guardHistory(event) {
+  const p = event.payload || {};
+  if (!p.id || !p.importId) return { ok: false, why: 'An imported record names its import' };
+  if (!IMPORT_SOURCE_IDS.includes(p.source)) return { ok: false, why: 'Say where the record came from' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) return { ok: false, why: 'An imported record needs its date' };
+  const madeOn = String(event.serverAt || event.at || new Date().toISOString()).slice(0, 10);
+  if (p.date > madeOn) return { ok: false, why: 'History cannot be dated after the day it is imported' };
+  for (const k of ['kg', 'crates', 'pricePerKg', 'total', 'amount']) {
+    if (p[k] != null && !(Number.isFinite(Number(p[k])) && Number(p[k]) >= 0)) {
+      return { ok: false, why: 'A quantity or an amount is a number, 0 or more' };
+    }
   }
   return { ok: true };
 }

@@ -77,6 +77,27 @@ no spray history cannot be sprayed or picked until it is entered. A crop planted
 before the app shows as **planted before the gates**. That is not a violation and
 needs no override.
 
+### Bringing in existing records
+
+The Farm Manager or the CEO opens **Setup → Bring in existing records** (`#/import`) for
+harvests, sales and expenses from before the app. Three ways in, as the Owner asked:
+
+- **A spreadsheet** — a .csv file, or the cells copied out of Excel or Google Sheets and
+  pasted (an .xlsx file: save it as CSV, or copy and paste the cells).
+- **A paper report**, typed in one line at a time.
+- **A hand-filled sheet** — print a blank one from the same screen (one landscape page),
+  fill it in the field, and type it in the same way.
+
+Every way goes through the same steps. The app guesses which column is which and you check
+each guess. Every row is checked and shown with the reason for any problem, in words.
+Possible duplicates of records already on the farm are left out unless you choose otherwise,
+and nothing is saved until you confirm. A report says what happened to every line, and a
+whole import can be undone; nothing is deleted.
+Dates are read day first (14/03/2026); a box left empty stays empty, never a guessed zero
+or grade. What comes in is kept as history, apart from live records: it never becomes a
+live harvest, spray or treatment, so it cannot get round a gate or a waiting period.
+Spray history goes in through Setup above, where the rotation and the waiting periods read it.
+
 ---
 
 ## Who is who

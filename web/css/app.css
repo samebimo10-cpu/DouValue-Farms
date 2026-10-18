@@ -821,3 +821,14 @@ pre.working {
 .week-cells span.late { background: var(--danger-bg); color: var(--danger); font-weight: 700; }
 .week-cells span.head { font-size: 12px; line-height: 1.2; }
 .week-head { border-bottom-width: 2px; }
+
+/* --- A blank record sheet to fill in by hand (Phase 2, ui/importer.js) ---- */
+.import-sheet td { height: 34px; }
+@media print {
+  .syncbar, .return-card { display: none !important; }
+  .import-sheet-card { break-inside: auto; page-break-inside: auto; }
+  .import-sheet .table-wrap { overflow: visible; }
+  .import-sheet table { width: 100%; border-collapse: collapse; }
+  .import-sheet th, .import-sheet td { border: 1px solid #000; }
+  .import-sheet td { height: 9mm; }
+}

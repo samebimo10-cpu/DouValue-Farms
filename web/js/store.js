@@ -221,6 +221,11 @@ const EMPTY = () => ({
   weather: [],
   reports: [],
   shifts: [],
+  // Phase 2 — records brought in from spreadsheets and paper books
+  // (domain/importer.js). History, kept apart from the live lists on purpose:
+  // no gate, waiting period or record check reads it as live work.
+  imports: {},
+  history: { harvest: [], sale: [], expense: [] },
   log: [],
   orphans: [],
 });
@@ -263,6 +268,7 @@ export function reduce(events) {
       case 'seedling.sow': return `seedling:${p.id}`;
       case 'media.receive': return `media:${p.id}`;
       case 'absence.record': return `absence:${p.id}`;
+      case 'import.batch': return `import:${p.id}`;
       case 'person.upsert': return `person:${p.id}`;
       case 'attendance.in': return `attendance:${p.personId}`;
       default: return null;
@@ -290,6 +296,7 @@ export function reduce(events) {
       case 'position.assign': case 'position.retire': return `position:${p.id}`;
       case 'zone.unassign': return `assignment:${p.id}`;
       case 'absence.cancel': return `absence:${p.id}`;
+      case 'import.revert': return `import:${p.id}`;
       case 'plot.retire': case 'plot.restore': return `plot:${p.id}`;
       case 'seedling.check': case 'seedling.harden': case 'seedling.discard': return `seedling:${p.batchId}`;
       case 'seedling.release': return `seedling:${p.id}`;
@@ -333,6 +340,7 @@ export function reduce(events) {
       case 'plot': return !!state.plots[id];
       case 'seedling': return !!state.seedlingBatches[id];
       case 'media': return !!state.mediaBatches[id];
+      case 'import': return !!state.imports[id];
       case 'report': return state.reports.some((r) => r.id === id);
       case 'shift': return state.shifts.some((r) => r.id === id);
       case 'attendance': return state.attendance.some((a) => a.personId === id && !a.out);
@@ -625,6 +633,19 @@ export function reduce(events) {
       // proves the rule — the store holds one number per item — so the count
       // lands as an opening balance, a stock move of its own kind that no
       // usage figure reads.
+      // --- Imported history (Phase 2) ------------------------------------
+      // An import is undone as a whole, and never deleted (NFR-SEC-05): its
+      // rows stay in the log and the selectors leave them out.
+      case 'import.batch':
+        state.imports[p.id] = { ...p, by: e.by, at: e.at, reverted: false };
+        break;
+      case 'import.revert':
+        Object.assign(state.imports[p.id], { reverted: true, revertedBy: e.by, revertedAt: e.at, revertReason: p.reason || '' });
+        break;
+      case 'history.harvest': case 'history.sale': case 'history.expense':
+        state.history[e.type.slice(8)].push({ ...p, id: p.id || e.id, historical: true, by: e.by, at: e.at });
+        break;
+
       case 'backfill.record': {
         if (!['spray', 'harvest', 'stock', 'evidence', 'declare'].includes(p.kind)) break;
         const entry = { ...p, id: p.id || e.id, backfilled: true, by: e.by, at: e.at };
@@ -1119,18 +1140,24 @@ export async function createStore() {
     /**
      * Several events at once, one redraw. An entry may carry its own `by` and
      * `at` so historical records (a seeded sample, or a paper book being typed
-     * up after the fact) land under the right name and date.
+     * up after the fact) land under the right name and date. `eventId` pins
+     * an entry's id, as `opts.eventId` does for dispatch, so filing the same
+     * batch twice (an import saved twice) files nothing new.
      */
     async dispatchMany(list) {
-      const batch = list.map(({ type, payload, by, at }) => ({
-        id: uid('ev'), type, at: at || new Date().toISOString(),
+      const batch = list.map(({ type, payload, by, at, eventId }) => ({
+        id: eventId || uid('ev'), type, at: at || new Date().toISOString(),
         by: by || (currentUser ? currentUser.id : 'system'), device, payload: payload || {},
       }));
-      if (!practice) await appendEvents(batch);
-      events.push(...batch);
+      // A pinned id already in the log is already filed: writing it again
+      // would replace the stored copy and count it twice on this screen.
+      const known = new Set(events.map((e) => e.id));
+      const fresh = batch.filter((e) => !known.has(e.id));
+      if (!practice) await appendEvents(fresh);
+      events.push(...fresh);
       state = reduce(events);
       notify();
-      return batch;
+      return fresh;
     },
 
     async reload() {

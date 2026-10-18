@@ -88,7 +88,9 @@ function head(status) {
     + note('warn', 'A zone with no spray history cannot be sprayed or picked',
       '<small>Until its last insecticide, last fungicide and every spray in the last '
       + `${HISTORY_WINDOW_DAYS} days are entered — or recorded as none — the rotation and the waiting period `
-      + 'cannot be checked, so the app blocks both.</small>'),
+      + 'cannot be checked, so the app blocks both.</small>')
+    + '<p style="margin-top:10px"><a class="btn btn-ghost btn-block" href="#/import">📊 Bring in existing records: '
+    + 'harvests, sales and expenses from spreadsheets or paper</a></p>',
     { tight: true },
   );
 }

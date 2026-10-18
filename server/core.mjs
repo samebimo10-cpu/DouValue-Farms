@@ -237,6 +237,17 @@ export const EVENT_POLICY = {
   'absence.record':    { write: 'viewOwnTasks',  read: ANY },
   'absence.cancel':    { write: 'viewOwnTasks',  read: ANY },
 
+  // Phase 2 — the farm's existing records, brought in from spreadsheets and
+  // paper books (web/js/domain/importer.js). History, filed by the Farm
+  // Manager or the Owner and read by them; the money in it only by the roles
+  // that run the books. None of these is a live harvest, spray or treatment,
+  // so none of them is judged by the gates, and none can stand in for one.
+  'import.batch':      { write: 'settings',      read: 'viewReports', guard: guardImportBatch },
+  'import.revert':     { write: 'settings',      read: 'viewReports', guard: guardImportRevert },
+  'history.harvest':   { write: 'settings',      read: 'viewReports', guard: guardHistory },
+  'history.sale':      { write: 'manageMoney',   read: 'manageMoney', guard: guardHistory },
+  'history.expense':   { write: 'manageMoney',   read: 'manageMoney', guard: guardHistory },
+
   // The money. Only roles that run the books ever receive these.
   'sale.record':       { write: 'manageMoney',   read: 'manageMoney' },
   'expense.record':    { write: 'manageMoney',   read: 'manageMoney' },
@@ -1274,6 +1285,47 @@ function guardDoctorConfirm(event, author) {
   const who = author.memberId || author.id;
   if (who === 'farm-doctor') {
     return { ok: false, why: 'The Farm Doctor does not confirm or approve its own work (FR-DOC-08)' };
+  }
+  return { ok: true };
+}
+
+// --- Imported history (Phase 2) -----------------------------------------------
+//
+// The kinds are repeated from web/js/domain/importer.js because the server
+// does not import the app; tests/importer.test.mjs fails if they drift.
+export const IMPORT_KIND_RECORDS = { harvest: 'history.harvest', sale: 'history.sale', expense: 'history.expense' };
+export const IMPORT_SOURCE_IDS = ['spreadsheet', 'paper', 'handfilled'];
+
+function guardImportBatch(event, author) {
+  const p = event.payload || {};
+  if (!p.id || !safeId(String(p.id))) return { ok: false, why: 'An import needs an id' };
+  if (!IMPORT_KIND_RECORDS[p.kind]) return { ok: false, why: 'Unknown kind of import' };
+  if (!IMPORT_SOURCE_IDS.includes(p.source)) return { ok: false, why: 'Say where the records came from' };
+  if (p.kind !== 'harvest' && !can(author.role, 'manageMoney')) {
+    return { ok: false, why: 'Only the people who run the books import sales and expenses' };
+  }
+  return { ok: true };
+}
+
+function guardImportRevert(event) {
+  const p = event.payload || {};
+  if (!p.id) return { ok: false, why: 'Say which import is being undone' };
+  if (String(p.reason || '').trim().length < 4) return { ok: false, why: 'Say why the import is being undone' };
+  return { ok: true };
+}
+
+/** An imported row: from a named import and source, dated in the past, numbers from zero up. */
+function guardHistory(event) {
+  const p = event.payload || {};
+  if (!p.id || !p.importId) return { ok: false, why: 'An imported record names its import' };
+  if (!IMPORT_SOURCE_IDS.includes(p.source)) return { ok: false, why: 'Say where the record came from' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) return { ok: false, why: 'An imported record needs its date' };
+  const madeOn = String(event.serverAt || event.at || new Date().toISOString()).slice(0, 10);
+  if (p.date > madeOn) return { ok: false, why: 'History cannot be dated after the day it is imported' };
+  for (const k of ['kg', 'crates', 'pricePerKg', 'total', 'amount']) {
+    if (p[k] != null && !(Number.isFinite(Number(p[k])) && Number(p[k]) >= 0)) {
+      return { ok: false, why: 'A quantity or an amount is a number, 0 or more' };
+    }
   }
   return { ok: true };
 }

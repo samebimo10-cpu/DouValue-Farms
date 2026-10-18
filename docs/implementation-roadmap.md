@@ -59,6 +59,10 @@ Phase 2 (onboarding imports) is smaller than the brief assumes: mid-season crops
 **Rules**: import never writes `spray.record` as live; imported sprays go through the existing backfill path so rotation and PHI read them (FR-ONB-04) and they never count as gated treatments (FR-ONB-03). Unknown cells stay empty; no defaults are invented.
 **Dependency**: Owner decision D-D (sources and formats).
 
+**Status (18 October 2026): 2.1–2.3 built for harvest, sales and expenses history.** The Owner chose three sources: spreadsheets, paper reports and hand-filled sheets. Setup → *Bring in existing records* (`#/import`, Farm Manager and Owner) takes a .csv file or cells pasted from Excel or Google Sheets, or rows typed in from a paper report or a hand-filled sheet (kept on the phone until imported). Every way in goes through the same steps: column matching (guessed, every guess changeable), per-row checks with the reason in words, possible duplicates left out unless chosen, a confirmation summary, a downloadable per-line report, and undo of a whole import (`import.revert`: rows stay in the log, marked undone). A blank sheet prints on one landscape page, and a spreadsheet template downloads. Imported rows are their own records (`history.harvest`, `history.sale`, `history.expense`): never a live harvest, spray or treatment, never judged as one, never sent to a hand, and money history only to the roles that run the books. Spray history is not imported here; it stays in Setup, where the rotation and the waiting periods read it.
+
+Not done yet: imported history does not feed the reports, KPIs or forecasts (next: profit and yield history per zone and season, Phase 4); .xlsx files must be saved as CSV or copied and pasted; reading a photographed paper report is not built (it would use the paid AI, which is the Owner's alone); bulk staff entry (2.4) and outstanding tasks (2.5).
+
 ## Phase 3 — Operational control
 
 - Authorship of relayed records (G-05): server keeps `claimedBy` and marks relayed; record checks read it.

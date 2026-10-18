@@ -323,6 +323,8 @@ const PARENT_OF = {
   '#/field/cycle': '#/field',
   '#/gates': '#/field',
   '#/setup': '#/dashboard',
+  '#/import': '#/setup',
+  '#/import/sheet': '#/import',
   '#/alerts': '#/clinic',
   '#/digest': '#/dashboard',
   '#/zones': '#/field',

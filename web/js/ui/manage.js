@@ -1260,6 +1260,8 @@ export const settingsView = {
       + button('Share the log', 'share-data', { cls: 'btn-ghost', icon: '📤' })
       + button('Merge a file in', 'import-data', { cls: 'btn-ghost', icon: '⬆️' })
       + '</div>'
+      + '<p style="margin-top:10px"><small>Records from before the app, in a spreadsheet or a paper book? '
+      + '<a href="#/import">Bring in existing records</a>.</small></p>'
       + '<input type="file" accept="application/json,.json" id="import-file" style="display:none">'
       + '<div id="storage-report" style="margin-top:12px"></div>')
     + card(cardHead('Danger zone')

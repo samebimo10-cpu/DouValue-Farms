@@ -15,6 +15,7 @@ import {
 import { auditView } from './ui/audit.js';
 import { gatesView } from './ui/gates.js';
 import { setupView } from './ui/setup.js';
+import { importSheetView, importView } from './ui/importer.js';
 import { alertsView, digestView } from './ui/alerts.js';
 import { zonesView, zoneCodesView } from './ui/zones.js';
 import { kpiView } from './ui/kpis.js';
@@ -61,6 +62,9 @@ registerRoute('#/doctor', doctorView);
 registerRoute('#/adviser', doctorView);
 registerRoute('#/gates', gatesView);
 registerRoute('#/setup', setupView);
+// Phase 2: existing records from spreadsheets, paper reports and hand-filled sheets.
+registerRoute('#/import', importView);
+registerRoute('#/import/sheet', importSheetView);
 registerRoute('#/alerts', alertsView);
 registerRoute('#/digest', digestView);
 registerRoute('#/zones', zonesView);

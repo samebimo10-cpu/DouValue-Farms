@@ -42,7 +42,7 @@ The weaknesses are **operational plumbing**, not features:
 | ID | Requirement | Current implementation and evidence | Status | Risk | Recommended change | Dependencies |
 |---|---|---|---|---|---|---|
 | G-03 | Protect sensitive operations; no insecure shortcuts; sustainable cost | `POST /api/farms/:id/bootstrap` needs no credential and accepts any unused farm id (`core.mjs bootstrap`). Each new farm's CEO can then call `/advise` and `/photo-review` on the server's `ANTHROPIC_API_KEY` (25 calls/person/day; **no monthly cap unless that farm's Owner sets one**) and `/notify`, which sends to the server-wide `OWNER_WHATSAPP`. The server address is in every staff sign-in link and may be in the public `web/js/farm-address.js`. | **Missing** | High: unbounded spend on the farm's API key; WhatsApp spam to the Owner; junk farms in storage | Once a server holds a farm, creating another needs a setup key set on the deployment (`FARM_SETUP_KEY`); the first farm on an empty server still needs none, so a fresh setup is unchanged | None — Phase 1 |
-| G-07 | Users cannot see records they should not (FR-ROLE-03: hands never see other people's records) | Server read policy sends money only to money roles, rates and findings only to the Owner — **Complete** and tested (`tests/security.test.mjs`, `simplify-money.test.mjs`). Shift reports, work logs, attendance, problem reports and comments of every person go to every role. Some of this is needed on a hand's phone (attendance drives cover; sprays drive PHI blocks), some is not (other people's shift reports and the manager's comments on them). | **Partial** | Medium: privacy between staff; manager comments visible to peers | Withhold `shift.record` / `shift.comment` of other people from hands. Needs an Owner decision on what else counts as "other people's records" | Owner decision D-A |
+| G-07 | Users cannot see records they should not (FR-ROLE-03: hands never see other people's records) — **done 18 Oct 2026, see §11** | Server read policy sends money only to money roles, rates and findings only to the Owner — **Complete** and tested (`tests/security.test.mjs`, `simplify-money.test.mjs`). Shift reports, work logs, attendance, problem reports and comments of every person go to every role. Some of this is needed on a hand's phone (attendance drives cover; sprays drive PHI blocks), some is not (other people's shift reports and the manager's comments on them). | **Partial** | Medium: privacy between staff; manager comments visible to peers | Withhold `shift.record` / `shift.comment` of other people from hands. Needs an Owner decision on what else counts as "other people's records" | Owner decision D-A |
 | G-08 | Shared-phone PINs are not sufficient protection on their own; lockout after 5 tries (NFR-SEC-02) | Server lockout: **Complete** (5 tries, 15 min, tested). Local pad (`ui/shell.js pin-ok`): unlimited attempts against a digest in IndexedDB. Unconnected farms keep `SHA-256("douvalue:"+PIN)` in the shared event log. README says so plainly. | **Partial** | Medium: a 4-digit PIN on a shared phone can be found in minutes | Local attempt counter with the same 5/15 rule; salted PBKDF2 for local digests; keep recommending a connected farm | Phase 1b |
 | G-09 | Session handling (NFR-SEC-06 auto sign-out after 10 min idle) | Not implemented (`sessionStorage` user persists until the tab closes). | **Missing** | Medium: next person on a shared phone works as the previous one | Idle timer returning to the PIN pad; keep drafts | Phase 1b |
 | G-10 | Server tokens | Random 256-bit, stored as digest, revocable per person and device; never expire. | **Partial** | Low | Expire tokens unused for 90 days | Phase 5 |
@@ -88,9 +88,9 @@ The weaknesses are **operational plumbing**, not features:
 | G-30 | Opening stock | Opening count, backfilled, not usage (FR-ONB-07). | Complete |
 | G-31 | Treatment history | Last insecticide/fungicide and 21-day sprays, backfilled; missing history blocks spraying (FR-ONB-05). Older history not captured. | Partial (by design) |
 | G-32 | Harvest history | Harvest to date as a backfill total. No per-picking history import. | Partial |
-| G-33 | Sales and expenses history | Not supported as history; can only be entered as ordinary records dated in the past, which the record checks then flag as late entry. | **Missing** |
+| G-33 | Sales and expenses history — **imported as history, 18 Oct 2026; not yet in the reports** | Not supported as history; can only be entered as ordinary records dated in the past, which the record checks then flag as late entry. | **Missing** |
 | G-34 | Outstanding tasks | One-off tasks (FR-TASK-04) can be written by hand. | Partial |
-| G-35 | Import: column mapping, preview, validation, duplicates, confirmation, report, reversal | No CSV import. The only import is merging a full app backup file, which has none of these steps. | **Missing** |
+| G-35 | Import: column mapping, preview, validation, duplicates, confirmation, report, reversal — **done for harvest, sales and expenses history, 18 Oct 2026** | No CSV import. The only import is merging a full app backup file, which has none of these steps. | **Missing** |
 | G-36 | Historical vs new distinguished; unknown stays unknown | Backfilled entries are marked and kept apart; "none" must be declared explicitly (FR-ONB-05). | Complete for what exists |
 
 ## 8. Intelligence and alerts (ADJ §8)
@@ -138,11 +138,15 @@ The weaknesses are **operational plumbing**, not features:
 | Session and authentication | Server complete; local lockout and idle missing |
 | Storage limits of the real Deno KV | **Missing** — the stand-in hides G-01 |
 
-## 11. Decisions needed from the Owner
+## 11. Owner decisions
 
-| # | Decision | Why it matters |
-|---|---|---|
-| D-A | Which records count as "other people's" for a hand (G-07): shift reports and comments only, or also work logs and problem reports? | Privacy vs. what a hand's phone needs to compute cover and safety blocks |
-| D-B | Is the production server Deno Deploy or the node server, and is it live with staff yet? | Decides whether G-01 is already holding records on phones today |
-| D-C | Should a farm's monthly outside-advice cap default to a value (e.g. $20) rather than none? | Cost control |
-| D-D | Is CSV import of history (sales, expenses, pickings) wanted, and from what source (paper book, spreadsheet, another app)? | Scope of Phase 2 |
+Answered by the Owner on 18 October 2026 and built the same day.
+
+| # | Question | Decision | Where it is enforced |
+|---|---|---|---|
+| D-A | What may each person see? (G-07) | "Each person should only see what concerns them based on the login they have." | Farm server read scope (`server/core.mjs → readScope`); `FR-ROLE-03` |
+| D-B | Is the server live with staff? | Only the CEO's own account exists so far. No staff phones hold records from before the Phase 1a fixes. | — |
+| D-C | Who may use outside advice (AI)? | "Limited to the CEO for now; the CEO can unlock it for the managers and supervisors." | Farm server `/ai-access`, checked before any paid call; `FR-ADV-07`, `FR-DOC-03` |
+| D-D | Import from what? (G-35) | "From spreadsheet, normal paper reports, and can also be hand-filled." | Setup → Bring in existing records (`web/js/domain/importer.js`) |
+
+Still open: whether the monthly outside-advice cap should default to a figure rather than none.
