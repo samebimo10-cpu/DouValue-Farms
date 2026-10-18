@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document | Core Requirements |
-| Version | 1.18 (draft for restructuring) |
+| Version | 1.19 (draft for restructuring) |
 | Owner | DouValue Farms Limited |
 | Platform context | Live testbed for EBIMS |
 | Status | Draft |
@@ -413,6 +413,7 @@ The farm starts using the app with cycles already running. This section says how
 
 | Version | Date | Change |
 |---|---|---|
+| 1.19 | 18 Oct 2026 | Phase 1b: NFR-SEC-02 on the phone (five wrong PINs lock the pad for 15 minutes, per person; a connected phone's PIN digest is PBKDF2); NFR-SEC-06 idle sign-out after 10 minutes; a person's own records' sync state on My work (NFR-OFF-03); the Owner's view of phones not heard from for a day (NFR-DATA-02) |
 | 1.18 | 18 Oct 2026 | Owner decisions: FR-ROLE-03, each person is sent only what concerns them, enforced on the farm server. FR-ADV-07 and FR-DOC-03, outside advice and photo review are the Owner's until the Owner switches them on for the Farm Manager or the Field Supervisor. Import of existing records from spreadsheets, paper reports and hand-filled sheets added to the plan (docs/implementation-roadmap.md, Phase 2) |
 | 1.17 | 9 Oct 2026 | The Agronomist role removed from the app (FR-GATE-00); a person still recorded with it works as a Field Supervisor. The carbofuran "avoid" row removed from the problem cards (FR-STOCK-09). FR-SIMP-04: harvest, labour and stock forecasts are the Farm Manager's too. The farm server's adviser and photo review default to Claude Opus 5.5, with refusal fallback (FR-ADV-07 costs it at its own prices) |
 | 1.16 | 9 Oct 2026 | FR-DOC-03: photo review for the Field Supervisor and above. FR-ADV-07: the Owner's monthly cap in US dollars, beside the daily limit. FR-TREAT-01: litres sprayed and area treated. FR-STOCK-01: a spray draws its stock down by itself. FR-COST-04 points to FR-SIMP-04 for the Farm Manager's view of the money. SR-04 re-spray tasks generated from hourly rain. The Farm check runs as verification Part A, nightly on the server, Owner-only |

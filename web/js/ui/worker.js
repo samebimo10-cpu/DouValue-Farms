@@ -18,6 +18,8 @@ import { howTo } from '../domain/schedule.js';
 import { myWork } from '../domain/assignments.js';
 import { namesLine, recipientsFor, reportsBy, roleTitle, WHERE_BY_ID } from '../domain/sickplant.js';
 import { workTabs } from './farm.js';
+import { getStatus, myRecordsLine, refusedRecords } from '../sync.js';
+import { refusalsFor } from '../domain/refusals.js';
 import {
   bigNumber, buzz, callSupervisor, dayProgressBar, numberField, phraseChips, sheetSubmit, tag, taskStatus,
 } from './field-kit.js';
@@ -128,7 +130,8 @@ export const todayView = {
       cardHead(t('today.tasks'))
       // Each task card names its own zone. The list of the zones this person
       // holds moved to the account sheet (their initials, top right).
-      + (work.tasks.length ? dayProgressBar(progress) : ''),
+      + (work.tasks.length ? dayProgressBar(progress) : '')
+      + myRecords(user),
       { tight: true },
     );
 
@@ -289,6 +292,19 @@ function clockInTime(state, personId) {
  * repeated as a stripe and as an icon (UX-07), so it survives sunlight and
  * colour blindness alike.
  */
+/**
+ * Phase 1b — "Has my report been saved and synchronized?", answered for this
+ * person's own records, in one line under the day's progress. Colour with an
+ * icon (UX-07); the red bar across the top still opens the refusals.
+ */
+function myRecords(user) {
+  const refused = refusalsFor(refusedRecords(), user).length;
+  const line = myRecordsLine(getStatus(), user.id, refused);
+  const icon = { ok: '✓', warn: '!', danger: '✕' }[line.tone] || '';
+  return `<p class="my-records ${esc(line.tone)}" data-moved="home.my-records" style="margin:8px 0 0">`
+    + `<small>${icon} ${esc(line.text)}</small></p>`;
+}
+
 function taskCard(state, task, why = null, { main = false } = {}) {
   const state_ = taskStatus(task);
   const zone = task.zoneId ? (state.plots || {})[task.zoneId] : null;

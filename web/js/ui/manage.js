@@ -10,8 +10,8 @@ import {
   attendanceBetween, dailyRateFor, hasRates, labourByZone, revenueBetween, ROLES, ROLE_LIST, DEFAULT_SETTINGS,
 } from '../store.js';
 import {
-  bootstrapFarm, checkServer, getAiAccess, getAuth, getSpendCap, getStatus, isConnected, makePassword, newFarmId, setAiAccess, setSpendCap,
-  revokeMember, setAccount, signInLink, signOutDevice, statusLine, suggestLogin, syncNow,
+  bootstrapFarm, checkServer, getAiAccess, getAuth, getDevices, getSpendCap, getStatus, isConnected, makePassword, newFarmId, setAiAccess, setSpendCap,
+  refusedRecords, revokeMember, setAccount, signInLink, signOutDevice, statusLine, suggestLogin, syncNow,
 } from '../sync.js';
 import { getMeta, setMeta } from '../db.js';
 import {
@@ -32,6 +32,7 @@ import { addDays, daysBetween, friendlyDate, isoDate, kg, naira, round, sum, uid
 import { forgetDeviceLock, hashPin, isPin, params, PIN_MAX, PIN_MIN } from './shell.js';
 import { bindPhoto, photoField, photoPayload, resetPhoto } from './photo.js';
 import { countUnsynced, exportBundle, importBundle, storageReport, clearEvents } from '../db.js';
+import { devicePinDigest } from '../domain/unlock.js';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -87,6 +88,9 @@ export const dashboardView = {
     // UX-28: getting people onto their own phones is the first thing a new
     // farm needs, so until everyone has a sign-in it is the first card here.
     if (can(ctx.user, 'managePeople')) out += peopleCard(ctx);
+    // Phase 1b: the Owner sees which phones have gone quiet, and what the
+    // server refused. Filled in once the farm server answers (mounted below).
+    if (can(ctx.user, 'viewAudit') && isConnected()) out += '<div id="data-health"></div>';
 
     // Sales and costs are withheld from roles without money authority, so their
     // totals here would be zeroes that read as fact. Show the crop instead.
@@ -187,7 +191,52 @@ export const dashboardView = {
 
     return out;
   },
+
+  async mounted(ctx) {
+    const host = document.getElementById('data-health');
+    if (!host) return;
+    let reply = null;
+    try { reply = await getDevices(); } catch { /* no signal: the card says so */ }
+    const refused = refusedRecords().filter((r) => !r.read).length;
+    if (document.getElementById('data-health') === host) host.innerHTML = dataHealthCard(reply, { refused, status: getStatus() });
+  },
 };
+
+/**
+ * Phase 1b — can the Owner trust that the farm's records are all in? A phone
+ * that has not reached the server for a day holds records nobody else has;
+ * a refused record is one the farm does not have. Each line says what to do.
+ */
+export function dataHealthCard(reply, { refused = 0, status = {} } = {}) {
+  const head = cardHead('Are all the records in?');
+  if (!reply || !reply.ok) {
+    return card(head + '<p><small>The farm server could not be reached just now, so this phone cannot say which '
+      + 'phones have sent their records. It tries again when you open the dashboard.</small></p>', { tight: true });
+  }
+  const quiet = reply.devices.filter((d) => d.quietHours == null || d.quietHours >= 24);
+  const when = (d) => (d.quietHours == null ? 'never'
+    : d.quietHours < 1 ? 'within the hour'
+      : d.quietHours < 48 ? `${d.quietHours} hours ago` : `${Math.floor(d.quietHours / 24)} days ago`);
+  const lines = [];
+  if (!quiet.length && !refused && !status.held) {
+    lines.push(note('ok', '✓ Every signed-in phone has reached the farm server in the last day', ''));
+  }
+  if (quiet.length) {
+    lines.push(note('warn', `! ${quiet.length} phone${quiet.length === 1 ? ' has' : 's have'} not reached the farm server for a day or more`,
+      '<small>Whatever was recorded on them since exists only on that phone. Ask the person to open the app '
+      + 'where there is signal; if a phone is lost, sign it out under People.</small>'));
+  }
+  if (refused) {
+    lines.push(note('danger', `✕ ${refused} record${refused === 1 ? '' : 's'} refused by the farm server`,
+      '<small>They are not on the farm. Tap the red bar at the top to see what each was and what to do.</small>'));
+  }
+  if (status.held) {
+    lines.push(note('warn', `! ${status.held} record${status.held === 1 ? '' : 's'} on this phone waiting for the server`, ''));
+  }
+  const rows = reply.devices.map((d) => [d.name, d.device, when(d)]);
+  return card(head + lines.join('')
+    + (rows.length ? table(['Person', 'Phone', 'Last reached the server'], rows) : ''), { tight: true });
+}
 
 function buildAlerts(ctx, cycles, cal) {
   const { state } = ctx;
@@ -1642,7 +1691,7 @@ async function saveSyncSetup(ctx, form) {
       url, farmId: newFarmId(), farmName: ctx.state.settings.farmName,
       name: ctx.user.name, password, memberId: ctx.user.id, setupKey: String(data.setupKey || '').trim(),
     });
-    await setMeta('devicePin', await hashPin(password, result.member.id));
+    await setMeta('devicePin', await devicePinDigest(password, result.member.id));
     await forgetDeviceLock();
     const sync = await syncNow();
     closeSheet();

@@ -174,6 +174,13 @@ export async function countUnsynced() {
   return all.reduce((n, e) => n + (e.synced ? 0 : 1), 0);
 }
 
+/** How many unsent records each person on this phone has: { personId: count }. */
+export async function unsyncedBy() {
+  const out = {};
+  for (const e of await loadEvents()) if (!e.synced) out[e.by || 'system'] = (out[e.by || 'system'] || 0) + 1;
+  return out;
+}
+
 /** Stamp events the server has confirmed it holds. */
 export async function markSynced(ids, at = new Date().toISOString()) {
   const wanted = new Set(ids);

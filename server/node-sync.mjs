@@ -108,6 +108,7 @@ const store = {
   async getToken(digest) { return tokens[digest] || null; },
   async setToken(digest, rec) { tokens[digest] = rec; saveTokens(); },
   async touchToken(digest, at) { if (tokens[digest]) { tokens[digest].lastSeen = at; saveTokens(); } },
+  async listTokens(farmId) { return Object.values(tokens).filter((t) => t.farmId === farmId); },
   async deleteTokensFor(farmId, memberId) {
     let changed = false;
     for (const [digest, rec] of Object.entries(tokens)) {

@@ -876,6 +876,7 @@ async function readJson(req) {
  *   POST /api/farms/:id/advise      the wider adviser: live weather, and the web if a key is set
  *   POST /api/farms/:id/photo-review  the Farm Doctor's photo review (FR-DOC-03)
  *   POST /api/farms/:id/checks      run the record checks now (Owner, FR-XCHK-09)
+ *   GET  /api/farms/:id/devices     each signed-in phone and when it last reached the server (Owner)
  *   GET  /api/farms/:id/ai-access   who besides the Owner may use outside advice and photo review (Owner)
  *   POST /api/farms/:id/ai-access   switch it on or off for the Farm Manager and the Field Supervisor (Owner)
  *   GET  /api/farms/:id/spend-cap   this month's spend on the adviser and photo review, and the cap (Owner)
@@ -945,6 +946,8 @@ export async function handleRequest(req, store) {
   // The Owner's decision of 18 October 2026: outside advice and photo review
   // are the Owner's, and the Owner switches them on for the Farm Manager and
   // the Field Supervisor.
+  // Phase 1b: which phones have gone quiet, for the Owner (NFR-OFF-02, NFR-DATA-02).
+  if (action === 'devices' && req.method === 'GET') return devicesStatus(farmId, me, store);
   if (action === 'ai-access' && req.method === 'GET') return aiAccessStatus(farmId, me, store);
   if (action === 'ai-access' && req.method === 'POST') return setAiAccess(farmId, body, me, store);
   if (action === 'spend-cap' && req.method === 'GET') return spendCapStatus(farmId, me, store);
@@ -2421,6 +2424,31 @@ async function setSpendCap(farmId, body, me, store) {
   const farm = (await store.getFarm(farmId)) || {};
   await store.setFarm(farmId, { ...farm, spendCap: value === null ? null : { monthlyUsd: value, by: me.id, at: new Date().toISOString() } });
   return json({ ok: true, ...(await underSpendCap(farmId, store)) });
+}
+
+// --- Phones that have gone quiet — Phase 1b ------------------------------------
+//
+// A record is safe once it reaches this server (NFR-DATA-02). The server
+// cannot see what a phone is still holding, but it knows when each phone last
+// reached it, and a phone silent for a day is one whose records exist only on
+// that handset. The Owner sees each signed-in phone, whose it is and when it
+// was last heard from — never a token or its digest.
+
+export async function devicesStatus(farmId, me, store, { now = Date.now() } = {}) {
+  if (!can(me.role, 'viewAudit')) return json({ error: 'Only the Owner sees the farm\'s phones' }, 403);
+  const members = Object.fromEntries((await store.listMembers(farmId)).map((m) => [m.id, m]));
+  const tokens = store.listTokens ? await store.listTokens(farmId) : [];
+  const devices = tokens.map((t) => {
+    const m = members[t.memberId] || {};
+    const last = Date.parse(t.lastSeen || t.created || '') || null;
+    return {
+      memberId: t.memberId, name: m.name || t.memberId, role: currentRole(m.role || ''), active: m.status === 'active',
+      device: t.device || 'unknown', lastSeen: last ? new Date(last).toISOString() : null,
+      quietHours: last ? Math.floor((now - last) / 3600000) : null,
+    };
+  }).filter((d) => d.active)
+    .sort((a, b) => (b.quietHours ?? Infinity) - (a.quietHours ?? Infinity));
+  return json({ ok: true, devices, quiet: devices.filter((d) => d.quietHours == null || d.quietHours >= 24).length });
 }
 
 // --- Who may use outside advice and photo review ---------------------------

@@ -1,7 +1,7 @@
 // The frame: who is signed in, which screen is showing, and the plumbing that
 // turns a tap into an event in the log.
 
-import { can, ROLES } from '../store.js';
+import { can, isPractice, ROLES } from '../store.js';
 import { getLang, LANGS, setLang, t } from '../i18n.js';
 import {
   badge, button, closeSheet, confirmSheet, empty, esc, field, initials, input,
@@ -17,6 +17,9 @@ import { seasonOn } from '../domain/climate.js';
 import { zonesHeldBy } from '../domain/assignments.js';
 import { applyPhrase, buzz, callSupervisor, stepCount } from './field-kit.js';
 import { getMeta, setMeta } from '../db.js';
+import {
+  afterWrongPin, checkDevicePin, devicePinDigest, idleExpired, padMessage, padState,
+} from '../domain/unlock.js';
 
 const routes = new Map();
 let ctx = null;
@@ -95,6 +98,8 @@ export function pinDotsHtml(length) {
 // --- Login ----------------------------------------------------------------
 
 let pending = { personId: null, pin: '' };
+/** Wrong PIN tries per person, kept on the phone (domain/unlock.js). */
+const PIN_TRIES_KEY = 'pinTries';
 // What unlocks this phone each day: the PIN its owner chose when they set the
 // farm up, or the password the CEO made for them (UX-28). Both are digits on
 // the same pad; only the words differ.
@@ -522,19 +527,31 @@ const shellActions = {
     if (!press.submit) { toast(press.why, true); return; }
     const linked = getAuth();
     const pin = press.pin;
+    const who = linked ? linked.memberId : pending.personId;
+
+    // NFR-SEC-02: five wrong tries lock the pad for 15 minutes, for this person.
+    const tries = (await getMeta(PIN_TRIES_KEY, {})) || {};
+    const st = padState(tries[who]);
+    if (st.locked) { pending.pin = ''; toast(padMessage(st), true); render(); return; }
+    const wrong = async (text) => {
+      tries[who] = afterWrongPin(tries[who]);
+      await setMeta(PIN_TRIES_KEY, tries);
+      pending.pin = '';
+      toast(padMessage(padState(tries[who])) || text, true);
+      render();
+    };
+    const right = async () => {
+      if (tries[who]) { delete tries[who]; await setMeta(PIN_TRIES_KEY, tries); }
+    };
 
     if (linked) {
       // The PIN is checked against what this device stored when it was enrolled,
       // so signing in still works with no network. The token is what the server
       // actually trusts, and it is checked on the next exchange.
-      const stored = await getMeta('devicePin', null);
-      const hash = await hashPin(pin, linked.memberId);
-      if (!stored || stored !== hash) {
-        pending.pin = '';
-        toast(t(lockKind === 'password' ? 'login.wrongPassword' : 'login.wrong'), true);
-        render();
-        return;
-      }
+      const verdict = await checkDevicePin(pin, linked.memberId, await getMeta('devicePin', null), hashPin);
+      if (!verdict.ok) { await wrong(t(lockKind === 'password' ? 'login.wrongPassword' : 'login.wrong')); return; }
+      if (verdict.upgrade) await setMeta('devicePin', verdict.upgrade);
+      await right();
       pending = { personId: null, pin: '' };
       const person = c.store.state.people[linked.memberId]
         || { id: linked.memberId, name: linked.name, role: linked.role, active: true };
@@ -549,12 +566,8 @@ const shellActions = {
     const person = c.store.state.people[pending.personId];
     if (!person) { pending = { personId: null, pin: '' }; render(); return; }
     const hash = await hashPin(pin);
-    if (person.pinHash && person.pinHash !== hash) {
-      pending.pin = '';
-      toast(t('login.wrong'), true);
-      render();
-      return;
-    }
+    if (person.pinHash && person.pinHash !== hash) { await wrong(t('login.wrong')); return; }
+    await right();
     pending = { personId: null, pin: '' };
     c.store.setUser(person);
     adoptLanguage(person);
@@ -729,7 +742,7 @@ const shellActions = {
       const result = await signIn({ url, login, password });
       // The password also unlocks this phone with no network, so it is kept
       // here as a digest alongside the token the server actually trusts.
-      await setMeta('devicePin', await hashPin(password, result.member.id));
+      await setMeta('devicePin', await devicePinDigest(password, result.member.id));
       await setMeta('deviceLock', 'password');
       lockKind = 'password';
       // The sample farm is pretend; it must not be sent up as this person's work.
@@ -785,6 +798,52 @@ function findAction(target) {
   return el ? { el, act: el.dataset.act } : null;
 }
 
+// --- Idle sign-out — NFR-SEC-06 ---------------------------------------------
+
+const ACTIVE_KEY = 'douvalue.lastActive';
+function lastActive() {
+  try { return Number(sessionStorage.getItem(ACTIVE_KEY)) || NaN; } catch { return NaN; }
+}
+function touchActive() {
+  try { sessionStorage.setItem(ACTIVE_KEY, String(Date.now())); } catch { /* storage blocked */ }
+}
+
+/** Back to the PIN pad if nobody has touched the phone for ten minutes. Drafts are kept (UX-16). */
+function signOutIfIdle(store) {
+  if (!store.user || isPractice() || !idleExpired(lastActive())) return false;
+  closeSheet();
+  sessionStorage.removeItem('douvalue.user');
+  store.setUser(null);
+  pending = { personId: null, pin: '' };
+  render();
+  toast('Signed out after 10 minutes with nobody using the phone');
+  return true;
+}
+
+function watchIdle(store) {
+  touchActive();
+  // The tap that wakes an idle phone only signs it out: it must not go on to
+  // press whatever button was under it, as nobody, on the screen just left.
+  let swallowClick = false;
+  for (const type of ['pointerdown', 'keydown']) {
+    document.addEventListener(type, (e) => {
+      if (signOutIfIdle(store)) { swallowClick = true; e.preventDefault(); e.stopImmediatePropagation(); }
+      touchActive();
+    }, { capture: true });
+  }
+  document.addEventListener('click', (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, { capture: true });
+  document.addEventListener('input', touchActive, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { signOutIfIdle(store); touchActive(); }
+  });
+  setInterval(() => signOutIfIdle(store), 30000);
+}
+
 export async function startShell(store) {
   ctx = {
     store,
@@ -809,12 +868,15 @@ export async function startShell(store) {
   } catch { /* a phone with storage blocked simply starts in normal contrast */ }
 
   const savedUser = sessionStorage.getItem('douvalue.user');
-  if (savedUser && store.state.people[savedUser]) {
+  // NFR-SEC-06: a tab reopened after ten idle minutes asks for the PIN again.
+  if (savedUser && idleExpired(lastActive())) sessionStorage.removeItem('douvalue.user');
+  else if (savedUser && store.state.people[savedUser]) {
     store.setUser(store.state.people[savedUser]);
     // UX-17: their language, not the phone's.
     const mine = store.state.people[savedUser].language;
     if (mine) setLang(mine);
   }
+  watchIdle(store);
 
   document.addEventListener('click', async (e) => {
     const hit = findAction(e.target);

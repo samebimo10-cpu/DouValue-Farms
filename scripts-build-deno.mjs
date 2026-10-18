@@ -272,6 +272,11 @@ const store = {
     const cur = (await kv.get(["token", digest])).value;
     if (cur) await kv.set(["token", digest], { ...cur, lastSeen: at });
   },
+  async listTokens(farmId) {
+    const out = [];
+    for await (const e of kv.list({ prefix: ["token"] })) if (e.value && e.value.farmId === farmId) out.push(e.value);
+    return out;
+  },
   async deleteTokensFor(farmId, memberId) {
     for await (const e of kv.list({ prefix: ["token"] })) {
       const rec = e.value;

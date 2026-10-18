@@ -667,6 +667,18 @@ backup file*, weekly.
 A PIN is 4 to 12 digits. The sign-in pad takes all of them and signs in on ✓ — it never
 submits on its own at four (`UX-01`).
 
+**Five wrong PINs lock the pad for 15 minutes** for that person, on the phone as on the
+server (`NFR-SEC-02`); the count is kept in the phone's storage, so reopening the app does
+not reset it, and another person on a shared phone is not locked out by it. **Ten minutes
+with nobody touching the phone** and it goes back to the pad (`NFR-SEC-06`); the tap that
+wakes it only signs it out. A connected phone keeps a slow, salted digest of its owner's
+PIN (PBKDF2), and a phone with the older quick one is moved to it at the next right PIN.
+
+*My work* says where the person's own records stand: all reached the farm, saved on the
+phone and waiting for signal, or refused. The CEO's dashboard shows every signed-in phone
+and when it last reached the farm server, and says which have been quiet for a day or more —
+their records exist only on that phone.
+
 On a **connected** farm the CEO's PIN, and everyone else's password from the CEO, unlocks
 the phone it was signed in on, and the account behind it is real: the server decides what
 that person may read and write, and their phone is never sent anything else. A password

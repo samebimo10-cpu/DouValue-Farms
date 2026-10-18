@@ -46,6 +46,8 @@ Phase 2 (onboarding imports) is smaller than the brief assumes: mid-season crops
 
 **Acceptance**: tests for lockout timing (fake clock), idle timer, per-person counts; 360 px screenshot of My work with the new line above the fold (FR-SIMP-08).
 
+**Status (18 October 2026): 1b.1–1b.4 done; 1b.5 done as the Owner's decision D-A (Phase 1a/decisions round).** PIN pad lockout and PBKDF2 device digest with upgrade-on-sign-in; idle sign-out that swallows the waking tap; *Your records* line on My work; the Owner's *Are all the records in?* card fed by the server's new Owner-only `/devices`. Tested in the domain, against the node server, and in Chrome at 360 px (lockout across a reload; another person unaffected; 9 vs 10 idle minutes). Known limit: a lock kept on the phone can be got round by someone who rewinds its clock or edits its storage; the server's lock and read scope remain the fence. Unconnected farms keep the old quick PIN digest in the shared log (README says so).
+
 ## Phase 2 — Existing-farm onboarding and history
 
 | Item | Gap | Change |

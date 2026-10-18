@@ -13,7 +13,7 @@
 // sign-in name and password the CEO made for that person (UX-28).
 
 import {
-  countUnsynced, getMeta, markSynced, mergeEvents, setMeta, unsyncedEvents,
+  getMeta, markSynced, mergeEvents, setMeta, unsyncedBy, unsyncedEvents,
 } from './db.js';
 import { ownerMessages } from './domain/notify.js';
 import { FARM_SERVER } from './farm-address.js';
@@ -52,6 +52,12 @@ export async function markRefusalsRead(ids) {
 }
 export function getAuth() { return auth ? { ...auth } : null; }
 export function isConnected() { return !!auth; }
+
+/** What is still on this phone: in all, and per person (for "Your records", Phase 1b). */
+async function pendingNow() {
+  const by = await unsyncedBy();
+  return { pending: Object.values(by).reduce((a, b) => a + b, 0), pendingBy: by };
+}
 
 function setStatus(patch) {
   status = { ...status, ...patch };
@@ -238,7 +244,7 @@ async function saveAuth(next) {
   auth = next;
   await setMeta('farmAuth', next);
   failures = 0;
-  setStatus({ state: navigator.onLine ? 'idle' : 'offline', lastError: null, pending: await countUnsynced() });
+  setStatus({ state: navigator.onLine ? 'idle' : 'offline', lastError: null, ...(await pendingNow()) });
 }
 
 /** Forget the link on this device. The farm's records stay on the server. */
@@ -398,7 +404,7 @@ export async function syncNow({ silent = false } = {}) {
   if (!auth) return { ok: false, reason: 'not connected' };
   if (inFlight) return inFlight;
   if (!navigator.onLine) {
-    setStatus({ state: 'offline', pending: await countUnsynced() });
+    setStatus({ state: 'offline', ...(await pendingNow()) });
     return { ok: false, reason: 'offline' };
   }
 
@@ -411,7 +417,7 @@ export async function syncNow({ silent = false } = {}) {
       const at = new Date().toISOString();
       await setMeta('lastSyncAt', at);
       setStatus({
-        state: 'idle', pending: await countUnsynced(), lastError: null,
+        state: 'idle', ...(await pendingNow()), lastError: null,
         lastSyncAt: at, withheld: pulled.withheld,
       });
       if (pulled.received && store) await store.reload();
@@ -430,7 +436,7 @@ export async function syncNow({ silent = false } = {}) {
       }
       setStatus({
         state: navigator.onLine ? 'error' : 'offline',
-        pending: await countUnsynced(), lastError: err.message || String(err),
+        ...(await pendingNow()), lastError: err.message || String(err),
       });
       if (!silent) console.warn('Sync failed:', err);
       return { ok: false, reason: err.message || String(err) };
@@ -508,6 +514,12 @@ export async function setSpendCap(monthlyUsd) {
   return api(`/api/farms/${encodeURIComponent(auth.farmId)}/spend-cap`, { method: 'POST', body: { monthlyUsd } });
 }
 
+/** Every signed-in phone on the farm and when it last reached the server (Owner, Phase 1b). */
+export async function getDevices() {
+  if (!auth) return null;
+  return api(`/api/farms/${encodeURIComponent(auth.farmId)}/devices`);
+}
+
 /** Who besides the Owner may use outside advice and photo review (the Owner's decision of 18 Oct 2026). */
 export async function getAiAccess() {
   if (!auth) return null;
@@ -546,7 +558,7 @@ export async function startSync(appStore) {
   const lastSyncAt = await getMeta('lastSyncAt', null);
   setStatus({
     state: auth ? (navigator.onLine ? 'idle' : 'offline') : 'off',
-    pending: await countUnsynced(), lastSyncAt,
+    ...(await pendingNow()), lastSyncAt,
   });
 
   window.addEventListener('online', () => { failures = 0; syncNow({ silent: true }); });
@@ -554,7 +566,7 @@ export async function startSync(appStore) {
 
   let writeTimer = null;
   store.subscribe(async () => {
-    setStatus({ pending: await countUnsynced() });
+    setStatus({ ...(await pendingNow()) });
     if (!auth) return;
     clearTimeout(writeTimer);
     writeTimer = setTimeout(() => syncNow({ silent: true }), 4000);
@@ -591,6 +603,26 @@ export function statusLine(s = getStatus()) {
         : { text: s.lastSyncAt ? 'All phones up to date' : 'Connected, waiting for the first sync', tone: 'ok' };
     default: return { text: 'Saved on this phone only', tone: 'warn' };
   }
+}
+
+/**
+ * "Has my report been saved and sent?" — one line for one person's own
+ * records, for My work. Saved on the phone, waiting, sent, or refused, in
+ * words (NFR-OFF-03, NFR-OFF-06). `refused` is that person's unread refusals.
+ */
+export function myRecordsLine(s, personId, refused = 0) {
+  const n = (s.pendingBy && s.pendingBy[personId]) || 0;
+  const rec = (k) => `${k} of your record${k === 1 ? '' : 's'}`;
+  if (refused) {
+    return { text: `${rec(refused)} ${refused === 1 ? 'was' : 'were'} refused by the farm server. Tap the red bar to see why.`, tone: 'danger' };
+  }
+  if (!s.configured) return { text: 'Your records are saved on this phone. This farm has no server, so they stay here.', tone: 'warn' };
+  if (n) {
+    return s.state === 'offline'
+      ? { text: `${rec(n)} saved on this phone, waiting for signal to send.`, tone: 'warn' }
+      : { text: `${rec(n)} saved on this phone, sending now.`, tone: 'warn' };
+  }
+  return { text: 'Everything you recorded has reached the farm.', tone: 'ok' };
 }
 
 /** Read the server address from a tapped sign-in link, so the page need not ask for it. */
